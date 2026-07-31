@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+.secret_key
+backend/backups/
+backend/atlas.db

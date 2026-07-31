@@ -1,0 +1,159 @@
+sku,descricao,data_saida,data_entrada,documento,almoxarifado_origem,almoxarifado_destino,quantidade,lote
+0010305007,Massa de Chocolate Xiba 63%,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,12,010010304B000060326
+0050303003,Nibs de Cacau - Sakaguchi(PA),2026-07-20,2026-07-20,4358,Almox_SP_Fabrica,Almox_SP_Processo,7.4,050010307G888890126
+0050308014,Biscoito 150 gr com choco,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,32,050010304U000050326
+0050308015,Biscoito 150 gr com Cupu,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,98,050010305Q000010326
+0100305003,Gotas de Chocolate Paiter ao leite,2026-07-21,2026-07-21,4378,Almox_SP_Processo,Almox_SP_Fabrica,2.616,100010509L000010226
+0100305004,Gotas de Chocolate Paiter Intenso,2026-07-21,2026-07-21,4377,Almox_SP_Processo,Almox_SP_Fabrica,2.68,100010509N000010126
+0140106004,Açúcar Demerara,2026-07-20,2026-07-20,4360,Almox_SP_Fabrica,Almox_SP_Processo,7,B53L240426
+0140106004,Açúcar Demerara,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,8,B53L240426
+0140106805,Açúcar refinado,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,30,1260401183808
+0140106805,Açúcar refinado,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,15,1260401183708
+01902120370,Embalagem caixa 4 bombons P,2026-07-20,2026-07-20,4367,Almox_SP_Fabrica,Almox_SP_Loja,27,26112050
+01902120371,luva caixa 4 bombons P,2026-07-20,2026-07-20,4367,Almox_SP_Fabrica,Almox_SP_Loja,28,26112050
+0190213051,Caixa Base  LO 80g,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,600,0990213088889002026
+0190213056,Envelope plastico transparente,2026-07-21,2026-07-21,4371,Almox_SP_Fabrica,Almox_SP_Processo,300,2394223
+0190213057,Embalagem – mod. Envelope p/ barra,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,300,   0213000001002026
+0190213060,Berço termoformado LO,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,600,R999000557001
+0190213062,Caixa Biscoitos Fundo choco,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,10,   0213000001002026
+0190213063,Caixa Biscoitos luva choco,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,26,   0213000001002026
+0190213070,Caixa PI Paiter Suruí,2026-07-22,2026-07-22,4396,Almox_SP_Processo,Almox_SP_Fabrica,24,R999000239001
+0190213074,Caixa Biscoitos Fundo cupu,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,81,R999000239001
+0190213075,Caixa Biscoitos luva cupu,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,81,   0213000001002026
+0190213101,Flowpack ES Chocolate Lt Maracujá 29g,2026-07-22,2026-07-22,4396,Almox_SP_Processo,Almox_SP_Fabrica,205,   0213100001002025
+0190213102,Flowpack ES Chocolate Lt Pistache 29g,2026-07-22,2026-07-22,4396,Almox_SP_Processo,Almox_SP_Fabrica,129,   0213100001002025
+0190213104,Folha papel barrado Mágio,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,1000,   0213100001002025
+0190213104,Folha papel barrado Mágio,2026-07-22,2026-07-22,4388,Almox_SP_Fabrica,Almox_SP_Processo,77,   0213100001002025
+0190213107,Caixa mini Lua Cheia ao Leite 100g,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,30,   0213100001002025
+0190213116,Fundo Caixa 14 bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,40,   0213100001002025
+0190213117,Caixa 30 bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,3,   0213100001002026
+0190213124,Forminha para Bombons Caixas,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,750,   0213100001002026
+0190213125,Tampa Caixa 30 bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,3,   0213100001002026
+0190213130,Berço Base Caixa 14 Bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,40,   0213100001002025
+0190213131,Caixa SSAL SIMPLES,2026-07-22,2026-07-22,4389,Almox_SP_Fabrica,Almox_SP_Qualidade,8,V.19062026
+0190213131,Caixa SSAL SIMPLES,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,5,V.19062026
+0190213132,Envelope SSAL,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,5,   0213100001002026
+0190213133,Berço interno caixa 14 bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,80,   0213100001002025
+0190213133,Berço interno caixa 14 bombons,2026-07-22,2026-07-22,4390,Alm Box2,Almox_SP_Fabrica,790,   0213100001002025
+0190213133,Berço interno caixa 14 bombons,2026-07-22,2026-07-22,4394,Almox_SP_Fabrica,Almox_SP_Processo,39,   0213100001002025
+0190213134,Folder das Caixas de 14 Bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,40,   0213000001002026
+0190213135,Folder das Caixas de 30 Bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,10,019021313511052026
+0190213138,Folder informação nutricional SSAL,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,5,   0213100001002026
+0190213139,Folder institucional SSAL,2026-07-23,2026-07-23,4399,Alm Box2,Almox_SP_Fabrica,2947,   0213100001002026
+0190213141,Foto A4 Paisagem Pico,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,5,26112050
+0190213154,Candy Pad Caixa 7 camadas black,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,4,V.12052026-2
+01902131561,Candy Pad branco caixa 30,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,10,V.12052026
+0190213157,Caixa Trio Mini Ovos,2026-07-21,2026-07-21,4373,Almox_SP_Processo,Almox_SP_Fabrica,110,   0213100001002026
+0190213158,Berço Trio Mini Ovos,2026-07-21,2026-07-21,4373,Almox_SP_Processo,Almox_SP_Fabrica,255,   0213100001002026
+0190213165,Caixa ES Ao Leite com Praliné e Maracujá,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,200,0990213188889002026
+0190213172,Tampa Caixa 14 bombons,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,40,   0213100001002025
+019021424,CARTÃO QR,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,1500,   0214200001002026
+0260303001,Nibs de Cacau Moju,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,11.935,260010303M000010126
+03001001,Leite em Pó integral,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,14,V.28042027
+03001001,Leite em Pó integral,2026-07-20,2026-07-20,4360,Almox_SP_Fabrica,Almox_SP_Processo,6.3,V.28042027
+03001001,Leite em Pó integral,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,15.4,V.28042027
+05004004,MAGIO Povos Acará-Açu 75% 60g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,2,0110400400000052026
+05004006,MAGIO Povos Vale do Jari 65% 60g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,3,0300104005000010126
+05004007,MAGIO Povos Sakaguchi 78% 60g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,1,0050400700001042026
+05004008,MAGIO Povos Sakaguchi Cupulate 58% 60g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,2,0050400800001162025
+05004009,MAGIO Povos Xiba 81% 60g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,1,0010400900006022025
+05004010,MAGIO Povos Mocajuba 74% 60g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,16,0020401000000042026
+05004010,MAGIO Povos Mocajuba 74% 60g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,0020401000000042026
+05004014,MAGIO Língua de Onça Intso Praliné Cx80g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,1,020010401K000000226
+05004014,MAGIO Língua de Onça Intso Praliné Cx80g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,0020401400000042026
+05004015,MAGIO Língua de Onça ao Leite Cx80g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,4,0050401500005082026
+05004015,MAGIO Língua de Onça ao Leite Cx80g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,0500104043000050326
+05004016,MAGIO Lg de Onça Lt Praliné Avelã Cx80g,2026-07-21,2026-07-21,4379,Almox_SP_Processo,Almox_SP_Fabrica,197,050010400G000050H26
+05004016,MAGIO Lg de Onça Lt Praliné Avelã Cx80g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,1,0050401600005142026
+05004016,MAGIO Lg de Onça Lt Praliné Avelã Cx80g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,0050401600005212026
+05004017,Língua de Onça Leit Praliné Flowpack 11g,2026-07-22,2026-07-22,4386,Almox_SP_Processo,Almox_SP_Fabrica,419,0500104066000050526
+05004017,Língua de Onça Leit Praliné Flowpack 11g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,10,0500104066000050226
+05004043,Formigueiro Caramelo de Maracujá Cx 80g,2026-07-21,2026-07-21,4376,Almox_SP_Processo,Almox_SP_Fabrica,30,050010404T000050D26
+05004043,Formigueiro Caramelo de Maracujá Cx 80g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,2,050010404T000050626
+05004047,Biscoito Cast. Pará Chocolate 60% 150g,2026-07-20,2026-07-20,4354,Almox_SP_Loja,Almox_SP_Fabrica,2,0500104002000050226
+05004047,Biscoito Cast. Pará Chocolate 60% 150g,2026-07-20,2026-07-20,4355,Almox_SP_Fabrica,Almox_SP_Processo,2,0500104002000050226
+05004047,Biscoito Cast. Pará Chocolate 60% 150g,2026-07-20,2026-07-20,4361,Almox_SP_Processo,Almox_SP_Fabrica,5,0500104002000050226
+05004047,Biscoito Cast. Pará Chocolate 60% 150g,2026-07-20,2026-07-20,4365,Almox_SP_Fabrica,Almox_SP_Loja,5,0500104002000050226
+05004047,Biscoito Cast. Pará Chocolate 60% 150g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,2,0500104002000050226
+05004048,Biscoito Cast. Pará Cupulate 70% 150g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,5,050010405A000010226
+05004056,Barra ES Leite Praliné de Pistache 80g,2026-07-20,2026-07-20,4356,Almox_SP_Processo,Almox_SP_Fabrica,64,050010404M000050626
+05004056,Barra ES Leite Praliné de Pistache 80g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,6,0050405600005232026
+05004057,Barra ES ao Leite Praliné de Avelã 80g,2026-07-20,2026-07-20,4353,Almox_SP_Processo,Almox_SP_Fabrica,140,050010400Q000050526
+05004057,Barra ES ao Leite Praliné de Avelã 80g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,3,0050405700005072026
+05004058,Barra ES Intenso Praliné de Avelã 80g,2026-07-21,2026-07-21,4380,Almox_SP_Processo,Almox_SP_Fabrica,75,020010406B000000426
+05004058,Barra ES Intenso Praliné de Avelã 80g,2026-07-21,2026-07-21,4382,Almox_SP_Processo,Almox_SP_Fabrica,1,020010406B000000426
+05004058,Barra ES Intenso Praliné de Avelã 80g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,2,0020405800000052026
+05004097,Barra ES Leite com Avelã e Maracujá 80g,2026-07-20,2026-07-20,4359,Almox_SP_Processo,Almox_SP_Fabrica,7,0500104032000050726
+05004097,Barra ES Leite com Avelã e Maracujá 80g,2026-07-22,2026-07-22,4397,Almox_SP_Fabrica,Almox_SP_Ativacao,7,0500104032000050326
+05004097,Barra ES Leite com Avelã e Maracujá 80g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,10,0500104032000050326
+05004102,Lua Cheia Minis Chocolate ao Leite 100g,2026-07-21,2026-07-21,4381,Almox_SP_Processo,Almox_SP_Fabrica,29,0500104035000050D26
+05004102,Lua Cheia Minis Chocolate ao Leite 100g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,1,0500104035000050426
+05004102,Lua Cheia Minis Chocolate ao Leite 100g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,0500104035000050526
+05004138,Língua de Onça Int Praliné Flowpack 11g,2026-07-24,2026-07-24,4403,Almox_SP_Loja,Almox_SP_Ativacao,1,0250413800001012025
+05004138,Língua de Onça Int Praliné Flowpack 11g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,11,0200104012000000226
+05004139,Língua de Onça Leite Flowpack 11g,2026-07-21,2026-07-21,4373,Almox_SP_Processo,Almox_SP_Fabrica,1198,050010405R000050426
+05004139,Língua de Onça Leite Flowpack 11g,2026-07-22,2026-07-22,4384,Almox_SP_Processo,Almox_SP_Fabrica,1078,050010405R000050526
+05004139,Língua de Onça Leite Flowpack 11g,2026-07-24,2026-07-24,4403,Almox_SP_Loja,Almox_SP_Ativacao,1,050010405R000050126
+05004139,Língua de Onça Leite Flowpack 11g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,9,050010405R000050126
+05004140,Língua de Onça Intenso Flowpack 11g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,3,0200104018000000126
+05004141,Língua de Onça Cupulate Flowpack 11g,2026-07-20,2026-07-20,4364,Almox_SP_Processo,Almox_SP_Fabrica,503,050010400K000010226
+05004141,Língua de Onça Cupulate Flowpack 11g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,9,0050414100001062026
+05004142,Barra ES Chocolate Lt Maracujá 29g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,7,0500104068000050126
+05004143,Barra ES Chocolate Lt Pistache 29g,2026-07-22,2026-07-22,4398,Almox_SP_Ativacao,Almox_SP_Fabrica,7,0050414300005042026
+05004143,Barra ES Chocolate Lt Pistache 29g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,3,0050414300005042026
+05004148,Caixa de Bombons M (14 bombons),2026-07-21,2026-07-21,4372,Almox_SP_Loja,Almox_SP_Fabrica,1,0500104013000050526
+05004148,Caixa de Bombons M (14 bombons),2026-07-22,2026-07-22,4395,Almox_SP_Loja,Almox_SP_Fabrica,1,0500104013000050526
+05004148,Caixa de Bombons M (14 bombons),2026-07-23,2026-07-23,4400,Almox_SP_Loja,Almox_SP_Fabrica,1,0500104013000050526
+05004149,Caixa de Bombons G (30 bombons),2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,1,050010403J000050526
+05104007,Bombom Intenso Praliné 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,13,0200104060000000526
+05104007,Bombom Intenso Praliné 10g,2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,15,2600104060000010226
+05104008,Bombom ao Leite Praliné 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,67,0500104030000050626
+05104008,Bombom ao Leite Praliné 10g,2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,8,0500104030000050726
+05104012,Bombom SF Leite Praliné de Pistache 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,46,050010404G000050626
+05104012,Bombom SF Leite Praliné de Pistache 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,60,050010404G000050426
+05104016,"Bombom SF Leite Ganache de Maracujá 7,7g",2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,33,0500104028000050826
+05104016,"Bombom SF Leite Ganache de Maracujá 7,7g",2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,20,0500104028000050526
+05104016,"Bombom SF Leite Ganache de Maracujá 7,7g",2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,42,0500104028000050926
+05104022,Trufas Nativas Pistache 20g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,34,050010401D000050D26
+05104033,Formigueiro Caramelo de Maracujá 16g,2026-07-21,2026-07-21,4375,Almox_SP_Processo,Almox_SP_Fabrica,480,050010402P000050G26
+05104033,Formigueiro Caramelo de Maracujá 16g,2026-07-22,2026-07-22,4387,Almox_SP_Fabrica,Almox_SP_Loja,25,050010402P000050B26
+05104033,Formigueiro Caramelo de Maracujá 16g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,35,050010402P000050C26
+05104036,Bombom SF Açaí 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,35,050010405H000050426
+05104039,Bombom SF Ganache de Taperebá Int 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,18,020010403P000000926
+05104039,Bombom SF Ganache de Taperebá Int 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,44,020010403P000000826
+05104056,Língua de Onça Intenso Praliné 11g,2026-07-20,2026-07-20,4369,Almox_SP_Fabrica,Almox_SP_Loja,1,020010405S000000126
+05104059,Bombom SF Doce de Cupuaçu 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,17,050010405N000050C26
+05104059,Bombom SF Doce de Cupuaçu 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,34,050010405N000050B26
+05104061,Língua de Onça Leite Praliné 5g,2026-07-22,2026-07-22,4385,Almox_SP_Processo,Almox_SP_Qualidade,71,050010405F000050226
+05104063,Língua de Onça Intenso Praliné 5g,2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,583,260010404J000010126
+05104063,Língua de Onça Intenso Praliné 5g,2026-07-24,2026-07-24,4407,Almox_SP_Processo,Almox_SP_Qualidade,85,260010404J000010126
+05104071,Bombom Bom Jardim Intenso 10g,2026-07-20,2026-07-20,4352,Almox_SP_Processo,Almox_SP_Fabrica,105,020010406C000000726
+05104071,Bombom Bom Jardim Intenso 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,45,020010406C000000726
+05104071,Bombom Bom Jardim Intenso 10g,2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,21,260010406C000010126
+05104077,Biscoito Puxuri Chocolate - Unitário,2026-07-20,2026-07-20,4362,Almox_SP_Processo,Almox_SP_Fabrica,100,050010406S000050426
+05104077,Biscoito Puxuri Chocolate - Unitário,2026-07-20,2026-07-20,4363,Almox_SP_Fabrica,Almox_SP_Loja,100,050010406S000050426
+05104081,Barra Recheada Maracujá Granel 80g,2026-07-24,2026-07-24,4408,Almox_SP_Qualidade,Degustação,11,050010406D000050426
+05104096,Bombom SF Castanha-do-Pará 10g,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,12,050010406M000050426
+05104129,Língua de Onça Intenso Zero Açúcar 11g,2026-07-24,2026-07-24,4406,Almox_SP_Processo,Almox_SP_Fabrica,713,26001040AC000010326
+05400001,Agua sem Gas em Lata 310ml,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,5,130226
+05400002,agua com Gas em Lata 310ml,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,12,050226
+0540001,Pão de queijo 70 gr,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,15,26111
+0540002,Pão de queijo com requeijão 100gr,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,10,262118
+945,Folder SSAL,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,4,V.04052026
+9990107001,MANTEIGA DE CACAU desodorizada,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,25,0000037118
+9990107001,MANTEIGA DE CACAU desodorizada,2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,25,0000037118
+9990111004,Baunilha em Fava,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,0.1,L182
+9990111008,Xarope de glucose,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,5,20260605
+9990111013,Polpa Cupuaçu,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,0.2,09792181
+9990111020,Avelã,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,10,340026562154829
+9990111042,Xerem de Castanha de Caju,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,1,V.230420230
+9990111045,Polpa de Açaí,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,0.1,09798181
+9990111049,Polpa de Abacaxi com Hortelã,2026-07-24,2026-07-24,4404,Almox_SP_Fabrica,Almox_SP_Loja,0.1,09779181
+9990111056,Castanha do Pará,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,1,2025/04
+9990111063,Banana Da Terra,2026-07-22,2026-07-22,4383,Almox_SP_Fabrica,Almox_SP_Loja,1.178,16072026
+99901110705,Milho Tostado Salgado,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,0.25,0024
+9990111073,Castanha de Caju,2026-07-20,2026-07-20,4351,Almox_SP_Fabrica,Almox_SP_Processo,0.25,0024
+9990712045,Etiqueta Lacre 2 - Adesivo transparente,2026-07-21,2026-07-21,4370,Almox_SP_Fabrica,Almox_SP_Processo,1008,   0712000001002026
+9990712062,Etiqueta Ovo de Páscoa Maracujá,2026-07-21,2026-07-21,4374,Almox_SP_Processo,Almox_SP_Fabrica,68,   0712000001002026
+9990712063,Etiqueta Ovo de Páscoa Praliné de Avelã,2026-07-21,2026-07-21,4374,Almox_SP_Processo,Almox_SP_Fabrica,54,   0712000001002026
+9990712068,"ADESIVO SSAL - 1,1X4,5CM",2026-07-24,2026-07-24,4401,Almox_SP_Fabrica,Almox_SP_Processo,16,P004309001

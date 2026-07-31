@@ -1,0 +1,9 @@
+# Dependências extras SÓ para deploy em nuvem com Postgres.
+# Não instale isso na sua máquina local se estiver usando SQLite -
+# psycopg2-binary não é necessário nesse caso, e evitar dependências
+# extras reduz o risco de problemas de instalação (wheel ausente etc).
+#
+# No provedor de nuvem, use como build command algo como:
+#   pip install -r requirements.txt -r requirements-cloud.txt
+-r requirements.txt
+psycopg2-binary==2.9.9
