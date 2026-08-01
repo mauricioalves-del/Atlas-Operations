@@ -30,9 +30,18 @@ Se você **já tem** conta no GitHub, pule para "criar o repositório".
 ### Enviar o projeto do seu notebook pro GitHub
 Instale o Git se ainda não tiver: [git-scm.com/downloads](https://git-scm.com/downloads) (Next, Next, Next na instalação padrão serve).
 
-Abra o PowerShell **na pasta do projeto** (`Atlas\atlas`) e rode, um de cada vez:
+**Como abrir o PowerShell já na pasta certa** (`Atlas\atlas`):
+1. Abra o **Explorador de Arquivos** e navegue até a pasta `Atlas\atlas` (a que tem as subpastas `backend` e `frontend` dentro).
+2. Clique uma vez na barra de endereço no topo da janela (onde mostra o caminho da pasta) pra selecionar o texto.
+3. Digite `powershell` no lugar do caminho e aperte **Enter**. Uma janela do PowerShell abre, já "dentro" dessa pasta.
+   - Alternativa: clique com o botão direito num espaço vazio dentro da pasta (sem selecionar nenhum arquivo) → **Abrir no Terminal** (ou **Abrir janela do PowerShell aqui**, dependendo da versão do Windows).
+4. Pra confirmar que está no lugar certo, digite `dir` e aperte Enter - deve aparecer `backend`, `frontend`, `render.yaml` etc. na lista.
+
+Com o PowerShell aberto **na pasta do projeto** (`Atlas\atlas`), rode, um de cada vez:
 
 ```powershell
+git config --global user.email "seu-email@exemplo.com"
+git config --global user.name "Seu Nome"
 git init
 git add .
 git commit -m "Atlas - versao inicial"
@@ -41,7 +50,19 @@ git remote add origin https://github.com/SEU-USUARIO/atlas.git
 git push -u origin main
 ```
 
-Troque `SEU-USUARIO` pelo seu nome de usuário do GitHub. Na primeira vez, vai pedir pra você logar (uma janela do navegador abre) - autorize.
+Troque `"seu-email@exemplo.com"` e `"Seu Nome"` pelos seus dados (qualquer nome/e-mail serve, não precisa ser o do GitHub - é só pra identificar quem fez o commit). Troque `SEU-USUARIO` pelo seu nome de usuário do GitHub. Na primeira vez que rodar `git push`, vai pedir pra você logar (uma janela do navegador abre) - autorize.
+
+**Se aparecer "Author identity unknown" no `git commit`**: significa que as duas primeiras linhas (`git config`) não foram rodadas antes - rode elas e repita o `git commit`.
+
+**Se aparecer "remote origin already exists"** no `git remote add`: é porque esse comando já rodou antes (às vezes sem querer, com `SEU-USUARIO` sem trocar). Corrija com:
+```powershell
+git remote remove origin
+git remote add origin https://github.com/SEU-USUARIO/atlas.git
+```
+
+**Se aparecer "src refspec main does not match any"** no `git push`: normalmente é consequência do commit ter falhado antes (item acima) - sem commit, não tem o que enviar. Resolva o commit primeiro e rode `git push -u origin main` de novo.
+
+**Avisos (não erros) sobre "LF will be replaced by CRLF"**: são só o Git avisando sobre formatação de fim de linha do Windows - pode ignorar, não afeta nada.
 
 ## Passo 2 — Criar conta no Render e conectar o GitHub
 

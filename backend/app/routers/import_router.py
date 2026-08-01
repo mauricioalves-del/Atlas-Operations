@@ -8,6 +8,7 @@ import openpyxl
 from .. import models
 from ..database import get_db
 from ..csv_utils import parse_sku, parse_data, parse_decimal
+from ..hipoteses_config import normalizar_almoxarifado
 from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
 from ..deps import requer_papel, obter_usuario_atual
@@ -100,7 +101,7 @@ def processar_linha_movimentacao(db: Session, row: dict, almoxarifado_forcado: s
     db.flush()  # garante div.id antes de investigar (casos similares/self-exclusion)
 
     resultado_regras = investigar(db, div)
-    resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, div.valor_estimado, data_mov)
+    resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, div.valor_estimado, data_mov, db=db)
 
     hipotese_final, confianca_final = reconciliar(
         resultado_regras["scores_normalizados"],
@@ -185,6 +186,159 @@ async def importar_custos_planilha_preco(
         "skus_com_custo_ambiguo_ignorados": ambiguos,
         "skus_nao_encontrados_no_cadastro": nao_encontrados,
     }
+
+
+def _ler_planilha(conteudo: bytes, aba: str) -> list[dict]:
+    """Lê uma aba de Excel e devolve lista de dicts (chave = cabeçalho,
+    já em minúsculo e sem espaço nas pontas, pra casar fácil com o
+    de-para de cada importador)."""
+    wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+    if aba not in wb.sheetnames:
+        raise HTTPException(400, f"Aba '{aba}' não encontrada. Abas disponíveis: {wb.sheetnames}")
+    linhas_brutas = list(wb[aba].iter_rows(values_only=True))
+    if not linhas_brutas:
+        raise HTTPException(400, "Planilha vazia.")
+    cabecalho = [str(c).strip() if c is not None else "" for c in linhas_brutas[0]]
+    return [dict(zip(cabecalho, linha)) for linha in linhas_brutas[1:] if any(v is not None for v in linha)]
+
+
+def _data_excel(v):
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    return parse_data(v)
+
+
+@router.post("/faturamento-excel")
+async def importar_faturamento_excel(
+    arquivo: UploadFile = File(...), aba: str = Form("Faturamento"),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    """Faturamento é uma tabela espelhada do banco SQL da empresa - cada
+    envio é o retrato atual completo, não um incremento. Por isso o
+    padrão é substituir tudo, não acumular (evita duplicar toda vez que
+    alguém reenvia a planilha atualizada)."""
+    linhas = _ler_planilha(await arquivo.read(), aba)
+    db.query(models.Faturamento).delete()
+    objetos = [
+        models.Faturamento(
+            sku=parse_sku(l.get("SKU")), origem=l.get("Origem"),
+            data_faturamento=_data_excel(l.get("Data")), quantidade=parse_decimal(l.get("Quantidade", 0)),
+            descricao=l.get("Descricao"),
+        )
+        for l in linhas if l.get("SKU")
+    ]
+    db.bulk_save_objects(objetos)
+    registrar_log(db, usuario.username, "importar_faturamento_excel", detalhes={"linhas": len(objetos)})
+    db.commit()
+    return {"arquivo": arquivo.filename, "linhas_importadas": len(objetos), "modo": "substituicao_completa"}
+
+
+@router.post("/ficha-tecnica-bom-excel")
+async def importar_ficha_tecnica_bom_excel(
+    arquivo: UploadFile = File(...), aba: str = Form("Planilha1"),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    """Ficha técnica (BOM) rica, com subconjunto/custo/Gera_Oc - também
+    substitui tudo a cada envio (mesmo motivo do faturamento)."""
+    linhas = _ler_planilha(await arquivo.read(), aba)
+    db.query(models.FichaTecnicaBOM).delete()
+    objetos = []
+    for l in linhas:
+        if not l.get("Id_produto") or not l.get("Id_item"):
+            continue
+        objetos.append(models.FichaTecnicaBOM(
+            sku_produto_final=parse_sku(l.get("Id_produto")), produto_final=l.get("Produto"),
+            sku_subconjunto=parse_sku(l.get("Id_subconjunto")), subconjunto=l.get("Subconjunto"),
+            sku_item=parse_sku(l.get("Id_item")), descricao_item=l.get("item"),
+            qtd_padrao=parse_decimal(l.get("Qtd", 0)), unidade=l.get("item_Unidade"),
+            custo=parse_decimal(l.get("custo")) if l.get("custo") is not None else None,
+            tem_filho=str(l.get("Tem_Filho", "")).strip().upper() == "S",
+            gera_oc=str(l.get("Gera_Oc", "")).strip().upper() == "S",
+            categoria=l.get("Grupo"), linha_producao=l.get("Linha"),
+        ))
+    db.bulk_save_objects(objetos)
+    registrar_log(db, usuario.username, "importar_ficha_tecnica_bom_excel", detalhes={"linhas": len(objetos)})
+    db.commit()
+    return {"arquivo": arquivo.filename, "linhas_importadas": len(objetos), "modo": "substituicao_completa"}
+
+
+@router.post("/ordens-producao-excel")
+async def importar_ordens_producao_excel(
+    arquivo: UploadFile = File(...), aba: str = Form("Ops - PA"),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    linhas = _ler_planilha(await arquivo.read(), aba)
+    db.query(models.OrdemProducao).delete()
+    objetos = [
+        models.OrdemProducao(
+            numero_op=str(l.get("Número da OP")).strip(), sku_produto_final=parse_sku(l.get("SKU Produto Final")),
+            descricao_produto=l.get("Desc_Prod"),
+            data_registro=_data_excel(l.get("Dt_Registro")), data_producao=_data_excel(l.get("Dt_Producao")),
+            status=l.get("Status"),
+            qtd_prevista=parse_decimal(l.get("Qtd_Prevista", 0)), qtd_produzida=parse_decimal(l.get("Qtd_Prod", 0)),
+            qtd_saldo=parse_decimal(l.get("Qtd_Saldo", 0)),
+        )
+        for l in linhas if l.get("Número da OP") is not None
+    ]
+    db.bulk_save_objects(objetos)
+    registrar_log(db, usuario.username, "importar_ordens_producao_excel", detalhes={"linhas": len(objetos)})
+    db.commit()
+    return {"arquivo": arquivo.filename, "linhas_importadas": len(objetos), "modo": "substituicao_completa"}
+
+
+@router.post("/consumo-op-excel")
+async def importar_consumo_op_excel(
+    arquivo: UploadFile = File(...), aba: str = Form("OPs - Mat.P"),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    linhas = _ler_planilha(await arquivo.read(), aba)
+    db.query(models.ConsumoOP).delete()
+    objetos, ignorados = [], 0
+    for l in linhas:
+        numero_op = l.get("Número da OP")
+        if numero_op is None:
+            ignorados += 1
+            continue
+        objetos.append(models.ConsumoOP(
+            numero_op=str(numero_op).strip(), sku_produto_final=parse_sku(l.get("SKU Produto Final")),
+            sku_material=parse_sku(l.get("Material")), descricao_material=l.get("Desc_Material"),
+            qtd_consumo=parse_decimal(l.get("qtd_consumo", 0)), qtd_previsto=parse_decimal(l.get("Qtd_Previsto", 0)),
+            qtd_diferenca=parse_decimal(l.get("Qtd_Dif", 0)),
+            data_registro=_data_excel(l.get("Dt_Registro")), data_producao=_data_excel(l.get("Dt_Producao")),
+            status=l.get("Status"),
+        ))
+    db.bulk_save_objects(objetos)
+    registrar_log(db, usuario.username, "importar_consumo_op_excel", detalhes={"linhas": len(objetos), "ignorados": ignorados})
+    db.commit()
+    return {"arquivo": arquivo.filename, "linhas_importadas": len(objetos), "ignorados_sem_numero_op": ignorados, "modo": "substituicao_completa"}
+
+
+@router.post("/transferencias-excel")
+async def importar_transferencias_excel(
+    arquivo: UploadFile = File(...), aba: str = Form("Transferencia"),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    linhas = _ler_planilha(await arquivo.read(), aba)
+    db.query(models.Transferencia).delete()
+    objetos = [
+        models.Transferencia(
+            sku=parse_sku(l.get("SKU")), descricao=l.get("descricao"),
+            data_saida=_data_excel(l.get("Data de Saída")), data_entrada=_data_excel(l.get("Data de Entrada")),
+            documento=str(l.get("doc")) if l.get("doc") is not None else None,
+            almoxarifado_origem=normalizar_almoxarifado(l.get("Almoxarifado de Origem")) if l.get("Almoxarifado de Origem") else None,
+            almoxarifado_destino=normalizar_almoxarifado(l.get("Almoxarifado de Destino")) if l.get("Almoxarifado de Destino") else None,
+            quantidade=parse_decimal(l.get("Quantidade", 0)), lote=l.get("lote"),
+        )
+        for l in linhas if l.get("SKU")
+    ]
+    db.bulk_save_objects(objetos)
+    registrar_log(db, usuario.username, "importar_transferencias_excel", detalhes={"linhas": len(objetos)})
+    db.commit()
+    return {"arquivo": arquivo.filename, "linhas_importadas": len(objetos), "modo": "substituicao_completa"}
 
 
 @router.post("/custos")

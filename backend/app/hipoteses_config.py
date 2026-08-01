@@ -122,6 +122,9 @@ ALMOXARIFADOS_PADRAO = [
     ("Almox_PA_Para", "Pará"),
     ("Almox_SP_Ativacao", "Ativação"),
     ("Almox_SP_Loja", "Loja"),
+    ("Almox_Box", "Box"),
+    ("Almox_Box_2", "Box 2"),
+    ("Almox_SP_Degustacao", "Degustação"),
 ]
 
 # De-para de almoxarifado a partir do arquivo bruto de origem (planilhas).
@@ -138,7 +141,11 @@ ALMOXARIFADO_DE_PARA_PREFIXOS = [
     # resolve isso: específico -> genérico.
     ("Processo", "Almox_SP_Processo"),
     ("Qualidade", "Almox_SP_Qualidade"),
-    ("Ativa", "Almox_SP_Ativacao"),  # cobre "Ativação" e a variante truncada "Ativa#U"
+    ("Ativa", "Almox_SP_Ativacao"),  # cobre "Ativação", "Ativa#U" e "PDV ATIVACAO" (comparação sem diferenciar caixa)
+    ("Degusta", "Almox_SP_Degustacao"),
+    ("Box2", "Almox_Box_2"),   # sem espaço - checa antes de "Box" isolado
+    ("Box 2", "Almox_Box_2"),  # com espaço
+    ("Box", "Almox_Box"),
     ("Loja", "Almox_SP_Loja"),
     ("Par", "Almox_PA_Para"),       # cobre "Pará" e a variante truncada "Par#U"
     ("Geral", "Almox_SP_Fabrica"),
@@ -151,13 +158,17 @@ def normalizar_almoxarifado(valor_origem):
     código oficial. Aceita tanto o formato antigo ("Geral", "Par#U") por
     prefixo quanto formatos mais livres ("1  -Almox - SP Fabrica") por
     substring - cobre as duas famílias de planilha já vistas na operação.
+    A comparação ignora caixa alta/baixa (ex: "PDV ATIVACAO" bate com a
+    palavra-chave "Ativa" mesmo em caixa alta) - planilhas diferentes do
+    mesmo sistema de origem usam convenções de capitalização diferentes.
     Se não bater com nenhuma palavra-chave conhecida, devolve o valor
     original prefixado com 'NAO_MAPEADO__' para revisão manual, em vez de
     adivinhar errado silenciosamente."""
     if valor_origem is None:
         return "NAO_MAPEADO__vazio"
     v = str(valor_origem).strip()
+    v_lower = v.lower()
     for palavra_chave, codigo in ALMOXARIFADO_DE_PARA_PREFIXOS:
-        if palavra_chave in v:
+        if palavra_chave.lower() in v_lower:
             return codigo
     return f"NAO_MAPEADO__{v}"

@@ -22,9 +22,23 @@ dados sem uso real - o script tinha o parâmetro pra receber isso, mas
 nada chamava. Use --sem-feedback se quiser treinar só com o histórico
 bruto, sem os casos confirmados.
 
+Terceira correção (incorporando o contexto operacional): o modelo agora
+também recebe, como feature, os mesmos sinais que o motor de regras usa
+(transferência pendente, pedido de compra pendente, OP aberta, consumo
+divergente da ficha técnica, item comprado de fornecedor, faturamento
+próximo) - extraídos de app/feature_extraction.py, o mesmo módulo usado
+por investigation.py. Antes disso, o ML nunca via nada de OP/BOM/
+faturamento/transferência - só almoxarifado, categoria, quantidade, valor
+e dia da semana. Esses sinais são calculados consultando o banco NO
+MOMENTO DO TREINO (estado atual das tabelas de contexto), não um retrato
+histórico exato de cada data - é uma aproximação razoável, já que essas
+tabelas são espelhos do sistema da empresa (atualizadas por completo a
+cada envio), não um log histórico ponto a ponto.
+
 Uso:
     python -m app.ml.train --historico caminho/para/atlas_casos_historicos_categorizados.csv
     python -m app.ml.train --historico caminho/... --sem-feedback
+    python -m app.ml.train --historico caminho/... --sem-contexto   # não calcula os sinais de contexto (mais rápido, modelo mais simples)
 """
 import argparse
 import os
@@ -38,13 +52,40 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
 from app.hipoteses_config import MAPA_CATEGORIA_BRUTA_PARA_CODIGO
+from app.csv_utils import parse_sku
+from app.feature_extraction import NOMES_SINAIS_CONTEXTO, extrair_sinais_contexto
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.joblib")
 
-FEATURE_COLS = ["almoxarifado", "categoria_produto", "divergencia_qtd", "valor", "dia_semana"]
+FEATURE_COLS_BASE = ["almoxarifado", "categoria_produto", "divergencia_qtd", "valor", "dia_semana"]
+FEATURE_COLS = FEATURE_COLS_BASE + NOMES_SINAIS_CONTEXTO
 
 
-def carregar_e_mapear(caminho_csv: str) -> pd.DataFrame:
+def _calcular_sinais_em_lote(df: pd.DataFrame) -> pd.DataFrame:
+    """Preenche as colunas de NOMES_SINAIS_CONTEXTO linha a linha,
+    consultando o banco - usa uma sessão só pra todo o lote (mais barato
+    que abrir/fechar uma por linha)."""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        valores = {nome: [] for nome in NOMES_SINAIS_CONTEXTO}
+        for _, linha in df.iterrows():
+            sinais = extrair_sinais_contexto(
+                db, sku=linha["sku"], almoxarifado=linha["almoxarifado"],
+                data_referencia=linha["data_ref"] if pd.notna(linha["data_ref"]) else None,
+                divergencia_qtd=linha["divergencia_qtd"],
+            )
+            for nome in NOMES_SINAIS_CONTEXTO:
+                valores[nome].append(int(sinais[nome]))
+        for nome in NOMES_SINAIS_CONTEXTO:
+            df[nome] = valores[nome]
+    finally:
+        db.close()
+    return df
+
+
+def carregar_e_mapear(caminho_csv: str, incluir_contexto: bool = True) -> pd.DataFrame:
     df = pd.read_csv(caminho_csv, dtype={"Id_Produto": str})
     df = df.rename(columns={
         "Almoxarifado_Origem_Arquivo": "almoxarifado",
@@ -53,6 +94,7 @@ def carregar_e_mapear(caminho_csv: str) -> pd.DataFrame:
         "Valor": "valor",
         "Hipotese_Sugerida": "categoria_bruta",
         "Data": "data",
+        "Id_Produto": "sku",
     })
 
     categoria_bruta = df["categoria_bruta"].astype(str).str.strip()
@@ -64,15 +106,25 @@ def carregar_e_mapear(caminho_csv: str) -> pd.DataFrame:
         )
 
     df["hipotese_confirmada"] = categoria_bruta.map(MAPA_CATEGORIA_BRUTA_PARA_CODIGO)
+    df["data_ref"] = pd.to_datetime(df["data"], errors="coerce").dt.date
     df["dia_semana"] = pd.to_datetime(df["data"], errors="coerce").dt.dayofweek.fillna(-1)
     df["divergencia_qtd"] = pd.to_numeric(df["divergencia_qtd"], errors="coerce").fillna(0)
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0)
     df["almoxarifado"] = df["almoxarifado"].fillna("Desconhecido")
     df["categoria_produto"] = df["categoria_produto"].fillna("Desconhecido")
+    df["sku"] = df["sku"].apply(parse_sku)
+
+    if incluir_contexto:
+        print("Calculando sinais de contexto (OP, BOM, faturamento, transferência, pedido de compra) por linha...")
+        df = _calcular_sinais_em_lote(df)
+    else:
+        for nome in NOMES_SINAIS_CONTEXTO:
+            df[nome] = 0
+
     return df
 
 
-def carregar_casos_feedback() -> pd.DataFrame:
+def carregar_casos_feedback(incluir_contexto: bool = True) -> pd.DataFrame:
     """Busca os casos que a equipe já confirmou (tabela CasoMLFeedback) e
     devolve no mesmo formato de FEATURE_COLS + hipotese_confirmada, pronto
     pra entrar no treino junto do histórico bruto."""
@@ -87,14 +139,20 @@ def carregar_casos_feedback() -> pd.DataFrame:
         linhas = []
         for c in casos:
             dia_semana = pd.to_datetime(str(c.data_deteccao)).dayofweek if c.data_deteccao else -1
-            linhas.append({
+            linha = {
                 "almoxarifado": c.almoxarifado or "Desconhecido",
                 "categoria_produto": c.categoria_produto or "Desconhecido",
                 "divergencia_qtd": c.divergencia_qtd or 0,
                 "valor": c.valor_estimado or 0,
                 "dia_semana": dia_semana,
                 "hipotese_confirmada": c.hipotese_confirmada,
-            })
+            }
+            if incluir_contexto:
+                sinais = extrair_sinais_contexto(db, sku=c.sku, almoxarifado=c.almoxarifado, data_referencia=c.data_deteccao, divergencia_qtd=c.divergencia_qtd)
+                linha.update({nome: int(sinais[nome]) for nome in NOMES_SINAIS_CONTEXTO})
+            else:
+                linha.update({nome: 0 for nome in NOMES_SINAIS_CONTEXTO})
+            linhas.append(linha)
         return pd.DataFrame(linhas)
     finally:
         db.close()
@@ -114,13 +172,13 @@ def _codigos_hipotese_validos() -> set:
         db.close()
 
 
-def treinar(caminho_csv: str, casos_extra: pd.DataFrame = None, incluir_feedback: bool = True, salvar_em: str = MODEL_PATH):
-    df = carregar_e_mapear(caminho_csv)
+def treinar(caminho_csv: str, casos_extra: pd.DataFrame = None, incluir_feedback: bool = True, incluir_contexto: bool = True, salvar_em: str = MODEL_PATH):
+    df = carregar_e_mapear(caminho_csv, incluir_contexto=incluir_contexto)
     df = df[FEATURE_COLS + ["hipotese_confirmada"]]
 
     partes = [df]
     if casos_extra is None and incluir_feedback:
-        casos_extra = carregar_casos_feedback()
+        casos_extra = carregar_casos_feedback(incluir_contexto=incluir_contexto)
 
     if casos_extra is not None and len(casos_extra) > 0:
         casos_extra = casos_extra.copy()
@@ -167,5 +225,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--historico", required=True)
     parser.add_argument("--sem-feedback", action="store_true", help="Não incluir os casos confirmados pela equipe (CasoMLFeedback) - treina só com o histórico bruto.")
+    parser.add_argument("--sem-contexto", action="store_true", help="Não calcular os sinais de contexto (OP, BOM, faturamento, transferência, pedido de compra) - treino mais rápido, modelo mais simples (equivalente à versão anterior).")
     args = parser.parse_args()
-    treinar(args.historico, incluir_feedback=not args.sem_feedback)
+    treinar(args.historico, incluir_feedback=not args.sem_feedback, incluir_contexto=not args.sem_contexto)

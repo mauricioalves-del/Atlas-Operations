@@ -11,6 +11,7 @@ import pandas as pd
 from app.database import SessionLocal
 from app import models
 from app.csv_utils import parse_sku, parse_decimal
+from app.hipoteses_config import normalizar_almoxarifado
 
 
 def _data(v):
@@ -35,7 +36,8 @@ def importar_transferencias(db, caminho):
             sku=parse_sku(r["sku"]), descricao=r.get("descricao"),
             data_saida=_data(r["data_saida"]), data_entrada=_data(r.get("data_entrada")),
             documento=r.get("documento"),
-            almoxarifado_origem=r.get("almoxarifado_origem"), almoxarifado_destino=r.get("almoxarifado_destino"),
+            almoxarifado_origem=normalizar_almoxarifado(r["almoxarifado_origem"]) if r.get("almoxarifado_origem") else None,
+            almoxarifado_destino=normalizar_almoxarifado(r["almoxarifado_destino"]) if r.get("almoxarifado_destino") else None,
             quantidade=parse_decimal(r["quantidade"]), lote=r.get("lote"),
         )
         for _, r in df.iterrows()

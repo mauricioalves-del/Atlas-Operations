@@ -201,10 +201,18 @@ class FichaTecnicaBOM(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     sku_produto_final = Column(String, index=True)
     produto_final = Column(String)
+    sku_subconjunto = Column(String, nullable=True, index=True)  # nível intermediário da receita (novo - planilha rica)
+    subconjunto = Column(String, nullable=True)
     sku_item = Column(String, index=True)
     descricao_item = Column(String)
     qtd_padrao = Column(Float)
     unidade = Column(String)
+    custo = Column(Float, nullable=True)  # custo do item nessa linha da receita (novo)
+    tem_filho = Column(Boolean, nullable=True)  # esse item é ele mesmo um subconjunto com receita própria (novo)
+    gera_oc = Column(Boolean, nullable=True)  # esse item é comprado de fornecedor, não produzido internamente (novo -
+    # liga direto com o módulo de Controle de Compras: item com gera_oc=True é candidato a ter Pedido de Compra)
+    categoria = Column(String, nullable=True)  # "Grupo" da planilha (novo)
+    linha_producao = Column(String, nullable=True)  # "Linha" da planilha (novo)
 
 
 class Faturamento(Base):

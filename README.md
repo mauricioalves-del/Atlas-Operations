@@ -64,6 +64,14 @@ Duas telas novas dentro do pilar de Fechamento:
   na lista) - você só precisa definir responsável e prazo, ou criar ações
   manuais pra qualquer SKU.
 
+## Contexto operacional real (importadores Excel + ML)
+
+- **5 novos importadores** na tela Importar (Faturamento, Ficha Técnica BOM, Ordens de Produção, Consumo de OP, Transferências) - aceitam o formato Excel exportado direto do banco SQL da empresa. **Cada envio substitui os dados anteriores por completo** (são tabelas espelhadas, não histórico acumulativo) - reenviar a versão mais atual nunca duplica.
+- **Ficha Técnica BOM mais rica**: agora guarda subconjunto (nível intermediário da receita), custo, se o item é comprado de fornecedor (`Gera_Oc` - liga direto com o Controle de Compras) e categoria.
+- **Correção de normalização de almoxarifado**: a comparação agora ignora maiúsculas/minúsculas (resolvia "PDV ATIVACAO" não bater com a palavra-chave "Ativa"), e adicionei Box/Box2/Degustação ao catálogo.
+- **O modelo de ML agora vê o mesmo contexto que o motor de regras**: transferência pendente, pedido de compra pendente, OP aberta, consumo divergente da ficha técnica, item comprado de fornecedor, faturamento próximo (e se foi no mesmo almoxarifado) - tudo extraído numa função só (`app/feature_extraction.py`), reaproveitada tanto pelo motor de regras quanto pelo treino/previsão do ML. Testado: acurácia do modelo subiu de 68% para 70% no holdout, com melhora visível em Transferência Pendente (f1-score 0,63 → 0,74).
+- **Valor Mod** no MoM da Acurácia Ponderada: nova opção no seletor que troca a visão de % de acurácia por R$ de impacto financeiro total do mês (sobra e falta juntos, sem se cancelarem) - mede evolução/involução em dinheiro, não só em percentual.
+
 ## Controle de Compras (Estoque Externo)
 
 Resolve um problema específico: fornecedor entrega pedido fracionado (ex:

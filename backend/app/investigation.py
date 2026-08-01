@@ -13,7 +13,8 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from . import models
-from .hipoteses_config import buscar_evidencias_texto
+from .hipoteses_config import buscar_evidencias_texto, normalizar_almoxarifado
+from .feature_extraction import extrair_sinais_contexto
 
 
 def _peso(db: Session, codigo_hipotese: str) -> float:
@@ -47,21 +48,15 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     for codigo_hipotese, palavra_chave in buscar_evidencias_texto(getattr(div, "observacao_origem", None)):
         registrar(codigo_hipotese, f"observacao_planilha_menciona('{palavra_chave}')", True)
 
+    # Sinais de contexto (transferência, pedido de compra, OP, ficha
+    # técnica, faturamento) - extraídos numa função compartilhada com o
+    # ML (feature_extraction.py), pra regra e modelo estatístico
+    # enxergarem exatamente o mesmo contexto operacional.
+    sinais = extrair_sinais_contexto(db, div.sku, div.almoxarifado, div.data_deteccao, div.divergencia_qtd)
+
     # 1) Transferência pendente: saída registrada sem entrada, no mesmo SKU,
     #    tendo o almoxarifado da divergência como origem ou destino.
-    transf_pendente = (
-        db.query(models.Transferencia)
-        .filter(
-            models.Transferencia.sku == div.sku,
-            models.Transferencia.data_entrada.is_(None),
-        )
-        .filter(
-            (models.Transferencia.almoxarifado_origem == div.almoxarifado)
-            | (models.Transferencia.almoxarifado_destino == div.almoxarifado)
-        )
-        .first()
-    )
-    registrar("Transferencia_Pendente", "transferencia_sem_entrada_correspondente", transf_pendente is not None)
+    registrar("Transferencia_Pendente", "transferencia_sem_entrada_correspondente", sinais["tem_transferencia_pendente"])
 
     # 1b) Pedido de compra pendente (controle de estoque externo): se a
     #     divergência é uma FALTA (saldo físico < sistema) e existe
@@ -70,9 +65,8 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     #     trânsito com o fornecedor, não perda real. Peso cheio se a
     #     magnitude da falta bate com o pendente (tolerância de 20%),
     #     peso parcial se só existe pedido aberto mas a magnitude não bate.
-    pedido_pendente_encontrado = False
     peso_pedido = None
-    if div.divergencia_qtd is not None and div.divergencia_qtd < 0:
+    if sinais["tem_pedido_compra_pendente"]:
         pedidos_abertos = (
             db.query(models.PedidoCompra)
             .filter(
@@ -82,56 +76,43 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
             )
             .all()
         )
-        pendente_total = 0.0
-        for p in pedidos_abertos:
-            recebido = sum(r.quantidade_recebida for r in db.query(models.RecebimentoPedido).filter_by(pedido_id=p.id).all())
-            pendente_total += max(0, p.quantidade_pedida - recebido)
-        if pendente_total > 0:
-            pedido_pendente_encontrado = True
-            falta = abs(div.divergencia_qtd)
-            diferenca_relativa = abs(falta - pendente_total) / pendente_total
-            peso_base = _peso(db, "Pedido_Compra_Pendente")
-            peso_pedido = peso_base if diferenca_relativa <= 0.2 else peso_base * 0.5
-    registrar("Pedido_Compra_Pendente", "pedido_compra_em_aberto_com_saldo_pendente_compativel", pedido_pendente_encontrado, peso=peso_pedido)
+        pendente_total = sum(
+            max(0, p.quantidade_pedida - sum(r.quantidade_recebida for r in db.query(models.RecebimentoPedido).filter_by(pedido_id=p.id).all()))
+            for p in pedidos_abertos
+        )
+        falta = abs(div.divergencia_qtd or 0)
+        diferenca_relativa = abs(falta - pendente_total) / pendente_total if pendente_total else 1.0
+        peso_base = _peso(db, "Pedido_Compra_Pendente")
+        peso_pedido = peso_base if diferenca_relativa <= 0.2 else peso_base * 0.5
+    registrar("Pedido_Compra_Pendente", "pedido_compra_em_aberto_com_saldo_pendente_compativel", sinais["tem_pedido_compra_pendente"], peso=peso_pedido)
 
     # 2) Consumo parcial de OP: existe OP aberta (não Produzida) para o SKU,
     #    ou consumo registrado divergente do previsto na ficha técnica.
-    op_aberta = (
-        db.query(models.OrdemProducao)
-        .filter(
-            models.OrdemProducao.sku_produto_final == div.sku,
-            models.OrdemProducao.status != "Produzida",
-        )
-        .first()
-    )
-    consumo_divergente = (
-        db.query(models.ConsumoOP)
-        .filter(
-            models.ConsumoOP.sku_material == div.sku,
-            models.ConsumoOP.qtd_diferenca != 0,
-        )
-        .first()
-    )
-    registrar("Consumo_Parcial_OP", "op_aberta_para_sku", op_aberta is not None)
-    registrar("Consumo_Parcial_OP", "consumo_diferente_do_previsto_ficha_tecnica", consumo_divergente is not None, peso=_peso(db, "Consumo_Parcial_OP") * 0.5)
+    registrar("Consumo_Parcial_OP", "op_aberta_para_sku", sinais["tem_op_aberta"])
+    registrar("Consumo_Parcial_OP", "consumo_diferente_do_previsto_ficha_tecnica", sinais["tem_consumo_divergente_bom"], peso=_peso(db, "Consumo_Parcial_OP") * 0.5)
 
     # 3) Pendência de faturamento: existe nota de faturamento para o SKU
-    #    próxima (+/- 5 dias) da data de detecção.
-    fat_proxima = (
-        db.query(models.Faturamento)
-        .filter(
-            models.Faturamento.sku == div.sku,
-            models.Faturamento.data_faturamento >= div.data_deteccao - timedelta(days=5),
-            models.Faturamento.data_faturamento <= div.data_deteccao + timedelta(days=5),
-        )
-        .first()
+    #    próxima (+/- 5 dias) da data de detecção. Peso cheio quando a
+    #    origem do faturamento é o MESMO almoxarifado da divergência (o
+    #    sinal fica bem mais forte: a venda aconteceu ali e pode não ter
+    #    sido baixada do sistema corretamente) - peso reduzido quando só
+    #    bate SKU+data, sem confirmar o local (ainda vale olhar, mas com
+    #    menos confiança).
+    peso_fat = None
+    if sinais["tem_faturamento_proximo"]:
+        peso_fat = _peso(db, "Pendencia_Faturamento") if sinais["tem_faturamento_mesmo_almoxarifado"] else _peso(db, "Pendencia_Faturamento") * 0.5
+    registrar(
+        "Pendencia_Faturamento",
+        "faturamento_proximo_a_data_deteccao" + (" (mesmo_almoxarifado)" if sinais["tem_faturamento_mesmo_almoxarifado"] else ""),
+        sinais["tem_faturamento_proximo"], peso=peso_fat,
     )
-    registrar("Pendencia_Faturamento", "faturamento_proximo_a_data_deteccao", fat_proxima is not None)
 
     # 4) Divergência de ficha técnica: SKU aparece como item numa BOM mas
     #    o consumo real diverge de forma sistemática (proxy simples).
-    bom = db.query(models.FichaTecnicaBOM).filter(models.FichaTecnicaBOM.sku_item == div.sku).first()
-    registrar("Divergencia_Ficha_Tecnica", "sku_e_item_de_ficha_tecnica_com_consumo_divergente", bom is not None and consumo_divergente is not None, peso=_peso(db, "Divergencia_Ficha_Tecnica") * 0.6)
+    registrar(
+        "Divergencia_Ficha_Tecnica", "sku_e_item_de_ficha_tecnica_com_consumo_divergente",
+        sinais["e_item_de_ficha_tecnica"] and sinais["tem_consumo_divergente_bom"], peso=_peso(db, "Divergencia_Ficha_Tecnica") * 0.6,
+    )
 
     # 5) Reincidência: mesmo SKU ou almoxarifado com divergência resolvida
     #    nos últimos 90 dias -> reforça a hipótese mais comum encontrada.

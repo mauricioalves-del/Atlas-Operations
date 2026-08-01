@@ -1039,6 +1039,39 @@ document.getElementById("btn-importar-custos-preco").addEventListener("click", a
   }
 });
 
+document.querySelectorAll(".btn-importar-contexto").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const linha = btn.closest("tr");
+    const inputArquivo = linha.querySelector(".ctx-arquivo");
+    const inputAba = linha.querySelector(".ctx-aba");
+    const resultado = linha.querySelector(".ctx-resultado");
+    const endpoint = inputArquivo.dataset.endpoint;
+
+    if (!inputArquivo.files.length) {
+      resultado.textContent = "Selecione um arquivo primeiro.";
+      return;
+    }
+    const form = new FormData();
+    form.append("arquivo", inputArquivo.files[0]);
+    if (inputAba.value.trim()) form.append("aba", inputAba.value.trim());
+
+    btn.disabled = true;
+    resultado.textContent = "Importando...";
+    try {
+      const res = await apiFetch(`${API}/importar/${endpoint}`, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) {
+        resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      } else {
+        resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) (substituiu os dados anteriores)${data.ignorados_sem_numero_op ? " · " + data.ignorados_sem_numero_op + " ignorada(s) sem nº de OP" : ""}`;
+      }
+    } catch (erro) {
+      resultado.textContent = "Falha ao importar: " + erro.message;
+    }
+    btn.disabled = false;
+  });
+});
+
 // ---------- acurácia ponderada (IAP/IAQ) ----------
 let apChartComparativo, apChartPareto, apChartMagnitude, apChartEvolucao, apChartGrupo3, apChartAlmox3, apChartMom;
 let apFiltrosCarregados = false;
@@ -1195,31 +1228,50 @@ const AP_MOM_VARIACAO_CHAVE = { iap_pct: "variacao_iap_pp", iaq_pct: "variacao_i
 function renderApMom(dados) {
   apEvolucaoCache = dados;
   const metrica = document.getElementById("ap-mom-metrica").value;
-  const chaveVariacao = AP_MOM_VARIACAO_CHAVE[metrica];
+  const ehValorMod = metrica === "valor_mod";
   const ctx = document.getElementById("ap-chart-mom");
   if (apChartMom) apChartMom.destroy();
+
+  document.getElementById("ap-mom-subtitulo").textContent = ehValorMod
+    ? "Colunas: valor total em divergência no mês (sobra + falta juntos, sem se cancelar) · Linha: variação MoM em R$"
+    : "Colunas: acurácia do mês · Linha: variação MoM em pontos percentuais";
+
+  const datasetBarra = ehValorMod
+    ? {
+        type: "bar", label: "Valor Mod — impacto financeiro do mês (R$)", data: dados.map((d) => d.valor_mod),
+        backgroundColor: "#e5534b", borderRadius: 3, yAxisID: "y",
+        formatarRotulo: (v) => (v != null ? formatarMoeda(v) : "—"),
+      }
+    : {
+        type: "bar", label: `Acurácia do mês — ${AP_MOM_ROTULOS[metrica]}`, data: dados.map((d) => d[metrica]),
+        backgroundColor: dados.map((d) => corFarolAcuracia(d[metrica])), borderRadius: 3, yAxisID: "y",
+        formatarRotulo: (v) => (v != null ? v + "%" : "—"),
+      };
+
+  const datasetLinha = ehValorMod
+    ? {
+        type: "line", label: "Variação MoM (R$)", data: dados.map((d) => d.variacao_valor_mod), borderColor: "#f9a825",
+        backgroundColor: "#f9a825", pointRadius: 4, yAxisID: "y1", spanGaps: true,
+        formatarRotulo: (v) => (v == null ? "" : (v > 0 ? "+" : "") + formatarMoeda(v)), corRotulo: "#f9a825",
+      }
+    : {
+        type: "line", label: "Variação MoM (pp)", data: dados.map((d) => d[AP_MOM_VARIACAO_CHAVE[metrica]]), borderColor: "#f9a825",
+        backgroundColor: "#f9a825", pointRadius: 4, yAxisID: "y1", spanGaps: true,
+        formatarRotulo: (v) => (v == null ? "" : (v > 0 ? "+" : "") + v + " pp"), corRotulo: "#f9a825",
+      };
+
   apChartMom = new Chart(ctx, {
-    data: {
-      labels: dados.map((d) => d.mes),
-      datasets: [
-        {
-          type: "bar", label: `Acurácia do mês — ${AP_MOM_ROTULOS[metrica]}`, data: dados.map((d) => d[metrica]),
-          backgroundColor: dados.map((d) => corFarolAcuracia(d[metrica])), borderRadius: 3, yAxisID: "y",
-          formatarRotulo: (v) => (v != null ? v + "%" : "—"),
-        },
-        {
-          type: "line", label: "Variação MoM (pp)", data: dados.map((d) => d[chaveVariacao]), borderColor: "#f9a825",
-          backgroundColor: "#f9a825", pointRadius: 4, yAxisID: "y1", spanGaps: true,
-          formatarRotulo: (v) => (v == null ? "" : (v > 0 ? "+" : "") + v + " pp"), corRotulo: "#f9a825",
-        },
-      ],
-    },
+    data: { labels: dados.map((d) => d.mes), datasets: [datasetBarra, datasetLinha] },
     options: {
       plugins: { legend: { position: "bottom", labels: { color: "#8ca0a3" } } },
       scales: {
         x: { ticks: { color: "#8ca0a3" }, grid: { display: false } },
-        y: { position: "left", min: 0, max: 112, ticks: { color: "#8ca0a3", callback: (v) => (v <= 100 ? v : "") }, grid: { color: "#2e3a40" } },
-        y1: { position: "right", ticks: { color: "#f9a825" }, grid: { display: false } },
+        y: ehValorMod
+          ? { position: "left", ticks: { color: "#8ca0a3", callback: (v) => formatarMoeda(v) }, grid: { color: "#2e3a40" } }
+          : { position: "left", min: 0, max: 112, ticks: { color: "#8ca0a3", callback: (v) => (v <= 100 ? v : "") }, grid: { color: "#2e3a40" } },
+        y1: ehValorMod
+          ? { position: "right", ticks: { color: "#f9a825", callback: (v) => formatarMoeda(v) }, grid: { display: false } }
+          : { position: "right", ticks: { color: "#f9a825" }, grid: { display: false } },
       },
     },
   });

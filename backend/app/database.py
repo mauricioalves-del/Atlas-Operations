@@ -88,6 +88,18 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE acoes_pos_inventario ADD COLUMN checklist JSON"))
                 conn.commit()
 
+    if inspecao.has_table("ficha_tecnica_bom"):
+        colunas_bom = {c["name"] for c in inspecao.get_columns("ficha_tecnica_bom")}
+        novas_colunas_bom = {
+            "sku_subconjunto": "VARCHAR", "subconjunto": "VARCHAR", "custo": "FLOAT",
+            "tem_filho": "BOOLEAN", "gera_oc": "BOOLEAN", "categoria": "VARCHAR", "linha_producao": "VARCHAR",
+        }
+        with engine.connect() as conn:
+            for coluna, tipo in novas_colunas_bom.items():
+                if coluna not in colunas_bom:
+                    conn.execute(text(f"ALTER TABLE ficha_tecnica_bom ADD COLUMN {coluna} {tipo}"))
+            conn.commit()
+
     if "origem" not in colunas_existentes:  # colunas_existentes = colunas de "divergencias"
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE divergencias ADD COLUMN origem VARCHAR DEFAULT 'movimentacao'"))

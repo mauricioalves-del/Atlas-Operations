@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=30">
+<link rel="stylesheet" href="style.css?v=32">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -212,6 +212,57 @@
         </div>
         <button id="btn-importar-custos-preco" class="btn-primario">Importar custos da planilha</button>
         <pre id="resultado-importacao-custos-preco" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel panel-importar">
+        <div class="panel-title-row">
+          <h2>Dados de contexto (Excel — planilhas do banco SQL da empresa)</h2>
+        </div>
+        <p class="hint">
+          Faturamento, Ficha Técnica (BOM), Ordens de Produção, Consumo de OP e Transferências — usados pelo motor de investigação
+          e pelo modelo de ML pra explicar divergências (não só contar). <strong>Cada envio substitui os dados anteriores por completo</strong>
+          (são tabelas espelhadas do sistema da empresa, não um histórico acumulativo) — reenviar a versão mais atual é seguro, não duplica nada.
+        </p>
+        <table class="tabela" id="tabela-importadores-contexto">
+          <thead><tr><th>Fonte</th><th>Arquivo</th><th>Aba</th><th></th><th>Resultado</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Faturamento</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="faturamento-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Faturamento" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Ficha Técnica (BOM)</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="ficha-tecnica-bom-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Planilha1" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Ordens de Produção</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="ordens-producao-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Ops - PA" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Consumo de OP</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="consumo-op-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="OPs - Mat.P" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Transferências</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="transferencias-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Transferencia" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="panel">
@@ -426,9 +477,10 @@
             <option value="iap_pct">IAP (valor)</option>
             <option value="iaq_pct">IAQ (quantidade)</option>
             <option value="item_a_item_pct">Item a item</option>
+            <option value="valor_mod">Valor Mod (R$)</option>
           </select>
         </div>
-        <p class="panel-sub">Colunas: acurácia do mês · Linha: variação MoM em pontos percentuais</p>
+        <p class="panel-sub" id="ap-mom-subtitulo">Colunas: acurácia do mês · Linha: variação MoM em pontos percentuais</p>
         <canvas id="ap-chart-mom"></canvas>
       </div>
 
@@ -777,6 +829,6 @@
   </div>
 </div>
 
-<script src="app.js?v=30"></script>
+<script src="app.js?v=32"></script>
 </body>
 </html>

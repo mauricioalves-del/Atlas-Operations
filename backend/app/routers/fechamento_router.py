@@ -157,7 +157,7 @@ async def importar_fechamento(
                 db.flush()
 
                 resultado_regras = investigar(db, div)
-                resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, valor_estimado, data_fechamento)
+                resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, valor_estimado, data_fechamento, db=db)
                 hipotese_final, confianca_final = reconciliar(
                     resultado_regras["scores_normalizados"], resultado_ml["distribuicao"] if resultado_ml else []
                 )
@@ -875,23 +875,49 @@ def dashboard_comparativo_por_almoxarifado(mes: str | None = None, usuario: mode
     return sorted(resultado, key=lambda x: x["item_a_item_pct"] or 0, reverse=True)
 
 
+def _valor_mod_mensal(db: Session, almoxarifado: str | None, mes: str) -> float:
+    """Soma o valor de TODAS as divergências do mês (sobra e falta como
+    positivo, sem se cancelarem) - é o "Valor Mod" (valor modificado/
+    absoluto): quanto de dinheiro esteve em jogo naquele mês, não o saldo
+    líquido entre sobra e falta. Usa custo real quando disponível, mesmo
+    padrão de recálculo já usado no IAP/Pareto (evita depender do
+    valor_estimado gravado na importação, que pode estar desatualizado)."""
+    itens = _query_itens_filtrados(db, almoxarifado, mes).filter(models.ItemFechamento.divergente.is_(True)).all()
+    if not itens:
+        return 0.0
+    skus = {i.sku for i in itens}
+    custos = {p.sku: p.custo_unitario for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus), models.Produto.custo_unitario.isnot(None)).all()}
+    total = 0.0
+    for i in itens:
+        custo = custos.get(i.sku)
+        total += abs(i.divergencia_qtd or 0) * custo if custo is not None else abs(i.valor_estimado or 0)
+    return round(total, 2)
+
+
 @router.get("/dashboard/evolucao-ponderada-mensal")
 def dashboard_evolucao_ponderada_mensal(almoxarifado: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """IAQ e IAP mês a mês, com variação MoM em pontos percentuais - pra
     ver se a distância entre os modelos está diminuindo (bom sinal: itens
-    de maior impacto sendo resolvidos primeiro) ou aumentando (alerta)."""
+    de maior impacto sendo resolvidos primeiro) ou aumentando (alerta).
+    Também traz o "Valor Mod" (impacto financeiro total do mês, sobra e
+    falta juntos como positivo) - um jeito de olhar evolução/involução em
+    R$, não em %, já que 100% de acurácia com R$ 50 mil em jogo é uma
+    leitura bem diferente de 100% com R$ 500."""
     fechamentos = db.query(models.FechamentoInventario).all()
     if almoxarifado:
         fechamentos = [f for f in fechamentos if f.almoxarifado == almoxarifado]
 
     meses = sorted({f.data_fechamento.strftime("%Y-%m") for f in fechamentos})
     resultado = []
-    anterior = {"item_a_item_pct": None, "iaq_pct": None, "iap_pct": None}
+    anterior = {"item_a_item_pct": None, "iaq_pct": None, "iap_pct": None, "valor_mod": None}
     for mes in meses:
         iaq = dashboard_iaq(almoxarifado, mes, usuario, db)
         iap = dashboard_iap(almoxarifado, mes, usuario, db)
         kpis = dashboard_kpis(almoxarifado, mes, usuario, db)
-        atual = {"item_a_item_pct": kpis["acuracia_geral_pct"], "iaq_pct": iaq["iaq_pct"], "iap_pct": iap["iap_pct"]}
+        atual = {
+            "item_a_item_pct": kpis["acuracia_geral_pct"], "iaq_pct": iaq["iaq_pct"], "iap_pct": iap["iap_pct"],
+            "valor_mod": _valor_mod_mensal(db, almoxarifado, mes),
+        }
 
         def variacao(chave):
             if atual[chave] is None or anterior[chave] is None:
@@ -903,6 +929,7 @@ def dashboard_evolucao_ponderada_mensal(almoxarifado: str | None = None, usuario
             "variacao_item_pp": variacao("item_a_item_pct"),
             "variacao_iaq_pp": variacao("iaq_pct"),
             "variacao_iap_pp": variacao("iap_pct"),
+            "variacao_valor_mod": variacao("valor_mod"),
         })
         anterior = atual
     return resultado

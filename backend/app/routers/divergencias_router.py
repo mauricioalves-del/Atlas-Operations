@@ -175,7 +175,7 @@ def reinvestigar(div_id: int, usuario: models.Usuario = Depends(requer_papel("ad
         raise HTTPException(404, "Divergência não encontrada")
 
     resultado_regras = investigar(db, div)
-    resultado_ml = ml_predict.prever(div.sku, div.almoxarifado, div.categoria_produto, div.divergencia_qtd, div.valor_estimado, div.data_deteccao)
+    resultado_ml = ml_predict.prever(div.sku, div.almoxarifado, div.categoria_produto, div.divergencia_qtd, div.valor_estimado, div.data_deteccao, db=db)
     hipotese_final, confianca_final = reconciliar(
         resultado_regras["scores_normalizados"],
         resultado_ml["distribuicao"] if resultado_ml else [],

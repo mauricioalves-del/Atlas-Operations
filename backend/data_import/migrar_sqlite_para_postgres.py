@@ -39,17 +39,17 @@ ORDEM_MODELOS = [
     models.Almoxarifado,
     models.Produto,
     models.Fornecedor,
+    models.LoteImportacao,           # referenciado por MovimentacaoHistorico e Divergencia
+    models.MovimentacaoHistorico,    # depende de Hipotese e LoteImportacao
+    models.Divergencia,              # depende de LoteImportacao
     models.FechamentoInventario,
-    models.ItemFechamento,
-    models.Divergencia,
-    models.MovimentacaoHistorico,
-    models.AcaoPosInventario,
-    models.ConciliacaoCiencia,
-    models.PedidoCompra,
-    models.RecebimentoPedido,
-    models.CasoMLFeedback,
+    models.ItemFechamento,           # depende de FechamentoInventario, Divergencia e MovimentacaoHistorico
+    models.AcaoPosInventario,        # depende de ItemFechamento e FechamentoInventario
+    models.ConciliacaoCiencia,       # depende de FechamentoInventario
+    models.PedidoCompra,             # depende de Fornecedor
+    models.RecebimentoPedido,        # depende de PedidoCompra
+    models.CasoMLFeedback,           # depende de Divergencia
     models.EstadoTreinoML,
-    models.LoteImportacao,
     models.Transferencia,
     models.OrdemProducao,
     models.ConsumoOP,
@@ -59,20 +59,44 @@ ORDEM_MODELOS = [
 ]
 
 
-def migrar(origem: str, destino: str):
+def limpar_destino(engine_destino):
+    """Apaga os dados de todas as tabelas no destino, na ordem inversa
+    (filhas antes das pais) - usado quando você já migrou antes e quer
+    substituir tudo por uma versão mais atual, sem duplicar linhas."""
+    SessaoDestino = sessionmaker(bind=engine_destino)
+    db = SessaoDestino()
+    for modelo in reversed(ORDEM_MODELOS):
+        n = db.query(modelo).delete()
+        if n:
+            print(f"{modelo.__tablename__}: {n} linhas removidas (limpeza antes de migrar de novo)")
+    db.commit()
+    db.close()
+
+
+def migrar(origem: str, destino: str, limpar: bool = False):
     engine_origem = create_engine(f"sqlite:///{origem}")
     engine_destino = create_engine(destino)
 
     Base.metadata.create_all(bind=engine_destino)  # garante que as tabelas existem no destino
+
+    if limpar:
+        limpar_destino(engine_destino)
+        print()
 
     SessaoOrigem = sessionmaker(bind=engine_origem)
     SessaoDestino = sessionmaker(bind=engine_destino)
     db_origem = SessaoOrigem()
     db_destino = SessaoDestino()
 
+    insp_origem = inspect(engine_origem)
+    tabelas_origem = set(insp_origem.get_table_names())
     insp_destino = inspect(engine_destino)
 
     for modelo in ORDEM_MODELOS:
+        if modelo.__tablename__ not in tabelas_origem:
+            print(f"{modelo.__tablename__}: tabela não existe na origem (módulo mais novo que essa versão do banco local - normal, pulando)")
+            continue
+
         linhas = db_origem.query(modelo).all()
         if not linhas:
             print(f"{modelo.__tablename__}: 0 linhas (vazio, pulando)")
@@ -97,8 +121,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--origem", default="atlas.db", help="Caminho do atlas.db local")
     parser.add_argument("--destino", required=True, help="Connection string do Postgres na nuvem (postgresql://...)")
+    parser.add_argument("--limpar-destino", action="store_true",
+                         help="Apaga os dados já existentes no destino antes de migrar - use isso se já migrou antes "
+                              "e quer substituir tudo por uma versão mais atual (evita duplicar linhas).")
     args = parser.parse_args()
     destino = args.destino
     if destino.startswith("postgres://"):
         destino = destino.replace("postgres://", "postgresql://", 1)
-    migrar(args.origem, destino)
+    migrar(args.origem, destino, limpar=args.limpar_destino)
