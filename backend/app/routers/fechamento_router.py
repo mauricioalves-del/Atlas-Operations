@@ -1142,17 +1142,23 @@ def excluir_fechamento(fechamento_id: int, usuario: models.Usuario = Depends(req
     ids_divergencias = [i.divergencia_id for i in itens if i.divergencia_id]
     ids_historico = [i.movimentacao_historico_id for i in itens if i.movimentacao_historico_id]
 
+    # ORDEM IMPORTA (Postgres cobra a integridade referencial de verdade,
+    # SQLite não - por isso esse bug só apareceu na nuvem): itens_fechamento
+    # referencia divergencias e movimentacoes_historico, então ele precisa
+    # ser apagado ANTES dos dois, não depois. AcaoPosInventario referencia
+    # itens_fechamento, então também precisa vir antes.
+    qtd_acoes = db.query(models.AcaoPosInventario).filter_by(fechamento_id=fechamento_id).delete(synchronize_session=False)
+    qtd_ciencia = db.query(models.ConciliacaoCiencia).filter_by(fechamento_id=fechamento_id).delete(synchronize_session=False)
+    qtd_itens = db.query(models.ItemFechamento).filter_by(fechamento_id=fechamento_id).delete(synchronize_session=False)
+
     if ids_divergencias:
         db.query(models.CasoMLFeedback).filter(models.CasoMLFeedback.divergencia_id.in_(ids_divergencias)).delete(synchronize_session=False)
         db.query(models.Divergencia).filter(models.Divergencia.id.in_(ids_divergencias)).delete(synchronize_session=False)
     if ids_historico:
         db.query(models.MovimentacaoHistorico).filter(models.MovimentacaoHistorico.id.in_(ids_historico)).delete(synchronize_session=False)
 
-    qtd_acoes = db.query(models.AcaoPosInventario).filter_by(fechamento_id=fechamento_id).delete(synchronize_session=False)
-    qtd_itens = db.query(models.ItemFechamento).filter_by(fechamento_id=fechamento_id).delete(synchronize_session=False)
-
     registrar_log(db, usuario.username, "excluir_fechamento_inventario", entidade="fechamento", entidade_id=fechamento_id,
-                  detalhes={"arquivo": fechamento.arquivo_origem, "itens_removidos": qtd_itens, "acoes_removidas": qtd_acoes})
+                  detalhes={"arquivo": fechamento.arquivo_origem, "itens_removidos": qtd_itens, "acoes_removidas": qtd_acoes, "ciencia_removida": qtd_ciencia})
     db.delete(fechamento)
     db.commit()
-    return {"ok": True, "itens_removidos": qtd_itens, "divergencias_removidas": len(ids_divergencias), "acoes_removidas": qtd_acoes}
+    return {"ok": True, "itens_removidos": qtd_itens, "divergencias_removidas": len(ids_divergencias), "acoes_removidas": qtd_acoes, "ciencia_removida": qtd_ciencia}

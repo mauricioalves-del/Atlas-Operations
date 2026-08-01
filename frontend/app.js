@@ -1968,11 +1968,24 @@ async function carregarFechamentos() {
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       if (!confirm("Excluir este fechamento? Todos os itens, divergências e ações pós-inventário ligados a ele serão removidos.")) return;
-      const res = await apiFetch(`${API}/fechamentos/${btn.dataset.id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok) { alert(data.detail || "Não foi possível excluir."); return; }
-      alert(`Removidos: ${data.itens_removidos} item(ns), ${data.divergencias_removidas} divergência(s), ${data.acoes_removidas} ação(ões).`);
-      carregarFechamentos();
+      try {
+        const res = await apiFetch(`${API}/fechamentos/${btn.dataset.id}`, { method: "DELETE" });
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (_) {
+          // resposta de erro nao veio em JSON (ex: erro 500 cru do banco) - segue sem detalhe extra
+        }
+        if (!res.ok) {
+          alert(`Não foi possível excluir (erro ${res.status}).${data.detail ? " " + data.detail : ""}`);
+          return;
+        }
+        alert(`Removidos: ${data.itens_removidos} item(ns), ${data.divergencias_removidas} divergência(s), ${data.acoes_removidas} ação(ões).`);
+        carregarFechamentos();
+      } catch (erro) {
+        console.error("Atlas: falha ao excluir fechamento:", erro);
+        alert("Falha ao excluir: " + erro.message);
+      }
     })
   );
 }
