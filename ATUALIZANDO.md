@@ -1,5 +1,29 @@
 # Como atualizar o Atlas sem perder dados
 
+## Se você está usando a versão na nuvem (Git + Render) - leia isto primeiro
+
+Existe um jeito bem mais simples agora: o script **`atualizar.ps1`**, na
+raiz do projeto. Ele faz o `git add` / `git commit` / `git push` sozinho
+- você só precisa:
+
+1. Copiar os arquivos novos (do zip que o Claude te mandar) por cima da
+   sua pasta do projeto - pode copiar `backend` e `frontend` inteiras
+   sem medo, o `.gitignore` já protege `atlas.db`, `.secret_key` e
+   `backups/` de serem enviados ou apagados.
+2. Clicar com o botão direito em **`atualizar.ps1`** → **"Executar com
+   PowerShell"** (ou abrir o PowerShell na pasta do projeto e rodar
+   `.\atualizar.ps1`).
+3. Esperar a mensagem de sucesso. O Render redeploya automaticamente.
+
+Isso resolve pra quem já está na nuvem. **O aviso abaixo, sobre nunca
+sobrescrever `atlas.db`, é sobre o SEU COMPUTADOR LOCAL** - continua
+valendo mesmo usando o script, porque o arquivo nunca deveria estar no
+Git de qualquer forma (na nuvem os dados ficam no Postgres, não num
+arquivo). Mas se você também usa o Atlas rodando localmente (sem nuvem),
+o processo manual abaixo ainda se aplica a esse uso local.
+
+---
+
 **O que aconteceu até agora**: cada zip que te entreguei vinha com o
 projeto inteiro, incluindo um `backend/atlas.db` de exemplo. Quando você
 substituiu a pasta `backend` inteira, esse arquivo de exemplo sobrescreveu

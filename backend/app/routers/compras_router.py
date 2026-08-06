@@ -155,7 +155,7 @@ def atualizar_pedido(pedido_id: int, payload: schemas.PedidoCompraAtualizar, usu
 
 
 @router.delete("/pedidos/{pedido_id}")
-def excluir_pedido(pedido_id: int, usuario: models.Usuario = Depends(requer_papel("admin")), db: Session = Depends(get_db)):
+def excluir_pedido(pedido_id: int, usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
     pedido = db.query(models.PedidoCompra).get(pedido_id)
     if not pedido:
         raise HTTPException(404, "Pedido não encontrado.")

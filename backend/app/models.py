@@ -61,6 +61,21 @@ class Almoxarifado(Base):
     codigo = Column(String, primary_key=True)
     nome_exibicao = Column(String)
     ativo = Column(Boolean, default=True)
+    participa_contagem_diaria = Column(Boolean, default=True)  # parametrizável - se muda o planejamento
+    # interno, ajusta aqui (tela Cadastros) em vez de excluir na mão sempre que rodar Cobertura de Conferência
+
+
+class DiaOperacional(Base):
+    """Um dia em que houve QUALQUER movimentação de sistema registrada
+    pra um almoxarifado (não só conferência) - vem do livro-caixa bruto
+    do sistema. É a base pra saber quais dias realmente precisavam de
+    conferência: um dia sem nenhuma operação (fim de semana, feriado, ou
+    o almoxarifado simplesmente não rodou nada) não deveria contar como
+    "furo" no controle - não tinha nada pra conferir."""
+    __tablename__ = "dias_operacionais"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    almoxarifado = Column(String, index=True)
+    data = Column(Date, index=True)
 
 
 class Hipotese(Base):
@@ -317,11 +332,48 @@ class ConciliacaoCiencia(Base):
     fechamento_id = Column(Integer, ForeignKey("fechamentos_inventario.id"), index=True)
     gestor_username = Column(String)
     gestor_nome = Column(String, nullable=True)
+    papel_assinatura = Column(String, nullable=True)  # "Diretor_Operacoes" ou "Coordenador_Financeiro" -
+    # papel ORGANIZACIONAL de quem está assinando, distinto do papel técnico de permissão do usuário (admin/analista/leitura)
     data_assinatura = Column(DateTime, default=datetime.utcnow)
     observacao = Column(String, nullable=True)
     itens_divergentes_snapshot = Column(JSON)
     total_itens_divergentes = Column(Integer, default=0)
     valor_total_divergente = Column(Float, default=0)
+
+
+class ConferenciaRealizada(Base):
+    """Marca um dia em que uma conferência de estoque de verdade
+    aconteceu num almoxarifado - vem de operações de ajuste de
+    inventário no livro-caixa bruto do sistema ("Inventario (+)/(-)"),
+    não de uma divergência propriamente dita. Alimenta só o indicador de
+    Cobertura de Conferência (dias conferidos x pendentes) - não
+    interfere em nenhuma outra lógica de investigação."""
+    __tablename__ = "conferencias_realizadas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    almoxarifado = Column(String, index=True)
+    data = Column(Date, index=True)
+    sku = Column(String, nullable=True)
+    quantidade_ajustada = Column(Float, nullable=True)
+    origem = Column(String, default="ajuste_inventario_sistema")
+
+
+class MovimentacaoBruta(Base):
+    """Cada linha do livro-caixa bruto do sistema, guardada de verdade
+    (não só os sinais derivados como Transferencia/ConferenciaRealizada) -
+    necessária pra reconstruir "o que se moveu nesse dia, nesse
+    almoxarifado" no detalhe da Cobertura de Conferência."""
+    __tablename__ = "movimentacoes_brutas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    almoxarifado = Column(String, index=True)
+    sku = Column(String, index=True)
+    descricao = Column(String, nullable=True)
+    data = Column(Date, index=True)
+    operacao = Column(String, nullable=True)
+    id_doc = Column(String, nullable=True)
+    doc = Column(String, nullable=True)
+    qtd_sai = Column(Float, default=0)
+    qtd_ent = Column(Float, default=0)
+    saldo = Column(Float, nullable=True)
 
 
 class Fornecedor(Base):

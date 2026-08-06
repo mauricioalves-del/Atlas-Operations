@@ -15,7 +15,22 @@ def _carregar_modelo():
     if _modelo_cache is None:
         if not os.path.exists(MODEL_PATH):
             return None
-        _modelo_cache = joblib.load(MODEL_PATH)
+        try:
+            _modelo_cache = joblib.load(MODEL_PATH)
+        except Exception as e:
+            # Arquivo corrompido ou treinado com uma versão incompatível
+            # do scikit-learn (ex: modelo treinado localmente com uma
+            # versão diferente da que está instalada no ambiente atual) -
+            # em vez de travar toda a investigação por causa disso, o
+            # motor de regras continua funcionando normalmente, só sem o
+            # sinal estatístico extra. Rode "Retreinar agora" (tela
+            # Auditoria) pra gerar um modelo novo, compatível com o
+            # ambiente atual.
+            print(f"Atlas: não consegui carregar model.joblib ({type(e).__name__}: {e}) - "
+                  f"provavelmente foi treinado com outra versão do scikit-learn. "
+                  f"Retreine o modelo (Auditoria > Retreinar agora) pra corrigir. "
+                  f"O motor de regras continua funcionando normalmente sem o sinal de ML.")
+            return None
     return _modelo_cache
 
 

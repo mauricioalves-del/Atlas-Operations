@@ -19,10 +19,15 @@ def seed_hipoteses(db):
     print(f"hipoteses: {db.query(models.Hipotese).count()} registros")
 
 
+EXCLUIDOS_DA_CONTAGEM_DIARIA_PADRAO = [
+    "Almox_SP_Loja", "Almox_Box_2", "Almox_Box", "Almox_SP_Degustacao", "Almox_SP_Ativacao",
+]
+
+
 def seed_almoxarifados(db):
     for codigo, nome in ALMOXARIFADOS_PADRAO:
         if not db.query(models.Almoxarifado).filter_by(codigo=codigo).first():
-            db.add(models.Almoxarifado(codigo=codigo, nome_exibicao=nome))
+            db.add(models.Almoxarifado(codigo=codigo, nome_exibicao=nome, participa_contagem_diaria=codigo not in EXCLUIDOS_DA_CONTAGEM_DIARIA_PADRAO))
     db.commit()
     print(f"almoxarifados: {db.query(models.Almoxarifado).count()} registros")
 

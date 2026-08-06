@@ -121,6 +121,246 @@ async function inicializarSessao() {
   }
 }
 
+// ---------- exportar dashboard como HTML autônomo, com gráficos vivos e filtros funcionando offline ----------
+
+// mesmo plugin de rótulos registrado no app principal (linha ~276) -
+// precisa existir também dentro do arquivo exportado, senão os rótulos
+// que ficam sempre visíveis em cima das barras desaparecem lá.
+const CODIGO_PLUGIN_ROTULOS = `
+Chart.register({
+  id: "rotulosDados",
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    chart.data.datasets.forEach((dataset, i) => {
+      if (!dataset.formatarRotulo) return;
+      const meta = chart.getDatasetMeta(i);
+      if (meta.hidden) return;
+      meta.data.forEach((el, idx) => {
+        const valor = dataset.data[idx];
+        if (valor == null) return;
+        const texto = dataset.formatarRotulo(valor);
+        if (!texto) return;
+        const pos = el.tooltipPosition ? el.tooltipPosition() : { x: el.x, y: el.y };
+        ctx.save();
+        ctx.font = "600 11px Inter, sans-serif";
+        ctx.fillStyle = dataset.corRotulo || getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#888";
+        if (chart.options.indexAxis === "y") {
+          ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(texto, pos.x + 6, pos.y);
+        } else if (meta.type === "doughnut" || meta.type === "pie") {
+          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(texto, pos.x, pos.y);
+        } else {
+          ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(texto, pos.x, pos.y - 4);
+        }
+        ctx.restore();
+      });
+    });
+  },
+});`;
+
+function _cartesiano(arrays) {
+  return arrays.reduce((acc, curr) => acc.flatMap((a) => curr.map((c) => [...a, c])), [[]]);
+}
+
+/** Captura o estado atual (HTML + configuração de cada gráfico) de tudo
+ * dentro do container EXCETO o cabeçalho de filtros - isso vira um
+ * "snapshot" independente que o arquivo exportado troca ao mudar o
+ * filtro, sem precisar do servidor. Funções (formatarRotulo, callbacks
+ * de tick) são preservadas como texto-fonte (.toString()) e
+ * reconstituídas no arquivo exportado - todas são funções simples,
+ * auto-contidas, sem depender de variável externa. */
+function _capturarSnapshotAtual(original) {
+  const header = original.querySelector(".view-header");
+  const partesResto = Array.from(original.children).filter((el) => el !== header);
+  const graficos = {};
+  const alturasPorId = {};
+
+  partesResto.forEach((parte) =>
+    parte.querySelectorAll("canvas").forEach((c) => {
+      const inst = window.Chart && Chart.getChart(c);
+      if (!inst || !c.id) return;
+      // guarda a altura de exibição REAL desse gráfico ao vivo (ex: o
+      // "height=90" no HTML original, ou o que o Chart.js calculou) -
+      // sem isso, o gráfico exportado perde a proporção pretendida e
+      // fica esmagado/pequeno, mesmo com muitas categorias pra mostrar.
+      alturasPorId[c.id] = c.getBoundingClientRect().height;
+      const dadosSerializaveis = JSON.parse(
+        JSON.stringify(inst.config.data, (chave, valor) => (typeof valor === "function" ? undefined : valor))
+      );
+      // recupera as funções que a serialização acima descartou (formatarRotulo por dataset)
+      (inst.config.data.datasets || []).forEach((ds, i) => {
+        if (typeof ds.formatarRotulo === "function") dadosSerializaveis.datasets[i].formatarRotuloSrc = ds.formatarRotulo.toString();
+      });
+      const opcoesSerializaveis = JSON.parse(
+        JSON.stringify(inst.config.options || {}, (chave, valor) => (typeof valor === "function" ? undefined : valor))
+      );
+      graficos[c.id] = { type: inst.config.type, data: dadosSerializaveis, options: opcoesSerializaveis };
+    })
+  );
+
+  const divTemp = document.createElement("div");
+  partesResto.forEach((p) => divTemp.appendChild(p.cloneNode(true)));
+  divTemp.querySelectorAll("button, .btn-secundario, .btn-primario").forEach((el) => el.remove());
+  divTemp.querySelectorAll("canvas").forEach((c) => {
+    // o Chart.js grava tanto os atributos de resolução (width/height)
+    // quanto um style inline em pixel fixo (ex: "width: 813px") - se só
+    // limpar os atributos, o style inline continua travando o layout no
+    // tamanho exato de quando foi exportado, sem se ajustar à tela de
+    // quem abrir o arquivo depois. Limpa os dois, mas define de volta
+    // uma ALTURA fixa (a real, capturada ao vivo) - só a largura fica
+    // flexível. Sem isso, o gráfico perde a proporção original (fica
+    // esmagado, texto/barras pequenos demais pra quantidade de categorias).
+    c.removeAttribute("width");
+    c.removeAttribute("height");
+    c.removeAttribute("style");
+    if (alturasPorId[c.id]) c.style.height = alturasPorId[c.id] + "px";
+  });
+
+  return { html: divTemp.innerHTML, graficos };
+}
+
+/** Espera até que todo <canvas> dentro do container tenha uma instância
+ * Chart.js associada (ou o tempo limite seja atingido) - mais confiável
+ * que uma espera fixa, que às vezes não é suficiente dependendo de
+ * quanto dado aquela combinação de filtro precisa processar. */
+async function _esperarGraficosProntos(container, timeoutMs = 1500) {
+  const inicio = Date.now();
+  while (Date.now() - inicio < timeoutMs) {
+    const canvases = Array.from(container.querySelectorAll("canvas"));
+    const todosProntos = canvases.every((c) => !!(window.Chart && Chart.getChart(c)));
+    if (todosProntos) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+async function exportarDashboardComoHTML(containerId, nomeArquivoBase, tituloExibicao, idsFiltros, funcaoRecarregar) {
+  const original = document.getElementById(containerId);
+  const botao = document.getElementById(`btn-exportar-html-${containerId.replace("view-", "")}`);
+  if (!original) return;
+
+  const selects = idsFiltros.map((id) => document.getElementById(id)).filter(Boolean);
+  const valoresOriginais = selects.map((s) => s.value);
+  const opcoesPorSelect = selects.map((s) => Array.from(s.options).map((o) => o.value));
+  const todasCombinacoes = _cartesiano(opcoesPorSelect);
+
+  const textoOriginalBotao = botao ? botao.textContent : null;
+  if (botao) botao.disabled = true;
+
+  const snapshots = {};
+  for (let i = 0; i < todasCombinacoes.length; i++) {
+    const combo = todasCombinacoes[i];
+    if (botao) botao.textContent = `Gerando (${i + 1}/${todasCombinacoes.length})...`;
+    selects.forEach((s, idx) => (s.value = combo[idx]));
+    await funcaoRecarregar();
+    await _esperarGraficosProntos(original);
+    snapshots[combo.join("||")] = _capturarSnapshotAtual(original);
+  }
+
+  // restaura o estado que o usuário tinha antes de exportar
+  selects.forEach((s, idx) => (s.value = valoresOriginais[idx]));
+  await funcaoRecarregar();
+  if (botao) {
+    botao.disabled = false;
+    botao.textContent = textoOriginalBotao;
+  }
+
+  const headerClone = original.querySelector(".view-header").cloneNode(true);
+  headerClone.querySelectorAll("button").forEach((el) => el.remove());
+
+  let cssTexto = "";
+  try {
+    cssTexto = await fetch("style.css").then((r) => r.text());
+  } catch (e) {
+    console.error("Atlas: falha ao buscar style.css pra exportação:", e);
+  }
+  let chartJsTexto = "";
+  try {
+    chartJsTexto = await fetch("vendor/chart.umd.js").then((r) => r.text());
+  } catch (e) {
+    console.error("Atlas: falha ao buscar Chart.js pra exportação:", e);
+  }
+
+  const tema = document.documentElement.getAttribute("data-theme") || "dark";
+  const agora = new Date().toLocaleString("pt-BR");
+  const chaveInicial = valoresOriginais.join("||");
+
+  const html = `<!DOCTYPE html>
+<html data-theme="${tema}">
+<head>
+<meta charset="UTF-8">
+<title>Atlas — ${tituloExibicao} — ${agora}</title>
+<style>
+${cssTexto}
+body { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.export-aviso { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-input); padding: 10px 14px; margin-bottom: 18px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="export-aviso">📄 Exportado do Atlas em ${agora} — instantâneo com os filtros congelados no momento da exportação (os dados não atualizam automaticamente; para ver ao vivo, acesse o sistema). Passe o mouse sobre os gráficos pra ver os valores.</div>
+${headerClone.outerHTML}
+<div id="atlas-snapshot-container"></div>
+<script>
+${chartJsTexto}
+${CODIGO_PLUGIN_ROTULOS}
+</script>
+<script>
+const ATLAS_SNAPSHOTS = ${JSON.stringify(snapshots)};
+const ATLAS_IDS_FILTROS = ${JSON.stringify(idsFiltros)};
+let atlasChartsAtivos = [];
+
+function atlasChaveAtual() {
+  return ATLAS_IDS_FILTROS.map((id) => document.getElementById(id)?.value || "").join("||");
+}
+
+function atlasRenderizarSnapshot(chave) {
+  const snap = ATLAS_SNAPSHOTS[chave];
+  const container = document.getElementById("atlas-snapshot-container");
+  if (!snap) { container.innerHTML = "<p class='hint' style='padding:20px'>Combinação de filtro não capturada na exportação.</p>"; return; }
+  atlasChartsAtivos.forEach((c) => c.destroy());
+  atlasChartsAtivos = [];
+  container.innerHTML = snap.html;
+  Object.entries(snap.graficos).forEach(([canvasId, cfg]) => {
+    const el = document.getElementById(canvasId);
+    if (!el) return;
+    (cfg.data.datasets || []).forEach((ds) => {
+      if (ds.formatarRotuloSrc) { try { ds.formatarRotulo = eval("(" + ds.formatarRotuloSrc + ")"); } catch (e) {} }
+    });
+    try {
+      atlasChartsAtivos.push(new Chart(el, { type: cfg.type, data: cfg.data, options: cfg.options }));
+    } catch (e) { console.error("Atlas: falha ao recriar gráfico exportado", canvasId, e); }
+  });
+}
+
+ATLAS_IDS_FILTROS.forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", () => atlasRenderizarSnapshot(atlasChaveAtual()));
+});
+
+atlasRenderizarSnapshot("${chaveInicial}");
+</script>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `atlas_${nomeArquivoBase}_${new Date().toISOString().slice(0, 10)}.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("btn-exportar-html-dashboard").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-dashboard", "painel_divergencias", "Painel de Divergências", ["filtro-periodo", "filtro-almoxarifado"], carregarDashboard)
+);
+document.getElementById("btn-exportar-html-fechamento-dashboard").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-fechamento-dashboard", "painel_inventario", "Painel de Inventário", ["fd-filtro-mes", "fd-filtro-almoxarifado"], carregarDashboardFechamento)
+);
+document.getElementById("btn-exportar-html-acuracia-ponderada").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-acuracia-ponderada", "acuracia_ponderada", "Acurácia Ponderada", ["ap-filtro-mes", "ap-filtro-almoxarifado"], carregarAcuraciaPonderada)
+);
+
 // ---------- tema claro/escuro ----------
 function aplicarTemaSalvo() {
   const tema = localStorage.getItem("atlas_theme") || "dark";
@@ -250,10 +490,14 @@ function mostrarView(nome) {
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
+  if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
   if (nome === "auditoria") carregarAuditoria();
-  if (nome === "importar") carregarLotesImportacao();
+  if (nome === "importar") {
+    carregarLotesImportacao();
+    carregarOpcoesAlmoxarifadoImportadorBruto();
+  }
   if (nome === "fechamentos") carregarFechamentos();
   if (nome === "fechamento-dashboard") carregarDashboardFechamento();
   if (nome === "acuracia-ponderada") carregarAcuraciaPonderada();
@@ -383,6 +627,7 @@ function regressaoLinear(valores) {
 function renderTendencia(dados) {
   const ctx = document.getElementById("chart-tendencia");
   if (chartTendencia) chartTendencia.destroy();
+  if (!dados.length) return;
   const serie = dados.map((d) => d.acuracia_pct);
   const { slope, intercept } = regressaoLinear(serie);
   const n = serie.length;
@@ -666,11 +911,18 @@ if (btnRecalcularValores) {
 
 
 // ---------- detalhe ----------
+let historicoSkuCompleto = [];
+
 async function abrirDetalhe(id) {
-  const [d, historico] = await Promise.all([
+  const [d, historico, faltasSobras, motivos, correlacaoRede] = await Promise.all([
     apiFetch(`${API}/divergencias/${id}`).then((r) => r.json()),
     apiFetch(`${API}/divergencias/${id}/historico-sku`).then((r) => (r.ok ? r.json() : [])),
+    apiFetch(`${API}/divergencias/${id}/faltas-sobras-mensal`).then((r) => (r.ok ? r.json() : [])),
+    apiFetch(`${API}/divergencias/${id}/motivos-sku`).then((r) => (r.ok ? r.json() : [])),
+    apiFetch(`${API}/divergencias/${id}/correlacao-rede`).then((r) => (r.ok ? r.json() : { encontrado: false, candidatos: [] })),
   ]);
+  historicoSkuCompleto = historico;
+  window.__divIdAtual = id;
   document.getElementById("detalhe-titulo").textContent = `Divergência #${d.id} — SKU ${d.sku}${d.descricao_produto ? " — " + d.descricao_produto : ""}`;
 
   const obsHtml = d.observacao_origem
@@ -754,9 +1006,36 @@ async function abrirDetalhe(id) {
         }
       </div>
       <div class="panel">
-        <h2>Histórico do SKU</h2>
+        <div class="panel-title-row">
+          <h2>Histórico do SKU</h2>
+          <select id="sel-tipo-historico" class="select-filtro" style="font-size:12px">
+            <option value="todos">Linear (tudo)</option>
+            <option value="movimentacao">Movimentados</option>
+            <option value="fechamento_inventario">Inventários</option>
+          </select>
+        </div>
         <p class="panel-sub">Quando divergiu e quando estabilizou, e por qual almoxarifado passou</p>
         <canvas id="chart-historico-sku" height="140"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Projeção de acurácia deste item</h2>
+        <p class="panel-sub" id="projecao-sku-subtitulo">Regressão linear sobre o histórico de apontamentos deste SKU</p>
+        <canvas id="chart-projecao-sku" height="140"></canvas>
+        <p class="hint" id="projecao-sku-footer"></p>
+      </div>
+      <div class="panel">
+        <h2>Falta × Sobra por período</h2>
+        <p class="panel-sub">Sobra e falta contam separadamente (não se cancelam) - mostra se a direção da divergência está mudando</p>
+        <canvas id="chart-faltas-sobras-sku" height="140"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Motivos das divergências deste SKU</h2>
+        <canvas id="chart-motivos-sku" height="180"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Correlação de rede</h2>
+        <p class="panel-sub">Existe sobra/falta oposta do mesmo SKU em outro almoxarifado, perto dessa data?</p>
+        <div id="correlacao-rede-conteudo"></div>
       </div>
       <div class="panel">
         <h2>Últimos apontamentos</h2>
@@ -784,7 +1063,194 @@ async function abrirDetalhe(id) {
     }
   }
   tentarRenderizar(() => renderHistoricoSku(historico));
+  tentarRenderizar(() => renderProjecaoSku(historico));
+  tentarRenderizar(() => renderFaltasSobrasSku(faltasSobras));
+  tentarRenderizar(() => renderMotivosSku(motivos));
+  tentarRenderizar(() => renderCorrelacaoRede(correlacaoRede));
+
+  document.getElementById("sel-tipo-historico").addEventListener("change", (ev) => {
+    const tipo = ev.target.value;
+    const filtrado = tipo === "todos" ? historicoSkuCompleto : historicoSkuCompleto.filter((p) => p.tipo_origem === tipo);
+    renderHistoricoSku(filtrado);
+    renderProjecaoSku(filtrado);
+  });
+
   mostrarView("detalhe");
+}
+
+let chartProjecaoSku, chartFaltasSobrasSku, chartMotivosSku;
+
+function renderProjecaoSku(historico) {
+  const ctx = document.getElementById("chart-projecao-sku");
+  if (!ctx) return;
+  if (chartProjecaoSku) chartProjecaoSku.destroy();
+  const footer = document.getElementById("projecao-sku-footer");
+  ctx.style.display = "";
+  if (!historico.length) {
+    ctx.style.display = "none";
+    footer.textContent = "Nenhum apontamento desse tipo para este SKU - tente outra opção no seletor acima.";
+    return;
+  }
+  if (historico.length < 2) {
+    footer.textContent = "Poucos apontamentos ainda para projetar uma tendência (mínimo 2).";
+    return;
+  }
+
+  const serie = historico.map((p) => p.acuracia_pct);
+  const { slope, intercept } = regressaoLinear(serie);
+  const n = serie.length;
+  const projecaoPontos = 5;
+  const labels = historico.map((p) => formatarDataCurta(p.data));
+  const labelsProjecao = Array.from({ length: projecaoPontos }, (_, i) => "+" + (i + 1));
+
+  const clamp = (v) => (v == null ? null : Math.max(0, Math.min(100, v)));
+  const linhaTendencia = serie.map((_, i) => clamp(round1(intercept + slope * i)));
+  const linhaProjecao = new Array(n - 1).fill(null).concat(
+    [clamp(round1(intercept + slope * (n - 1)))],
+    Array.from({ length: projecaoPontos }, (_, i) => clamp(round1(intercept + slope * (n - 1 + i + 1))))
+  );
+
+  chartProjecaoSku = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: [...labels, ...labelsProjecao],
+      datasets: [
+        { label: "Acurácia real", data: serie, borderColor: "#5b75ac", backgroundColor: "#5b75ac", pointRadius: 3, pointBackgroundColor: serie.map((v) => corFarolAcuracia(v)), tension: 0.25 },
+        { label: "Tendência", data: [...linhaTendencia, ...new Array(projecaoPontos).fill(null)], borderColor: "#f9a825", borderDash: [6, 4], pointRadius: 0, borderWidth: 2 },
+        { label: "Projeção", data: linhaProjecao, borderColor: "#e5534b", borderDash: [2, 3], pointRadius: 3, pointBackgroundColor: "#e5534b", borderWidth: 2 },
+      ],
+    },
+    options: {
+      plugins: { legend: { position: "bottom", labels: { color: "#8ca0a3", font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 9 } }, grid: { display: false } },
+        y: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { color: "#2e3a40" }, min: 0, max: 100 },
+      },
+    },
+  });
+
+  const inclinacao = round2(slope);
+  const projecaoFinalBruta = linhaProjecao[linhaProjecao.length - 1];
+  const projecaoFinal = projecaoFinalBruta != null ? Math.max(0, Math.min(100, projecaoFinalBruta)) : null;
+  const direcao = Math.abs(inclinacao) < 0.05 ? "estável" : inclinacao > 0 ? "↑ melhorando" : "↓ piorando";
+  footer.textContent = `Tendência: ${direcao} (${inclinacao > 0 ? "+" : ""}${inclinacao} pp por apontamento) · Projeção: ~${projecaoFinal != null ? round1(projecaoFinal) : "—"}% de acurácia nos próximos apontamentos.`;
+}
+
+function renderFaltasSobrasSku(dados) {
+  const ctx = document.getElementById("chart-faltas-sobras-sku");
+  if (!ctx) return;
+  if (chartFaltasSobrasSku) chartFaltasSobrasSku.destroy();
+  if (!dados.length) return;
+  chartFaltasSobrasSku = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: dados.map((d) => d.mes),
+      datasets: [
+        { label: "Falta (qtd)", data: dados.map((d) => -d.qtd_faltas), backgroundColor: "#e5534b", borderRadius: 3 },
+        { label: "Sobra (qtd)", data: dados.map((d) => d.qtd_sobras), backgroundColor: "#4caf50", borderRadius: 3 },
+      ],
+    },
+    options: {
+      onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
+      plugins: {
+        legend: { position: "bottom", labels: { color: "#8ca0a3", font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            afterBody: (items) => {
+              const d = dados[items[0].dataIndex];
+              return [
+                `Valor em falta: ${formatarMoeda(d.valor_faltas)}`,
+                `Valor em sobra: ${formatarMoeda(d.valor_sobras)}`,
+                "Duplo clique pra ver o detalhe (almoxarifado, data, sistema × contagem)",
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { color: "#8ca0a3", font: { size: 10 }, callback: (v) => Math.abs(v) }, grid: { color: "#2e3a40" } },
+      },
+    },
+  });
+
+  ctx.ondblclick = async (evt) => {
+    const pontos = chartFaltasSobrasSku.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
+    if (!pontos.length) return;
+    const mes = dados[pontos[0].index].mes;
+    await abrirModalDetalheMes(mes);
+  };
+}
+
+async function abrirModalDetalheMes(mes) {
+  const res = await apiFetch(`${API}/divergencias/${window.__divIdAtual}/detalhes-mes?mes=${encodeURIComponent(mes)}`);
+  if (!res.ok) {
+    alert("Não foi possível carregar o detalhe desse mês.");
+    return;
+  }
+  const dados = await res.json();
+  document.getElementById("modal-detalhe-mes-titulo").textContent = `${dados.sku}${dados.descricao_produto ? " — " + dados.descricao_produto : ""} — ${mes}`;
+  document.querySelector("#tabela-modal-detalhe-mes tbody").innerHTML = dados.itens
+    .map(
+      (i) => `<tr>
+        <td>${formatarDataCurta(i.data)}</td><td>${i.almoxarifado}</td>
+        <td>${i.saldo_sistema}</td><td>${i.saldo_fisico}</td>
+        <td style="color:${i.divergencia_qtd < 0 ? "var(--critico)" : "var(--ok)"}">${i.divergencia_qtd > 0 ? "+" : ""}${i.divergencia_qtd}</td>
+        <td>${rotulo(i.hipotese)}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="6" style="color:var(--muted)">Nenhum apontamento encontrado nesse mês.</td></tr>`;
+  document.getElementById("modal-detalhe-mes-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-detalhe-mes").addEventListener("click", () => {
+  document.getElementById("modal-detalhe-mes-overlay").classList.add("hidden");
+});
+document.getElementById("modal-detalhe-mes-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-detalhe-mes-overlay") document.getElementById("modal-detalhe-mes-overlay").classList.add("hidden");
+});
+
+function renderMotivosSku(dados) {
+  const ctx = document.getElementById("chart-motivos-sku");
+  if (!ctx) return;
+  if (chartMotivosSku) chartMotivosSku.destroy();
+  if (!dados.length) {
+    ctx.parentElement.querySelector(".hint-motivos")?.remove();
+    const p = document.createElement("p");
+    p.className = "hint hint-motivos";
+    p.textContent = "Nenhuma divergência anterior registrada para este SKU.";
+    ctx.after(p);
+    return;
+  }
+  const cores = ["#5b75ac", "#e5534b", "#4caf50", "#f9a825", "#8e7cc3", "#e8873a", "#4ba3c7", "#c77dbb", "#7fae6f", "#b0846a"];
+  chartMotivosSku = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: dados.map((d) => rotulo(d.hipotese)),
+      datasets: [{ data: dados.map((d) => d.quantidade), backgroundColor: dados.map((_, i) => cores[i % cores.length]) }],
+    },
+    options: {
+      plugins: { legend: { position: "bottom", labels: { color: "#8ca0a3", font: { size: 10 } } } },
+    },
+  });
+}
+
+function renderCorrelacaoRede(dados) {
+  const div = document.getElementById("correlacao-rede-conteudo");
+  if (!div) return;
+  if (!dados.encontrado) {
+    div.innerHTML = `<p class="hint">Nenhuma ${dados.tipo_desta_divergencia === "falta" ? "sobra" : "falta"} correspondente encontrada em outro almoxarifado, nesta janela de tempo.</p>`;
+    return;
+  }
+  const rotuloOposto = dados.tipo_desta_divergencia === "falta" ? "Sobra encontrada" : "Falta encontrada";
+  div.innerHTML = dados.candidatos
+    .map(
+      (c) => `<div class="evidencia-item sim">
+        <span>${rotuloOposto} em <strong>${c.almoxarifado}</strong> · qtd ${c.divergencia_qtd > 0 ? "+" : ""}${c.divergencia_qtd}${c.valor_estimado ? " · " + formatarMoeda(c.valor_estimado) : ""}</span>
+        <span>${formatarDataCurta(c.data_deteccao)} · ${c.status}</span>
+      </div>`
+    )
+    .join("");
 }
 
 let chartHistoricoSku;
@@ -792,7 +1258,16 @@ function renderHistoricoSku(historico) {
   const ctx = document.getElementById("chart-historico-sku");
   if (!ctx) return;
   if (chartHistoricoSku) chartHistoricoSku.destroy();
-  if (!historico.length) return;
+  ctx.parentElement.querySelector(".hint-sem-dado-historico")?.remove();
+  ctx.style.display = "";
+  if (!historico.length) {
+    ctx.style.display = "none";
+    const p = document.createElement("p");
+    p.className = "hint hint-sem-dado-historico";
+    p.textContent = "Nenhum apontamento desse tipo para este SKU - tente outra opção no seletor acima.";
+    ctx.after(p);
+    return;
+  }
   chartHistoricoSku = new Chart(ctx, {
     type: "line",
     data: {
@@ -1037,6 +1512,72 @@ document.getElementById("btn-importar-custos-preco").addEventListener("click", a
   } catch (erro) {
     resultado.textContent = "Falha ao importar: " + erro.message;
   }
+});
+
+async function carregarOpcoesAlmoxarifadoImportadorBruto() {
+  const res = await apiFetch(`${API}/almoxarifados-cadastro`);
+  if (!res.ok) return;
+  const lista = await res.json();
+  const opcoesHtml =
+    `<option value="">Selecione...</option>` +
+    lista
+      .filter((a) => a.ativo)
+      .map((a) => `<option value="${a.codigo}">${a.codigo}${a.nome_exibicao && a.nome_exibicao !== a.codigo ? " — " + a.nome_exibicao : ""}</option>`)
+      .join("");
+  document.querySelectorAll("#tabela-importador-bruto .cb-almoxarifado").forEach((sel) => {
+    const valorAtual = sel.value;
+    sel.innerHTML = opcoesHtml;
+    if (valorAtual) sel.value = valorAtual;
+  });
+}
+
+document.getElementById("btn-adicionar-linha-bruto").addEventListener("click", () => {
+  const tbody = document.querySelector("#tabela-importador-bruto tbody");
+  const novaLinha = tbody.rows[0].cloneNode(true);
+  novaLinha.querySelectorAll("input").forEach((i) => (i.value = ""));
+  novaLinha.querySelectorAll("select").forEach((s) => (s.selectedIndex = 0));
+  novaLinha.querySelector(".cb-resultado").textContent = "";
+  tbody.appendChild(novaLinha);
+});
+
+document.querySelector("#tabela-importador-bruto tbody").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest(".btn-importar-bruto");
+  if (!btn) return;
+  const linha = btn.closest("tr");
+  const almoxarifado = linha.querySelector(".cb-almoxarifado").value.trim();
+  const inputArquivo = linha.querySelector(".cb-arquivo");
+  const aba = linha.querySelector(".cb-aba").value.trim();
+  const resultado = linha.querySelector(".cb-resultado");
+
+  if (!almoxarifado) {
+    resultado.textContent = "Informe o almoxarifado.";
+    return;
+  }
+  if (!inputArquivo.files.length) {
+    resultado.textContent = "Selecione um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", inputArquivo.files[0]);
+  form.append("almoxarifado", almoxarifado);
+  if (aba) form.append("aba", aba);
+
+  btn.disabled = true;
+  resultado.textContent = "Importando (pode levar um pouco em arquivos grandes)...";
+  try {
+    const res = await apiFetch(`${API}/importar/movimentacao-bruta-sistema`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+    } else {
+      resultado.textContent = `${data.dias_com_movimento_registrados} dia(s) com movimento · ${data.conferencias_registradas} conferência(s) · ${data.transferencias_criadas} transferência(s) nova(s) · ${data.transferencias_atualizadas} cruzada(s)${
+        data.almoxarifados_nao_mapeados.length ? " · não mapeados: " + data.almoxarifados_nao_mapeados.join(", ") : ""
+      }`;
+    }
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  }
+  btn.disabled = false;
 });
 
 document.querySelectorAll(".btn-importar-contexto").forEach((btn) => {
@@ -1501,6 +2042,7 @@ function renderFdPorAlmox(dados) {
     data: { labels: dados.map((d) => d.almoxarifado), datasets: [{ label: "Acurácia %", data: dados.map((d) => d.acuracia_pct), backgroundColor: cores, borderRadius: 3, formatarRotulo: (v) => v + "%" }] },
     options: {
       indexAxis: "y",
+      onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
       plugins: { legend: { display: false } },
       scales: {
         x: { min: 0, max: 112, ticks: { color: "#8ca0a3", callback: (v) => (v <= 100 ? v : "") }, grid: { color: "#2e3a40" } },
@@ -1508,6 +2050,23 @@ function renderFdPorAlmox(dados) {
       },
     },
   });
+
+  ctx.ondblclick = async (evt) => {
+    const pontos = fdChartAlmox.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
+    if (!pontos.length) return;
+    const almoxarifado = dados[pontos[0].index].almoxarifado;
+    const mes = document.getElementById("fd-filtro-mes").value;
+    if (!mes) {
+      alert('Selecione um mês específico (em vez de "Todos os meses") pra abrir o fechamento correspondente - com vários meses, não dá pra saber qual fechamento você quer ver.');
+      return;
+    }
+    const fechamentos = await apiFetch(`${API}/fechamentos?almoxarifado=${encodeURIComponent(almoxarifado)}&mes=${encodeURIComponent(mes)}`).then((r) => r.json());
+    if (!fechamentos.length) {
+      alert(`Nenhum fechamento encontrado para ${almoxarifado} em ${mes}.`);
+      return;
+    }
+    abrirFechamentoDetalhe(fechamentos[0].id);
+  };
 }
 
 function renderFdEvolucaoMensal(dados) {
@@ -1562,14 +2121,26 @@ function renderFdRankingFinanceiro(ranking) {
 
 function renderFdRecorrentes(lista) {
   document.querySelector("#fd-tabela-recorrentes tbody").innerHTML = lista
-    .map((i) => `<tr><td>${i.sku}</td><td class="col-descricao">${i.descricao || "—"}</td><td>${i.ocorrencias}</td><td>${formatarMoeda(i.valor_total)}</td></tr>`)
+    .map((i) => `<tr data-sku="${i.sku}" data-almox="${i.almoxarifado || ""}" data-desc="${(i.descricao || "").replace(/"/g, "&quot;")}" style="cursor:pointer"><td>${i.sku}</td><td class="col-descricao">${i.descricao || "—"}</td><td>${i.ocorrencias}</td><td>${formatarMoeda(i.valor_total)}</td></tr>`)
     .join("") || `<tr><td colspan="4" style="color:var(--muted)">Nenhum item recorrente ainda.</td></tr>`;
+
+  document.querySelectorAll("#fd-tabela-recorrentes tbody tr[data-sku]").forEach((tr) =>
+    tr.addEventListener("click", () => {
+      abrirModalAcaoPorSku(tr.dataset.sku, tr.dataset.almox || null, tr.dataset.desc || null, () => carregarDashboardFechamento());
+    })
+  );
 }
 
 function renderFdImpactoFinanceiro(lista) {
   document.querySelector("#fd-tabela-impacto-financeiro tbody").innerHTML = lista
-    .map((i) => `<tr><td>${i.sku}</td><td class="col-descricao">${i.descricao || "—"}</td><td>${i.ocorrencias}</td><td>${formatarMoeda(i.valor_total)}</td></tr>`)
+    .map((i) => `<tr data-sku="${i.sku}" data-almox="${i.almoxarifado || ""}" data-desc="${(i.descricao || "").replace(/"/g, "&quot;")}" style="cursor:pointer"><td>${i.sku}</td><td class="col-descricao">${i.descricao || "—"}</td><td>${i.ocorrencias}</td><td>${formatarMoeda(i.valor_total)}</td></tr>`)
     .join("") || `<tr><td colspan="4" style="color:var(--muted)">Nenhum passivo registrado ainda.</td></tr>`;
+
+  document.querySelectorAll("#fd-tabela-impacto-financeiro tbody tr[data-sku]").forEach((tr) =>
+    tr.addEventListener("click", () => {
+      abrirModalAcaoPorSku(tr.dataset.sku, tr.dataset.almox || null, tr.dataset.desc || null, () => carregarDashboardFechamento());
+    })
+  );
 }
 
 function renderFdTabelaRisco(lista) {
@@ -1929,6 +2500,7 @@ async function carregarFechamentos() {
       (f) => `<tr data-id="${f.id}">
         <td>${formatarDataCurta(f.data_fechamento)}</td><td>${f.almoxarifado}</td>
         <td>${f.total_itens}</td><td>${f.total_divergentes}</td><td>${formatarMoeda(f.valor_total_divergente)}</td>
+        <td>${f.status_assinatura === "Inventário Fechado" ? `<span style="color:var(--ok)">✅ Inventário Fechado</span>` : `<span style="color:var(--critico)">⏳ Inventário em Aberto</span>`}</td>
         <td>&rarr;</td>
         <td>
           <select class="select-corrigir-almox" data-id="${f.id}" style="margin-right:6px">
@@ -1939,7 +2511,7 @@ async function carregarFechamentos() {
         </td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="7" style="color:var(--muted)">Nenhum fechamento importado ainda.</td></tr>`;
+    .join("") || `<tr><td colspan="8" style="color:var(--muted)">Nenhum fechamento importado ainda.</td></tr>`;
   document.querySelectorAll("#tabela-fechamentos tbody tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", (ev) => {
       if (ev.target.closest(".btn-excluir-fechamento") || ev.target.closest(".select-corrigir-almox")) return;
@@ -2062,12 +2634,26 @@ async function abrirFechamentoDetalhe(id) {
 
 let fechamentoDetalheAtualId = null;
 
+const ROTULOS_PAPEL_ASSINATURA = { Diretor_Operacoes: "Diretor de Operações", Coordenador_Financeiro: "Coordenador Financeiro" };
+
 async function carregarCiencia(fechamentoId) {
-  const lista = await apiFetch(`${API}/fechamentos/${fechamentoId}/ciencia`).then((r) => r.json());
+  const [lista, status] = await Promise.all([
+    apiFetch(`${API}/fechamentos/${fechamentoId}/ciencia`).then((r) => r.json()),
+    apiFetch(`${API}/fechamentos/${fechamentoId}/status-assinatura`).then((r) => r.json()),
+  ]);
+
+  const resumo = document.getElementById("ciencia-status-resumo");
+  if (status.status === "Inventário Fechado") {
+    resumo.innerHTML = `<span style="color:var(--ok); font-weight:600">✅ Inventário Fechado</span> - ambas as assinaturas foram colhidas (${status.papeis_assinados.join(", ")}).`;
+  } else {
+    resumo.innerHTML = `<span style="color:var(--critico); font-weight:600">⏳ Inventário em Aberto</span> - falta assinatura de: ${status.papeis_faltantes.join(", ")}.`;
+  }
+
   document.querySelector("#tabela-ciencia tbody").innerHTML = lista
     .map(
       (c) => `<tr>
         <td>${new Date(c.data_assinatura).toLocaleString("pt-BR")}</td>
+        <td>${ROTULOS_PAPEL_ASSINATURA[c.papel_assinatura] || "—"}</td>
         <td>${c.gestor_nome || c.gestor_username}</td>
         <td>${c.total_itens_divergentes}</td>
         <td>${formatarMoeda(c.valor_total_divergente)}</td>
@@ -2075,7 +2661,7 @@ async function carregarCiencia(fechamentoId) {
         <td><button class="btn-secundario btn-ver-pdf-ciencia" data-id="${c.id}">Ver PDF</button></td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="6" style="color:var(--muted)">Nenhuma confirmação de ciência registrada ainda para este fechamento.</td></tr>`;
+    .join("") || `<tr><td colspan="7" style="color:var(--muted)">Nenhuma confirmação de ciência registrada ainda para este fechamento.</td></tr>`;
 
   document.querySelectorAll(".btn-ver-pdf-ciencia").forEach((btn) =>
     btn.addEventListener("click", () => abrirPdfCiencia(btn.dataset.id))
@@ -2111,19 +2697,25 @@ async function abrirPdfCiencia(cienciaId) {
 
 document.getElementById("btn-gerar-ciencia").addEventListener("click", async () => {
   if (!fechamentoDetalheAtualId) return;
+  const papel = document.getElementById("ciencia-papel").value;
+  if (!papel) {
+    alert("Selecione qual papel está assinando (Diretor de Operações ou Coordenador Financeiro) antes de confirmar.");
+    return;
+  }
   const btn = document.getElementById("btn-gerar-ciencia");
   const observacao = document.getElementById("ciencia-observacao").value.trim() || null;
   btn.disabled = true;
   btn.textContent = "Gerando...";
   try {
     const res = await apiFetch(`${API}/fechamentos/${fechamentoDetalheAtualId}/ciencia`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ observacao }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ observacao, papel_assinatura: papel }),
     });
     const data = await res.json();
     if (!res.ok) {
       alert(data.detail || "Não foi possível gerar a ciência.");
     } else {
       document.getElementById("ciencia-observacao").value = "";
+      document.getElementById("ciencia-papel").value = "";
       await carregarCiencia(fechamentoDetalheAtualId);
       abrirPdfCiencia(data.id);
     }
@@ -2291,11 +2883,143 @@ document.getElementById("btn-cancelar-pedido").addEventListener("click", async (
   carregarPedidosCompra();
 });
 
+document.getElementById("btn-excluir-pedido").addEventListener("click", async () => {
+  if (!pedidoModalAtual) return;
+  if (!confirm("Excluir este pedido permanentemente? Use isso só quando o pedido foi criado com dado errado - diferente de \"Cancelar\", isso remove o registro por completo, junto com os recebimentos já lançados nele.")) return;
+  const res = await apiFetch(`${API}/compras/pedidos/${pedidoModalAtual.id}`, { method: "DELETE" });
+  if (!res.ok) {
+    let msg = "Não foi possível excluir.";
+    try { msg = (await res.json()).detail || msg; } catch (_) {}
+    alert(msg);
+    return;
+  }
+  document.getElementById("modal-pedido-overlay").classList.add("hidden");
+  carregarPedidosCompra();
+});
+
 document.getElementById("btn-fechar-modal-pedido").addEventListener("click", () => {
   document.getElementById("modal-pedido-overlay").classList.add("hidden");
 });
 document.getElementById("modal-pedido-overlay").addEventListener("click", (ev) => {
   if (ev.target.id === "modal-pedido-overlay") document.getElementById("modal-pedido-overlay").classList.add("hidden");
+});
+
+// ---------- cobertura de conferência (dias conferidos x pendentes) ----------
+let ccDadosCache = null;
+
+async function carregarCoberturaConferencia() {
+  const dias = document.getElementById("cc-filtro-dias").value;
+  const res = await apiFetch(`${API}/divergencias/dashboard/cobertura-conferencia?dias=${dias}`);
+  if (!res.ok) {
+    document.getElementById("cc-kpi-row").innerHTML = `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-label" style="color:var(--critico)">Não consegui carregar</div></div>`;
+    return;
+  }
+  const dados = await res.json();
+  ccDadosCache = dados;
+
+  const lista = dados.por_almoxarifado;
+  const comDados = lista.filter((a) => !a.sem_dados);
+  const coberturaMedia = comDados.length ? Math.round((comDados.reduce((s, a) => s + a.pct_cobertura, 0) / comDados.length) * 10) / 10 : null;
+  const semNenhumaConferencia = comDados.filter((a) => a.dias_conferidos === 0).length;
+  const comFuroAtivo = comDados.filter((a) => a.dias_desde_ultima_conferencia != null && a.dias_desde_ultima_conferencia >= 3).length;
+  const maiorFuroGeral = lista.reduce((max, a) => Math.max(max, a.maior_furo_dias), 0);
+  const semDadosCount = lista.filter((a) => a.sem_dados).length;
+
+  document.getElementById("cc-kpi-row").innerHTML = [
+    { label: "Cobertura média", value: coberturaMedia != null ? coberturaMedia + "%" : "—", cor: coberturaMedia != null ? corFarolAcuracia(coberturaMedia) : "var(--muted)" },
+    { label: "Almoxarifados sem nenhuma conferência", value: semNenhumaConferencia, cor: semNenhumaConferencia > 0 ? "var(--critico)" : "var(--ok)" },
+    { label: "Com furo ativo agora (3+ dias)", value: comFuroAtivo, cor: comFuroAtivo > 0 ? "var(--alto)" : "var(--ok)" },
+    { label: "Maior furo já registrado", value: maiorFuroGeral + " dia(s)", cor: maiorFuroGeral > 7 ? "var(--critico)" : "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="color:${c.cor}">${c.value}</div></div>`)
+    .join("");
+
+  document.querySelector("#tabela-cobertura-almoxarifado tbody").innerHTML = lista
+    .map((a) =>
+      a.sem_dados
+        ? `<tr>
+            <td>${a.almoxarifado}</td>
+            <td colspan="5" class="hint">Sem dados de movimentação no período - importe o livro-caixa bruto ou a movimentação diária pra esse almoxarifado.</td>
+          </tr>`
+        : `<tr>
+            <td>${a.almoxarifado}<div class="hint" style="margin-top:2px">${a.fonte === "livro_caixa_bruto" ? "livro-caixa bruto" : "fluxo diário (Sistema × Contagem)"}</div></td>
+            <td style="color:${corFarolAcuracia(a.pct_cobertura)}"><strong>${a.pct_cobertura}%</strong></td>
+            <td>${a.dias_conferidos} / ${a.dias_totais}</td>
+            <td style="color:${a.dias_desde_ultima_conferencia == null ? "var(--muted)" : a.dias_desde_ultima_conferencia >= 7 ? "var(--critico)" : a.dias_desde_ultima_conferencia >= 3 ? "var(--alto)" : "var(--muted)"}">${a.dias_desde_ultima_conferencia != null ? a.dias_desde_ultima_conferencia + " dia(s)" : "nunca conferido"}</td>
+            <td>${a.maior_furo_dias} dia(s)</td>
+            <td class="hint">${a.maior_furo_periodo || "—"}</td>
+          </tr>`
+    )
+    .join("") || `<tr><td colspan="6" style="color:var(--muted)">Nenhum almoxarifado cadastrado pra contagem diária (veja Cadastros > Almoxarifados).</td></tr>`;
+
+  const select = document.getElementById("cc-select-almoxarifado");
+  select.innerHTML = lista.map((a) => `<option value="${a.almoxarifado}">${a.almoxarifado} (${a.sem_dados ? "sem dados" : a.pct_cobertura + "%"})</option>`).join("");
+  if (lista.length) await carregarCalendarioAlmoxarifado(lista[0].almoxarifado);
+}
+
+document.getElementById("cc-filtro-dias").addEventListener("change", carregarCoberturaConferencia);
+document.getElementById("cc-select-almoxarifado").addEventListener("change", (ev) => carregarCalendarioAlmoxarifado(ev.target.value));
+
+async function carregarCalendarioAlmoxarifado(almoxarifado) {
+  const dias = document.getElementById("cc-filtro-dias").value;
+  const res = await apiFetch(`${API}/divergencias/dashboard/calendario-conferencia?almoxarifado=${encodeURIComponent(almoxarifado)}&dias=${dias}`);
+  const calendario = res.ok ? await res.json() : [];
+  const container = document.getElementById("cc-calendario");
+  container.innerHTML = calendario
+    .map((d) => `<span class="cc-dia ${d.conferido ? "cc-dia-ok" : "cc-dia-furo"}" data-data="${d.data}" data-almox="${almoxarifado}" title="${formatarDataCurta(d.data)} — ${d.conferido ? "conferido" : "sem conferência"} (duplo clique pra ver os itens)"></span>`)
+    .join("");
+
+  document.querySelectorAll("#cc-calendario .cc-dia").forEach((el) =>
+    el.addEventListener("dblclick", () => abrirModalDetalheDiaConferencia(el.dataset.almox, el.dataset.data))
+  );
+}
+
+async function abrirModalDetalheDiaConferencia(almoxarifado, data) {
+  const res = await apiFetch(`${API}/divergencias/dashboard/detalhe-dia-conferencia?almoxarifado=${encodeURIComponent(almoxarifado)}&data=${data}`);
+  if (!res.ok) {
+    alert("Não foi possível carregar o detalhe desse dia.");
+    return;
+  }
+  const dados = await res.json();
+  document.getElementById("modal-dia-conferencia-titulo").textContent = `${almoxarifado} — ${formatarDataCurta(data)} — ${dados.total_itens} item(ns) movimentado(s)`;
+  document.querySelector("#tabela-modal-dia-conferencia tbody").innerHTML = dados.itens
+    .map(
+      (i) => `<tr>
+        <td>${i.sku}</td><td class="col-descricao">${i.descricao || "—"}</td>
+        <td>${i.qtd_saida || 0}</td><td>${i.qtd_entrada || 0}</td>
+        <td class="hint">${i.operacoes.join(", ")}</td>
+        <td>
+          ${
+            i.tem_divergencia
+              ? `<span style="color:var(--critico)">⚠ Divergência (${i.divergencia_status})</span> <button class="btn-secundario btn-ver-divergencia-dia" data-id="${i.divergencia_id}">Ver</button>`
+              : `<span class="hint">Sem divergência registrada ainda</span> <button class="btn-secundario btn-abrir-investigacao-dia" data-sku="${i.sku}" data-almox="${almoxarifado}" data-desc="${(i.descricao || "").replace(/"/g, "&quot;")}">Abrir investigação</button>`
+          }
+        </td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="6" style="color:var(--muted)">Nenhum item movimentado nesse dia.</td></tr>`;
+
+  document.querySelectorAll(".btn-ver-divergencia-dia").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      document.getElementById("modal-dia-conferencia-overlay").classList.add("hidden");
+      mostrarView("lista");
+      abrirDetalhe(parseInt(btn.dataset.id));
+    })
+  );
+  document.querySelectorAll(".btn-abrir-investigacao-dia").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      abrirModalAcaoPorSku(btn.dataset.sku, btn.dataset.almox, btn.dataset.desc || null, () => {});
+    })
+  );
+
+  document.getElementById("modal-dia-conferencia-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-dia-conferencia").addEventListener("click", () => {
+  document.getElementById("modal-dia-conferencia-overlay").classList.add("hidden");
+});
+document.getElementById("modal-dia-conferencia-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-dia-conferencia-overlay") document.getElementById("modal-dia-conferencia-overlay").classList.add("hidden");
 });
 
 // ---------- cadastros: navegação entre abas ----------
@@ -2420,6 +3144,7 @@ async function carregarAlmoxarifadosCadastro() {
     .map(
       (a) => `<tr>
         <td>${a.codigo}</td><td>${a.nome_exibicao || "—"}</td><td>${a.ativo ? "Ativo" : "Inativo"}</td>
+        <td><input type="checkbox" class="chk-contagem-diaria" data-codigo="${a.codigo}" ${a.participa_contagem_diaria ? "checked" : ""}></td>
         <td>
           <button class="btn-secundario btn-editar-almox" data-codigo="${a.codigo}">Editar</button>
           <button class="btn-secundario btn-toggle-almox" data-codigo="${a.codigo}" data-ativo="${a.ativo}">${a.ativo ? "Desativar" : "Ativar"}</button>
@@ -2427,7 +3152,15 @@ async function carregarAlmoxarifadosCadastro() {
         </td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="4" style="color:var(--muted)">Nenhum almoxarifado cadastrado.</td></tr>`;
+    .join("") || `<tr><td colspan="5" style="color:var(--muted)">Nenhum almoxarifado cadastrado.</td></tr>`;
+
+  document.querySelectorAll(".chk-contagem-diaria").forEach((chk) =>
+    chk.addEventListener("change", async () => {
+      await apiFetch(`${API}/almoxarifados-cadastro/${chk.dataset.codigo}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ participa_contagem_diaria: chk.checked }),
+      });
+    })
+  );
 
   document.querySelectorAll(".btn-editar-almox").forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -2658,6 +3391,30 @@ document.getElementById("btn-retreinar-ml").addEventListener("click", async () =
   }
   btn.disabled = false;
   btn.textContent = "Retreinar agora";
+});
+
+document.getElementById("btn-reinvestigar-falhas").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-reinvestigar-falhas");
+  const resultado = document.getElementById("resultado-reinvestigar-falhas");
+  btn.disabled = true;
+  btn.textContent = "Reprocessando...";
+  resultado.textContent = "Isso pode levar alguns segundos, dependendo de quantos casos estão afetados...";
+  try {
+    const res = await apiFetch(`${API}/divergencias/reinvestigar-falhas`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail}`;
+    } else {
+      resultado.textContent = `${data.total_afetadas} caso(s) encontrados sem diagnóstico · ${data.corrigidas} corrigido(s) agora${
+        data.ainda_com_erro.length ? ` · ${data.ainda_com_erro.length} ainda com erro (veja o console do navegador)` : ""
+      }`;
+      if (data.ainda_com_erro.length) console.error("Atlas: casos que ainda falharam no reprocessamento:", data.ainda_com_erro);
+    }
+  } catch (erro) {
+    resultado.textContent = "Falha ao reprocessar: " + erro.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "Reprocessar agora";
 });
 
 async function carregarAuditoria(pagina = 1) {

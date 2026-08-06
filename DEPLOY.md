@@ -164,6 +164,27 @@ REAIS. Nesse caso, antes de migrar, limpe o banco na nuvem primeiro (no
 painel do Render, banco → aba Shell → `TRUNCATE` nas tabelas, ou delete e
 recrie o banco do zero) e migre num Postgres realmente vazio.
 
+## Antes de QUALQUER atualização - faça um backup (leva 10 segundos)
+
+Nunca fechamos por completo a investigação de por que os dados
+desapareceram uma vez. Por precaução, faça isso **sempre**, antes de
+rodar o `atualizar.ps1`:
+
+```powershell
+cd backend
+python -m data_import.backup_da_nuvem --origem "URL_EXTERNA_DO_POSTGRES"
+```
+
+Isso baixa uma cópia completa do banco da nuvem pro seu computador, num
+arquivo `backup_nuvem_2026-08-03_1610.db` (ou nome parecido). Guarde
+esse arquivo. Se algo der errado depois do deploy, restaura com:
+
+```powershell
+python -m data_import.migrar_sqlite_para_postgres --origem backup_nuvem_2026-08-03_1610.db --destino "URL_EXTERNA_DO_POSTGRES" --limpar-destino
+```
+
+Testado - ciclo completo de backup e restauração, sem perda de nenhuma linha.
+
 ## Passo 5 — Compartilhar com a equipe
 
 Depois que o Atlas estiver no ar (com ou sem migração de dados), é só:

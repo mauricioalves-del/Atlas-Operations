@@ -22,6 +22,11 @@ from .hipoteses_config import HIPOTESES, ALMOXARIFADOS_PADRAO
 SEED_DIR = os.path.join(os.path.dirname(__file__), "..", "seed_data")
 
 
+EXCLUIDOS_DA_CONTAGEM_DIARIA_PADRAO = [
+    "Almox_SP_Loja", "Almox_Box_2", "Almox_Box", "Almox_SP_Degustacao", "Almox_SP_Ativacao",
+]
+
+
 def seed_catalogo(db: Session):
     """Hipóteses e almoxarifados - não dependem de CSV, sempre roda."""
     for codigo, nome, descricao in HIPOTESES:
@@ -29,7 +34,7 @@ def seed_catalogo(db: Session):
             db.add(models.Hipotese(codigo=codigo, nome=nome, descricao=descricao, peso_padrao=20.0))
     for codigo, nome in ALMOXARIFADOS_PADRAO:
         if not db.query(models.Almoxarifado).filter_by(codigo=codigo).first():
-            db.add(models.Almoxarifado(codigo=codigo, nome_exibicao=nome))
+            db.add(models.Almoxarifado(codigo=codigo, nome_exibicao=nome, participa_contagem_diaria=codigo not in EXCLUIDOS_DA_CONTAGEM_DIARIA_PADRAO))
     db.commit()
 
 
@@ -80,7 +85,20 @@ def seed_dados_historicos(db: Session):
 def treinar_modelo_se_ausente():
     from .ml.predict import MODEL_PATH
     if os.path.exists(MODEL_PATH):
-        return
+        # Existe um arquivo, mas pode ter sido treinado com outra versão
+        # do scikit-learn (ex: no computador local do usuário, com um
+        # pip diferente do ambiente de nuvem) - carregar um modelo assim
+        # quebra a previsão em tempo de execução, não no boot, o que é
+        # bem mais difícil de diagnosticar. Testa aqui, no boot, e
+        # descarta/retreina se estiver incompatível.
+        import joblib
+        try:
+            joblib.load(MODEL_PATH)
+            return  # carregou normalmente, nada a fazer
+        except Exception as e:
+            print(f"Atlas: model.joblib existente está incompatível com o ambiente atual ({type(e).__name__}: {e}) - descartando e retreinando do zero.")
+            os.remove(MODEL_PATH)
+
     caminho_historico = os.path.join(SEED_DIR, "atlas_casos_historicos_categorizados.csv")
     if not os.path.exists(caminho_historico):
         print("Atlas: sem modelo de ML treinado e sem CSV de treino em seed_data/ - o motor de regras funciona normalmente, só sem o sinal estatístico extra.")

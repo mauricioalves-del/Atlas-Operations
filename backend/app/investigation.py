@@ -165,6 +165,19 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     }
 
 
+def _num_ou_none(valor):
+    """Converte NaN pra None antes de ir pro JSON - um float NaN
+    serializa como o token literal `NaN`, que não é JSON válido (RFC
+    8259). O SQLite nunca cobrou isso ao gravar numa coluna JSON, mas o
+    Postgres valida a sintaxe de verdade e rejeita a linha inteira."""
+    try:
+        if valor is None or (isinstance(valor, float) and valor != valor):  # NaN != NaN é sempre True
+            return None
+    except Exception:
+        return None
+    return valor
+
+
 def _buscar_casos_similares(db: Session, div: models.Divergencia, limite: int = 8) -> list:
     """Casos já resolvidos (histórico + divergências já confirmadas nesta
     versão do sistema) com o mesmo SKU (prioridade) ou mesma combinação
@@ -182,8 +195,8 @@ def _buscar_casos_similares(db: Session, div: models.Divergencia, limite: int = 
     for c in mesmo_sku_historico:
         resultado.append({
             "sku": c.sku, "hipotese_confirmada": c.hipotese_confirmada, "data": str(c.data_movimento),
-            "criterio": "mesmo_sku", "almoxarifado": c.almoxarifado, "divergencia_qtd": c.divergencia,
-            "valor": c.valor_divergencia, "fonte": "historico",
+            "criterio": "mesmo_sku", "almoxarifado": c.almoxarifado, "divergencia_qtd": _num_ou_none(c.divergencia),
+            "valor": _num_ou_none(c.valor_divergencia), "fonte": "historico",
         })
 
     mesmo_sku_resolvidas = (
@@ -199,8 +212,8 @@ def _buscar_casos_similares(db: Session, div: models.Divergencia, limite: int = 
     for c in mesmo_sku_resolvidas:
         resultado.append({
             "sku": c.sku, "hipotese_confirmada": c.hipotese_confirmada, "data": str(c.data_deteccao),
-            "criterio": "mesmo_sku", "almoxarifado": c.almoxarifado, "divergencia_qtd": c.divergencia_qtd,
-            "valor": c.valor_estimado, "fonte": "divergencia_resolvida",
+            "criterio": "mesmo_sku", "almoxarifado": c.almoxarifado, "divergencia_qtd": _num_ou_none(c.divergencia_qtd),
+            "valor": _num_ou_none(c.valor_estimado), "fonte": "divergencia_resolvida",
             "solucao_aplicada": c.solucao_aplicada, "responsavel": c.responsavel,
         })
 
@@ -224,7 +237,7 @@ def _buscar_casos_similares(db: Session, div: models.Divergencia, limite: int = 
             resultado.append({
                 "sku": c.sku, "hipotese_confirmada": c.hipotese_confirmada, "data": str(c.data_movimento),
                 "criterio": "categoria_e_almoxarifado_semelhantes", "almoxarifado": c.almoxarifado,
-                "divergencia_qtd": c.divergencia, "valor": c.valor_divergencia, "fonte": "historico",
+                "divergencia_qtd": _num_ou_none(c.divergencia), "valor": _num_ou_none(c.valor_divergencia), "fonte": "historico",
             })
 
     # descrição do produto - essencial pra não obrigar quem está lendo a

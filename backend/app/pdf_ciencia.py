@@ -52,6 +52,9 @@ def gerar_pdf_ciencia(ciencia, fechamento) -> bytes:
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Confirmação de ciência", ln=True)
     pdf.set_font("Helvetica", "", 10)
+    ROTULOS_PAPEL = {"Diretor_Operacoes": "Diretor de Operações", "Coordenador_Financeiro": "Coordenador Financeiro"}
+    if getattr(ciencia, "papel_assinatura", None):
+        pdf.cell(0, 6, _sanitizar(f"Assinando como: {ROTULOS_PAPEL.get(ciencia.papel_assinatura, ciencia.papel_assinatura)}"), ln=True)
     pdf.cell(0, 6, _sanitizar(f"Gestor responsavel: {ciencia.gestor_nome or ciencia.gestor_username} ({ciencia.gestor_username})"), ln=True)
     pdf.cell(0, 6, f"Data/hora da confirmação: {ciencia.data_assinatura.strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
     if ciencia.observacao:

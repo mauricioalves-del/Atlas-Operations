@@ -149,6 +149,8 @@ ALMOXARIFADO_DE_PARA_PREFIXOS = [
     ("Loja", "Almox_SP_Loja"),
     ("Par", "Almox_PA_Para"),       # cobre "Pará" e a variante truncada "Par#U"
     ("Geral", "Almox_SP_Fabrica"),
+    ("Frabrica", "Almox_SP_Fabrica"),  # typo real do sistema de origem (ex: "Alm Box --> Frabrica SP")
+    ("Frabica", "Almox_SP_Fabrica"),   # outro typo real do sistema de origem (ex: "Frabica SP --> Alm Box")
     ("Fabrica", "Almox_SP_Fabrica"),  # fallback genérico - só chega aqui se nenhuma palavra específica bateu
 ]
 

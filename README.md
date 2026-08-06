@@ -64,6 +64,112 @@ Duas telas novas dentro do pilar de Fechamento:
   na lista) - você só precisa definir responsável e prazo, ou criar ações
   manuais pra qualquer SKU.
 
+## Correção final: as duas fontes se somam, nenhuma exclui a outra
+
+A "correção definitiva" anterior foi longe demais: fazia o livro-caixa
+bruto excluir por completo o fluxo antigo sempre que existisse qualquer
+dado bruto, mesmo esparso. Isso resolveu o bug do 100% falso, mas criou
+o oposto: almoxarifado que concilia de verdade pelo fluxo antigo (não
+pelo livro-caixa bruto) aparecia como "nunca conferido", mesmo tendo
+divergências reais resolvidas naquele período.
+
+Corrigido com soma, testado nos dois cenários ao mesmo tempo:
+- **Universo** = livro-caixa bruto ∪ fluxo antigo (todo dia com QUALQUER registro de qualquer fonte)
+- **Conferido** = ajustes de Inventário (livro-caixa) ∪ todo dia do fluxo antigo (cada linha dele já é a conciliação em si)
+- Testado: almoxarifado com conferência real só pelo fluxo antigo → 11,4% de cobertura (não mais 0%), 4 dias conferidos batendo com os 4 dias reais de conciliação.
+- Testado de novo: almoxarifado com os dois fluxos juntos → continua em 41,3% (furo real), não voltou a 100% falso.
+
+## Detalhe do dia + correção de referência de "atraso" (feedback real de uso)
+
+- **Duplo clique num dia do calendário** abre um pop-up com todos os itens movimentados naquele dia (SKU, descrição, saída, entrada, operações) - cada linha traz status: se já existe divergência registrada pra esse item (com link direto pra abrir), ou "sem divergência ainda" com botão **"Abrir investigação"** (usa o mesmo modal de ação de acompanhamento já existente no resto do sistema). Isso exigiu guardar a movimentação bruta item a item (não só os sinais derivados) - testado com o arquivo de 50 mil linhas da Processo sem travar.
+- **"Dias desde a última conferência" não usa mais D-1 fixo como referência** - agora compara contra o último dia que realmente teve movimento pra aquele almoxarifado específico. Isso evita contar fim de semana/feriado como "atraso" quando a operação é segunda a sexta e simplesmente não roda nesses dias.
+
+## Correção definitiva: nunca misturar movimentação bruta com conciliação
+
+Depois do primeiro ajuste, um cenário real revelou um bug de fundo:
+almoxarifado com **os dois fluxos** (livro-caixa bruto + importação
+diária antiga) acabava com cobertura calculada usando as duas fontes
+misturadas - o que inflava a cobertura pra 100% artificialmente
+("conciliação contando como se fosse o próprio universo dela").
+
+Corrigido com uma regra estrita, testada com esse exato cenário misto:
+
+- **Se o almoxarifado tem dado no livro-caixa bruto**, o universo
+  (denominador) é só isso - qualquer transação, de qualquer tipo - e a
+  conciliação (numerador) é só os ajustes de "Inventario" dentro desse
+  mesmo livro-caixa. O fluxo antigo de importação diária, se também
+  existir pro mesmo almoxarifado, é **ignorado por completo** nesse
+  cálculo.
+- **Se não tem livro-caixa bruto**, usa o fluxo antigo (cada linha
+  importada já É a conciliação em si - 100% é o resultado correto e
+  esperado aqui, não bug).
+- Testado com o cenário exato: Fábrica com os dois fluxos importados
+  juntos → resultado usa só o livro-caixa bruto (41,3%, fonte
+  "livro_caixa_bruto"), ignorando a importação diária antiga por
+  completo, em vez do 100% artificial de antes.
+- A tela agora mostra qual fonte está sendo usada por almoxarifado, pra
+  nunca mais precisar adivinhar.
+
+## Correções na Cobertura de Conferência (feedback real de uso)
+
+- **Universo mudou de "todo dia do calendário" pra "dias com movimentação real"**: um dia sem nenhuma operação (fim de semana, ou o almoxarifado simplesmente não rodou nada) não conta mais como "furo" - não tinha nada pra conferir naquele dia. Vem do livro-caixa bruto (qualquer linha, não só as de conferência) + do fluxo antigo de importação diária, como fallback pra almoxarifados que ainda não usam o livro-caixa.
+- **D-1 sempre**: o processo trabalha com o dia anterior, não o dia atual (que ainda não está "encerrado" operacionalmente) - hoje nunca entra na análise.
+- **Almoxarifados fora da contagem diária ficam de fora, de forma parametrizável**: novo campo "Participa da contagem diária" no cadastro de almoxarifados (tela Cadastros), com toggle direto na tabela - não é uma lista fixa no código, então se o planejamento interno mudar, é só desmarcar/marcar de novo, sem precisar de outra atualização. Ajuste inicial já aplicado (tanto pra bancos novos quanto pra bancos existentes, na migração automática): Almox_SP_Loja, Almox_Box, Almox_Box_2, Almox_SP_Degustacao e Almox_SP_Ativacao começam desmarcados.
+- Testado com os 4 arquivos reais (Fábrica, Processo, Pará, Qualidade): números realistas agora (32 a 63 dias no universo, não 90 fixos), e confirmado visualmente na tela que os 5 almoxarifados excluídos não aparecem mais na lista.
+
+## Livro-caixa bruto do sistema (transferências e conferências automáticas)
+
+Importador novo, na tela Importar, pra um formato bem diferente dos
+outros: **exportação direta do sistema** (Id_Lanc, Id_Produto, Data,
+Operacao, Qtd_Sai, Qtd_Ent, Saldo...) - não é uma planilha de
+reconciliação, é o histórico real de transações, um arquivo por
+almoxarifado.
+
+- **Transferências cruzadas automaticamente**: a mesma transferência
+  aparece nos livros-caixa de origem E destino, com o mesmo número de
+  documento e timestamp - uma como saída, outra como entrada. Casando
+  pelos dois (documento + SKU), o sistema sabe se a transferência já
+  chegou ou ainda está pendente, sem precisar de planilha manual de
+  transferências. Testado com os arquivos reais de Fábrica e Processo:
+  cruzamento confirmado (mesma transferência com origem/destino/datas
+  corretas nos dois lados).
+- **Conferências reais**: operações "Inventário (+)/(-)" marcam o
+  momento em que uma contagem física foi aplicada como ajuste no
+  sistema - alimenta direto a tela Cobertura de Conferência, sem
+  precisar de outro arquivo.
+- Só considera "INT" (transferência interna) como transferência de
+  verdade - outros tipos de documento no mesmo arquivo (consumo de
+  produção, recebimento, notas) têm campos parecidos mas não são
+  transferência nenhuma (bug real encontrado e corrigido durante os
+  testes: sem esse filtro, consumo de produção entrava como
+  "transferência pendente" por engano).
+- Almoxarifados citados nas operações que ainda não existem no catálogo
+  (ex: nomes de PDV específicos) aparecem como "não mapeados" no
+  resultado, em vez de silenciosamente adivinhados errado.
+
+## Cobertura de Conferência (dias conferidos × dias pendentes)
+
+Indicador de saúde do **processo de controle**, não do estoque - mede se
+a conferência diária foi feita, não se ela achou algo. Um almoxarifado
+sem furos pode ter divergências reais (isso é normal, é o que os outros
+módulos já tratam); um almoxarifado com um furo grande pode estar
+escondendo uma ruptura que nunca foi detectada, simplesmente porque
+ninguém checou naquele período.
+
+- **Por almoxarifado**: % de cobertura, dias desde a última conferência,
+  maior furo (sequência de dias consecutivos sem nenhum apontamento) e o
+  período exato dele.
+- **Calendário visual**: cada almoxarifado tem seu próprio "heatmap" de
+  dia a dia (verde = conferido, vermelho = pendente).
+- Considera o cadastro de almoxarifados como a lista mestre - um
+  almoxarifado registrado mas nunca conferido aparece como **0% de
+  cobertura**, o cenário mais perigoso (ninguém olhou pra ele, nem uma
+  vez, no período).
+- Testado com um cenário controlado (furo deliberado de 15 dias num
+  almoxarifado, outro nunca conferido, outro só conferido nos últimos 5
+  dias) - os três apareceram exatamente certos, com o período do maior
+  furo calculado dia a dia.
+
 ## Contexto operacional real (importadores Excel + ML)
 
 - **5 novos importadores** na tela Importar (Faturamento, Ficha Técnica BOM, Ordens de Produção, Consumo de OP, Transferências) - aceitam o formato Excel exportado direto do banco SQL da empresa. **Cada envio substitui os dados anteriores por completo** (são tabelas espelhadas, não histórico acumulativo) - reenviar a versão mais atual nunca duplica.

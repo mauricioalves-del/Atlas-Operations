@@ -59,10 +59,32 @@ def parse_data(valor) -> Optional[date]:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def limpar_texto(valor):
+    """Trata células de texto vindas de planilha - 'nan'/'None'/vazio (a
+    string, não o valor Python) contam como ausente, não como um valor de
+    categoria/descrição válido. Isso acontece quando a planilha de
+    origem já tinha "NaN" escrito como texto numa célula vazia (comum em
+    exports que passaram por pandas antes de chegar no Excel) - sem isso,
+    "NaN" aparecia como se fosse um grupo/categoria real nos dashboards."""
+    if valor is None:
+        return None
+    s = str(valor).strip()
+    if s == "" or s.lower() in ("nan", "none", "null", "n/a", "#n/a"):
+        return None
+    return s
+
+
 def parse_decimal(valor) -> float:
     if valor is None:
         return 0.0
     if isinstance(valor, (int, float)):
+        # NaN é um float "válido" pro Python (isinstance bate), mas nunca deve
+        # ir pra frente: quebra a serialização JSON depois (Postgres rejeita o
+        # token NaN como sintaxe inválida - SQLite nunca cobrou isso, por
+        # isso esse buraco ficou invisível até o deploy em nuvem). NaN != NaN
+        # é sempre True - é o jeito padrão de checar sem precisar de math.isnan.
+        if valor != valor:
+            return 0.0
         return float(valor)
     s = str(valor).strip()
     if s == "" or s.lower() == "nan":

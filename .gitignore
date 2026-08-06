@@ -4,3 +4,4 @@ __pycache__/
 .secret_key
 backend/backups/
 backend/atlas.db
+backend/app/ml/model.joblib

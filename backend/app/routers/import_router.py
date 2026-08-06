@@ -7,7 +7,7 @@ import openpyxl
 
 from .. import models
 from ..database import get_db
-from ..csv_utils import parse_sku, parse_data, parse_decimal
+from ..csv_utils import parse_sku, parse_data, parse_decimal, limpar_texto
 from ..hipoteses_config import normalizar_almoxarifado
 from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
@@ -38,7 +38,7 @@ def _categoria_do_sku(db: Session, sku: str, fallback: str | None = None) -> str
     p = db.query(models.Produto).filter_by(sku=sku).first()
     if p and p.categoria_produto:
         return p.categoria_produto
-    return fallback or "Desconhecido"
+    return limpar_texto(fallback) or "Desconhecido"
 
 
 def _custo_unitario_do_sku(db: Session, sku: str) -> float | None:
@@ -100,25 +100,187 @@ def processar_linha_movimentacao(db: Session, row: dict, almoxarifado_forcado: s
     db.add(div)
     db.flush()  # garante div.id antes de investigar (casos similares/self-exclusion)
 
-    resultado_regras = investigar(db, div)
-    resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, div.valor_estimado, data_mov, db=db)
-
-    hipotese_final, confianca_final = reconciliar(
-        resultado_regras["scores_normalizados"],
-        resultado_ml["distribuicao"] if resultado_ml else [],
-    )
-
-    div.hipotese_regras = resultado_regras["hipotese_regras"]
-    div.confianca_regras = resultado_regras["confianca_regras"]
-    div.evidencias = resultado_regras["evidencias"]
-    div.casos_similares = resultado_regras["casos_similares"]
-    div.hipotese_ml = resultado_ml["hipotese_predita"] if resultado_ml else None
-    div.confianca_ml = resultado_ml["confianca"] if resultado_ml else None
-    div.distribuicao_probabilidades = resultado_ml["distribuicao"] if resultado_ml else resultado_regras["scores_normalizados"]
-    div.hipotese_ia = hipotese_final
-    div.confianca_ia = confianca_final
+    # Se a investigação falhar por qualquer motivo, a divergência já foi
+    # persistida (precisa existir antes de investigar) - sem isso aqui,
+    # ela ficaria salva com todo o diagnóstico em branco, silenciosamente,
+    # sem ninguém saber que algo deu errado. Em vez disso, registra o
+    # erro real como evidência visível na própria tela da divergência -
+    # "Reinvestigar" resolve depois que a causa for corrigida.
+    try:
+        resultado_regras = investigar(db, div)
+        resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, div.valor_estimado, data_mov, db=db)
+        hipotese_final, confianca_final = reconciliar(
+            resultado_regras["scores_normalizados"],
+            resultado_ml["distribuicao"] if resultado_ml else [],
+        )
+        div.hipotese_regras = resultado_regras["hipotese_regras"]
+        div.confianca_regras = resultado_regras["confianca_regras"]
+        div.evidencias = resultado_regras["evidencias"]
+        div.casos_similares = resultado_regras["casos_similares"]
+        div.hipotese_ml = resultado_ml["hipotese_predita"] if resultado_ml else None
+        div.confianca_ml = resultado_ml["confianca"] if resultado_ml else None
+        div.distribuicao_probabilidades = resultado_ml["distribuicao"] if resultado_ml else resultado_regras["scores_normalizados"]
+        div.hipotese_ia = hipotese_final
+        div.confianca_ia = confianca_final
+    except Exception as e:
+        print(f"Atlas: falha ao investigar divergência automaticamente (sku={sku}, almoxarifado={almoxarifado}): {e}")
+        div.evidencias = [{"hipotese": "Falha_Inventario", "verificacao": f"falha_automatica_na_investigacao: {e}", "encontrado": True, "peso_aplicado": 0}]
+        div.casos_similares = []
+        div.distribuicao_probabilidades = []
 
     return "divergencia"
+
+
+def _parse_operacao_transferencia(operacao: str):
+    """Tenta separar 'Almox A --> Almox B' ou 'Almox A -> Almox B' nos
+    dois lados. Devolve (origem_normalizada, destino_normalizado) ou
+    None se a operação não parece ser uma transferência entre
+    almoxarifados (ex: "Entrada Recebto", "Processo Producao")."""
+    for separador in ("-->", "->"):
+        if separador in operacao:
+            partes = operacao.split(separador)
+            if len(partes) == 2:
+                return normalizar_almoxarifado(partes[0].strip()), normalizar_almoxarifado(partes[1].strip())
+    return None
+
+
+@router.post("/movimentacao-bruta-sistema")
+async def importar_movimentacao_bruta_sistema(
+    arquivo: UploadFile = File(...), almoxarifado: str = Form(...), aba: str | None = Form(None),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db),
+):
+    """Livro-caixa bruto exportado direto do sistema (Id_Lanc, Id_Produto,
+    Data, Operacao, Qtd_Sai, Qtd_Ent, Saldo etc.) - não é uma planilha de
+    reconciliação (sistema × contagem), é o histórico real de transações.
+    Duas coisas extraídas automaticamente daqui:
+
+    1) Transferências entre almoxarifados: a MESMA transferência aparece
+       nos livros-caixa de origem E destino, com o mesmo número de
+       documento e timestamp - uma como saída (Qtd_Sai), outra como
+       entrada (Qtd_Ent). Casando pelos dois (documento + SKU), sabemos
+       se a transferência já chegou no destino ou ainda está pendente -
+       muito mais confiável que uma planilha de transferências manual.
+
+    2) Conferências reais: operações "Inventario (+)/(-)" marcam o
+       momento em que uma contagem física foi aplicada como ajuste no
+       sistema - isso alimenta o indicador de Cobertura de Conferência
+       (dias conferidos x pendentes), sem precisar de outro arquivo."""
+    conteudo = await arquivo.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"Não consegui abrir o arquivo Excel: {e}")
+    nome_aba = aba or wb.sheetnames[0]
+    if nome_aba not in wb.sheetnames:
+        raise HTTPException(400, f"Aba '{nome_aba}' não encontrada. Abas disponíveis: {wb.sheetnames}")
+
+    ws = wb[nome_aba]
+    linhas = list(ws.iter_rows(values_only=True))
+    if not linhas:
+        raise HTTPException(400, "Planilha vazia.")
+    cabecalho = [str(c).strip() if c else "" for c in linhas[0]]
+    for col in ("Id_Produto", "Data", "Operacao", "Id_Doc", "Doc", "Qtd_Sai", "Qtd_Ent"):
+        if col not in cabecalho:
+            raise HTTPException(400, f"Coluna obrigatória '{col}' não encontrada. Cabeçalho: {cabecalho}")
+    idx = {c: i for i, c in enumerate(cabecalho)}
+
+    conferencias, transferencias_criadas, transferencias_atualizadas, nao_mapeados = 0, 0, 0, set()
+    dias_com_movimento = set()
+    linhas_brutas_para_salvar = []
+
+    for linha in linhas[1:]:
+        sku = parse_sku(linha[idx["Id_Produto"]])
+        if not sku:
+            continue
+        data_bruta = linha[idx["Data"]]
+        data_mov = data_bruta.date() if isinstance(data_bruta, datetime) else parse_data(data_bruta)
+        if not data_mov:
+            continue
+        dias_com_movimento.add(data_mov)
+        operacao = limpar_texto(linha[idx["Operacao"]]) or ""
+        id_doc = str(linha[idx["Id_Doc"]]).strip() if linha[idx["Id_Doc"]] is not None else None
+        doc = str(linha[idx["Doc"]]).strip() if linha[idx["Doc"]] is not None else None
+        qtd_sai = parse_decimal(linha[idx["Qtd_Sai"]])
+        qtd_ent = parse_decimal(linha[idx["Qtd_Ent"]])
+        descricao = limpar_texto(linha[idx.get("Descricao", -1)]) if "Descricao" in idx else None
+        saldo = parse_decimal(linha[idx["Saldo"]]) if "Saldo" in idx else None
+
+        linhas_brutas_para_salvar.append(models.MovimentacaoBruta(
+            almoxarifado=almoxarifado, sku=sku, descricao=descricao, data=data_mov, operacao=operacao,
+            id_doc=id_doc, doc=doc, qtd_sai=qtd_sai, qtd_ent=qtd_ent, saldo=saldo,
+        ))
+
+        if "inventario" in operacao.lower():
+            qtd_ajustada = qtd_sai if qtd_sai else qtd_ent
+            db.add(models.ConferenciaRealizada(almoxarifado=almoxarifado, data=data_mov, sku=sku, quantidade_ajustada=qtd_ajustada))
+            conferencias += 1
+            continue
+
+        # só "INT" (transferência interna entre almoxarifados) - outros
+        # tipos de documento (OPA=consumo de produção, REC=recebimento,
+        # NOT/NDV=notas) têm Qtd_Sai/Qtd_Ent preenchidos por outros
+        # motivos, não são transferência nenhuma.
+        if id_doc != "INT" or not doc:
+            continue
+        parsed = _parse_operacao_transferencia(operacao)
+
+        if qtd_sai and qtd_sai > 0:
+            transf = db.query(models.Transferencia).filter_by(documento=doc, sku=sku).first()
+            if not transf:
+                transf = models.Transferencia(sku=sku, documento=doc, descricao=descricao)
+                db.add(transf)
+                transferencias_criadas += 1
+            else:
+                transferencias_atualizadas += 1
+            transf.almoxarifado_origem = almoxarifado
+            if parsed:
+                destino = parsed[1] if parsed[0] == almoxarifado else parsed[0]
+                if destino and destino.startswith("NAO_MAPEADO__"):
+                    nao_mapeados.add(destino.replace("NAO_MAPEADO__", ""))
+                elif destino:
+                    transf.almoxarifado_destino = transf.almoxarifado_destino or destino
+            transf.data_saida = data_mov
+            transf.quantidade = qtd_sai
+
+        elif qtd_ent and qtd_ent > 0:
+            transf = db.query(models.Transferencia).filter_by(documento=doc, sku=sku).first()
+            if not transf:
+                origem = None
+                if parsed:
+                    origem = parsed[0] if parsed[1] == almoxarifado else parsed[1]
+                    if origem and origem.startswith("NAO_MAPEADO__"):
+                        nao_mapeados.add(origem.replace("NAO_MAPEADO__", ""))
+                        origem = None
+                transf = models.Transferencia(sku=sku, documento=doc, descricao=descricao, almoxarifado_origem=origem, quantidade=qtd_ent)
+                db.add(transf)
+                transferencias_criadas += 1
+            else:
+                transferencias_atualizadas += 1
+            transf.almoxarifado_destino = almoxarifado
+            transf.data_entrada = data_mov
+
+    db.query(models.MovimentacaoBruta).filter_by(almoxarifado=almoxarifado).delete()
+    db.bulk_save_objects(linhas_brutas_para_salvar)
+
+    dias_ja_registrados = {
+        d for (d,) in db.query(models.DiaOperacional.data).filter(models.DiaOperacional.almoxarifado == almoxarifado, models.DiaOperacional.data.in_(dias_com_movimento)).all()
+    }
+    novos_dias = dias_com_movimento - dias_ja_registrados
+    for d in novos_dias:
+        db.add(models.DiaOperacional(almoxarifado=almoxarifado, data=d))
+
+    registrar_log(db, usuario.username, "importar_movimentacao_bruta_sistema",
+                  detalhes={"arquivo": arquivo.filename, "almoxarifado": almoxarifado, "conferencias": conferencias, "transferencias": transferencias_criadas + transferencias_atualizadas})
+    db.commit()
+    return {
+        "arquivo": arquivo.filename, "almoxarifado": almoxarifado,
+        "linhas_brutas_salvas": len(linhas_brutas_para_salvar),
+        "dias_com_movimento_registrados": len(novos_dias),
+        "conferencias_registradas": conferencias,
+        "transferencias_criadas": transferencias_criadas,
+        "transferencias_atualizadas": transferencias_atualizadas,
+        "almoxarifados_nao_mapeados": sorted(nao_mapeados),
+    }
 
 
 @router.post("/custos-planilha-preco")
@@ -225,7 +387,7 @@ async def importar_faturamento_excel(
     db.query(models.Faturamento).delete()
     objetos = [
         models.Faturamento(
-            sku=parse_sku(l.get("SKU")), origem=l.get("Origem"),
+            sku=parse_sku(l.get("SKU")), origem=limpar_texto(l.get("Origem")),
             data_faturamento=_data_excel(l.get("Data")), quantidade=parse_decimal(l.get("Quantidade", 0)),
             descricao=l.get("Descricao"),
         )
@@ -251,14 +413,14 @@ async def importar_ficha_tecnica_bom_excel(
         if not l.get("Id_produto") or not l.get("Id_item"):
             continue
         objetos.append(models.FichaTecnicaBOM(
-            sku_produto_final=parse_sku(l.get("Id_produto")), produto_final=l.get("Produto"),
-            sku_subconjunto=parse_sku(l.get("Id_subconjunto")), subconjunto=l.get("Subconjunto"),
-            sku_item=parse_sku(l.get("Id_item")), descricao_item=l.get("item"),
+            sku_produto_final=parse_sku(l.get("Id_produto")), produto_final=limpar_texto(l.get("Produto")),
+            sku_subconjunto=parse_sku(l.get("Id_subconjunto")), subconjunto=limpar_texto(l.get("Subconjunto")),
+            sku_item=parse_sku(l.get("Id_item")), descricao_item=limpar_texto(l.get("item")),
             qtd_padrao=parse_decimal(l.get("Qtd", 0)), unidade=l.get("item_Unidade"),
             custo=parse_decimal(l.get("custo")) if l.get("custo") is not None else None,
             tem_filho=str(l.get("Tem_Filho", "")).strip().upper() == "S",
             gera_oc=str(l.get("Gera_Oc", "")).strip().upper() == "S",
-            categoria=l.get("Grupo"), linha_producao=l.get("Linha"),
+            categoria=limpar_texto(l.get("Grupo")), linha_producao=limpar_texto(l.get("Linha")),
         ))
     db.bulk_save_objects(objetos)
     registrar_log(db, usuario.username, "importar_ficha_tecnica_bom_excel", detalhes={"linhas": len(objetos)})
@@ -276,7 +438,7 @@ async def importar_ordens_producao_excel(
     objetos = [
         models.OrdemProducao(
             numero_op=str(l.get("Número da OP")).strip(), sku_produto_final=parse_sku(l.get("SKU Produto Final")),
-            descricao_produto=l.get("Desc_Prod"),
+            descricao_produto=limpar_texto(l.get("Desc_Prod")),
             data_registro=_data_excel(l.get("Dt_Registro")), data_producao=_data_excel(l.get("Dt_Producao")),
             status=l.get("Status"),
             qtd_prevista=parse_decimal(l.get("Qtd_Prevista", 0)), qtd_produzida=parse_decimal(l.get("Qtd_Prod", 0)),
@@ -305,7 +467,7 @@ async def importar_consumo_op_excel(
             continue
         objetos.append(models.ConsumoOP(
             numero_op=str(numero_op).strip(), sku_produto_final=parse_sku(l.get("SKU Produto Final")),
-            sku_material=parse_sku(l.get("Material")), descricao_material=l.get("Desc_Material"),
+            sku_material=parse_sku(l.get("Material")), descricao_material=limpar_texto(l.get("Desc_Material")),
             qtd_consumo=parse_decimal(l.get("qtd_consumo", 0)), qtd_previsto=parse_decimal(l.get("Qtd_Previsto", 0)),
             qtd_diferenca=parse_decimal(l.get("Qtd_Dif", 0)),
             data_registro=_data_excel(l.get("Dt_Registro")), data_producao=_data_excel(l.get("Dt_Producao")),
@@ -326,7 +488,7 @@ async def importar_transferencias_excel(
     db.query(models.Transferencia).delete()
     objetos = [
         models.Transferencia(
-            sku=parse_sku(l.get("SKU")), descricao=l.get("descricao"),
+            sku=parse_sku(l.get("SKU")), descricao=limpar_texto(l.get("descricao")),
             data_saida=_data_excel(l.get("Data de Saída")), data_entrada=_data_excel(l.get("Data de Entrada")),
             documento=str(l.get("doc")) if l.get("doc") is not None else None,
             almoxarifado_origem=normalizar_almoxarifado(l.get("Almoxarifado de Origem")) if l.get("Almoxarifado de Origem") else None,

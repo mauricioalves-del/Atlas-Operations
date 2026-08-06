@@ -48,10 +48,33 @@ def garantir_colunas_novas():
             conn.execute(text("ALTER TABLE produtos ADD COLUMN ativo BOOLEAN DEFAULT 1"))
             conn.commit()
 
+    if inspecao.has_table("conciliacoes_ciencia"):
+        colunas_ciencia = {c["name"] for c in inspecao.get_columns("conciliacoes_ciencia")}
+        if "papel_assinatura" not in colunas_ciencia:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE conciliacoes_ciencia ADD COLUMN papel_assinatura VARCHAR"))
+                conn.commit()
+
     colunas_almox = {c["name"] for c in inspecao.get_columns("almoxarifados")}
     if "ativo" not in colunas_almox:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN ativo BOOLEAN DEFAULT 1"))
+            conn.commit()
+    if "participa_contagem_diaria" not in colunas_almox:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN participa_contagem_diaria BOOLEAN DEFAULT 1"))
+            conn.commit()
+        # ajuste inicial pedido explicitamente: esses almoxarifados não
+        # fazem parte da contagem diária no planejamento atual. Fica
+        # gravado como um dado comum (não é regra fixa no código) -
+        # ajustável a qualquer momento pela tela Cadastros > Almoxarifados
+        # se o planejamento interno mudar, sem precisar de outra atualização.
+        excluidos_da_contagem_diaria = [
+            "Almox_SP_Loja", "Almox_Box_2", "Almox_Box", "Almox_SP_Degustacao", "Almox_SP_Ativacao",
+        ]
+        with engine.connect() as conn:
+            for codigo in excluidos_da_contagem_diaria:
+                conn.execute(text("UPDATE almoxarifados SET participa_contagem_diaria = 0 WHERE codigo = :codigo"), {"codigo": codigo})
             conn.commit()
 
     colunas_hipoteses = {c["name"] for c in inspecao.get_columns("hipoteses")}

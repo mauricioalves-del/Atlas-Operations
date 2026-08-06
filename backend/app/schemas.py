@@ -94,6 +94,7 @@ class FechamentoOut(BaseModel):
     total_itens: int
     total_divergentes: int
     valor_total_divergente: float
+    status_assinatura: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -149,6 +150,7 @@ class AcoesLoteAtualizar(BaseModel):
 
 class ConciliacaoCienciaCreate(BaseModel):
     observacao: Optional[str] = None
+    papel_assinatura: str  # "Diretor_Operacoes" ou "Coordenador_Financeiro"
 
 
 class FornecedorOut(BaseModel):
@@ -238,6 +240,7 @@ class ConciliacaoCienciaOut(BaseModel):
     fechamento_id: int
     gestor_username: str
     gestor_nome: Optional[str] = None
+    papel_assinatura: Optional[str] = None
     data_assinatura: datetime
     observacao: Optional[str] = None
     total_itens_divergentes: int
@@ -316,6 +319,7 @@ class AlmoxarifadoOut(BaseModel):
     codigo: str
     nome_exibicao: Optional[str] = None
     ativo: bool = True
+    participa_contagem_diaria: bool = True
 
     class Config:
         from_attributes = True
@@ -329,6 +333,7 @@ class AlmoxarifadoCreate(BaseModel):
 class AlmoxarifadoAtualizar(BaseModel):
     nome_exibicao: Optional[str] = None
     ativo: Optional[bool] = None
+    participa_contagem_diaria: Optional[bool] = None
 
 
 class HipoteseOut(BaseModel):

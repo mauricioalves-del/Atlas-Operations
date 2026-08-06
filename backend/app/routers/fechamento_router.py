@@ -6,7 +6,7 @@ import openpyxl
 
 from .. import models, schemas
 from ..database import get_db
-from ..csv_utils import parse_sku, parse_data, parse_decimal
+from ..csv_utils import parse_sku, parse_data, parse_decimal, limpar_texto
 from ..hipoteses_config import normalizar_almoxarifado, buscar_evidencias_texto
 from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
@@ -48,7 +48,7 @@ def _categoria_do_sku(db: Session, sku: str, fallback=None):
     p = db.query(models.Produto).filter_by(sku=sku).first()
     if p and p.categoria_produto:
         return p.categoria_produto
-    return fallback or "Desconhecido"
+    return limpar_texto(fallback) or "Desconhecido"
 
 
 @router.post("/importar")
@@ -156,20 +156,28 @@ async def importar_fechamento(
                 db.add(div)
                 db.flush()
 
-                resultado_regras = investigar(db, div)
-                resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, valor_estimado, data_fechamento, db=db)
-                hipotese_final, confianca_final = reconciliar(
-                    resultado_regras["scores_normalizados"], resultado_ml["distribuicao"] if resultado_ml else []
-                )
-                div.hipotese_regras = resultado_regras["hipotese_regras"]
-                div.confianca_regras = resultado_regras["confianca_regras"]
-                div.evidencias = resultado_regras["evidencias"]
-                div.casos_similares = resultado_regras["casos_similares"]
-                div.hipotese_ml = resultado_ml["hipotese_predita"] if resultado_ml else None
-                div.confianca_ml = resultado_ml["confianca"] if resultado_ml else None
-                div.distribuicao_probabilidades = resultado_ml["distribuicao"] if resultado_ml else resultado_regras["scores_normalizados"]
-                div.hipotese_ia = hipotese_final
-                div.confianca_ia = confianca_final
+                # mesma blindagem do import diário: se a investigação falhar,
+                # não deixa a divergência em branco silenciosamente.
+                try:
+                    resultado_regras = investigar(db, div)
+                    resultado_ml = ml_predict.prever(sku, almoxarifado, categoria, divergencia_qtd, valor_estimado, data_fechamento, db=db)
+                    hipotese_final, confianca_final = reconciliar(
+                        resultado_regras["scores_normalizados"], resultado_ml["distribuicao"] if resultado_ml else []
+                    )
+                    div.hipotese_regras = resultado_regras["hipotese_regras"]
+                    div.confianca_regras = resultado_regras["confianca_regras"]
+                    div.evidencias = resultado_regras["evidencias"]
+                    div.casos_similares = resultado_regras["casos_similares"]
+                    div.hipotese_ml = resultado_ml["hipotese_predita"] if resultado_ml else None
+                    div.confianca_ml = resultado_ml["confianca"] if resultado_ml else None
+                    div.distribuicao_probabilidades = resultado_ml["distribuicao"] if resultado_ml else resultado_regras["scores_normalizados"]
+                    div.hipotese_ia = hipotese_final
+                    div.confianca_ia = confianca_final
+                except Exception as e:
+                    print(f"Atlas: falha ao investigar item de fechamento (sku={sku}, almoxarifado={almoxarifado}): {e}")
+                    div.evidencias = [{"hipotese": "Falha_Inventario", "verificacao": f"falha_automatica_na_investigacao: {e}", "encontrado": True, "peso_aplicado": 0}]
+                    div.casos_similares = []
+                    div.distribuicao_probabilidades = []
                 divergencia_id = div.id
                 divergentes += 1
                 valor_total += abs(valor_estimado)
@@ -248,8 +256,30 @@ async def importar_fechamento(
 
 
 @router.get("", response_model=list[schemas.FechamentoOut])
-def listar_fechamentos(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    return db.query(models.FechamentoInventario).order_by(models.FechamentoInventario.data_fechamento.desc()).all()
+def listar_fechamentos(almoxarifado: str | None = None, mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    q = db.query(models.FechamentoInventario)
+    if almoxarifado:
+        q = q.filter(models.FechamentoInventario.almoxarifado == almoxarifado)
+    if mes:
+        from sqlalchemy import extract
+        ano, mes_num = mes.split("-")
+        q = q.filter(extract("year", models.FechamentoInventario.data_fechamento) == int(ano))
+        q = q.filter(extract("month", models.FechamentoInventario.data_fechamento) == int(mes_num))
+    fechamentos = q.order_by(models.FechamentoInventario.data_fechamento.desc()).all()
+
+    if fechamentos:
+        from collections import defaultdict
+        ids = [f.id for f in fechamentos]
+        papeis_por_fechamento = defaultdict(set)
+        for fid, papel in db.query(models.ConciliacaoCiencia.fechamento_id, models.ConciliacaoCiencia.papel_assinatura).filter(
+            models.ConciliacaoCiencia.fechamento_id.in_(ids), models.ConciliacaoCiencia.papel_assinatura.isnot(None),
+        ).all():
+            papeis_por_fechamento[fid].add(papel)
+        for f in fechamentos:
+            papeis_assinados = papeis_por_fechamento.get(f.id, set())
+            f.status_assinatura = "Inventário Fechado" if all(p in papeis_assinados for p in PAPEIS_ASSINATURA_VALIDOS) else "Inventário em Aberto"
+
+    return fechamentos
 
 
 # ==================== Dashboard de acompanhamento ====================
@@ -362,13 +392,19 @@ def dashboard_top_recorrentes(almoxarifado: str | None = None, limite: int = 10,
         q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
     itens = q.all()
     from collections import defaultdict
-    por_sku = defaultdict(lambda: {"descricao": None, "ocorrencias": 0, "valor_total": 0.0})
+    por_sku = defaultdict(lambda: {"descricao": None, "almoxarifado": None, "ocorrencias": 0, "valor_total": 0.0, "ultima_data": None})
     for i in itens:
-        por_sku[i.sku]["descricao"] = i.descricao_produto
-        por_sku[i.sku]["ocorrencias"] += 1
-        por_sku[i.sku]["valor_total"] += abs(i.valor_estimado)
+        d = por_sku[i.sku]
+        d["descricao"] = i.descricao_produto
+        d["ocorrencias"] += 1
+        d["valor_total"] += abs(i.valor_estimado)
+        f = db.query(models.FechamentoInventario).get(i.fechamento_id)
+        data_f = f.data_fechamento if f else None
+        if data_f and (d["ultima_data"] is None or data_f > d["ultima_data"]):
+            d["ultima_data"] = data_f
+            d["almoxarifado"] = i.almoxarifado
     ranking = sorted(por_sku.items(), key=lambda x: -x[1]["ocorrencias"])[:limite]
-    return [{"sku": s, "descricao": v["descricao"], "ocorrencias": v["ocorrencias"], "valor_total": round(v["valor_total"], 2)} for s, v in ranking]
+    return [{"sku": s, "descricao": v["descricao"], "almoxarifado": v["almoxarifado"], "ocorrencias": v["ocorrencias"], "valor_total": round(v["valor_total"], 2)} for s, v in ranking]
 
 
 @router.get("/dashboard/top-impacto-financeiro")
@@ -384,13 +420,19 @@ def dashboard_top_impacto_financeiro(almoxarifado: str | None = None, limite: in
         q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
     itens = q.all()
     from collections import defaultdict
-    por_sku = defaultdict(lambda: {"descricao": None, "ocorrencias": 0, "valor_total": 0.0})
+    por_sku = defaultdict(lambda: {"descricao": None, "almoxarifado": None, "ocorrencias": 0, "valor_total": 0.0, "ultima_data": None})
     for i in itens:
-        por_sku[i.sku]["descricao"] = i.descricao_produto
-        por_sku[i.sku]["ocorrencias"] += 1
-        por_sku[i.sku]["valor_total"] += abs(i.valor_estimado)
+        d = por_sku[i.sku]
+        d["descricao"] = i.descricao_produto
+        d["ocorrencias"] += 1
+        d["valor_total"] += abs(i.valor_estimado)
+        f = db.query(models.FechamentoInventario).get(i.fechamento_id)
+        data_f = f.data_fechamento if f else None
+        if data_f and (d["ultima_data"] is None or data_f > d["ultima_data"]):
+            d["ultima_data"] = data_f
+            d["almoxarifado"] = i.almoxarifado
     ranking = sorted(por_sku.items(), key=lambda x: -x[1]["valor_total"])[:limite]
-    return [{"sku": s, "descricao": v["descricao"], "ocorrencias": v["ocorrencias"], "valor_total": round(v["valor_total"], 2)} for s, v in ranking]
+    return [{"sku": s, "descricao": v["descricao"], "almoxarifado": v["almoxarifado"], "ocorrencias": v["ocorrencias"], "valor_total": round(v["valor_total"], 2)} for s, v in ranking]
 
 
 @router.get("/dashboard/evolucao-mensal")
@@ -1047,12 +1089,40 @@ def listar_itens_fechamento(
     return q.order_by(models.ItemFechamento.destaque_recorrente.desc(), models.ItemFechamento.valor_estimado.desc()).all()
 
 
+PAPEIS_ASSINATURA_VALIDOS = {"Diretor_Operacoes": "Diretor de Operações", "Coordenador_Financeiro": "Coordenador Financeiro"}
+
+
+def status_assinatura_fechamento(db: Session, fechamento_id: int) -> dict:
+    """Status de fechamento em relação às duas assinaturas obrigatórias
+    (Diretor de Operações + Coordenador Financeiro) - "Inventário
+    Fechado" só quando os dois papéis já assinaram pelo menos uma vez;
+    "Inventário em Aberto" enquanto faltar algum."""
+    papeis_assinados = {
+        r[0] for r in db.query(models.ConciliacaoCiencia.papel_assinatura)
+        .filter(models.ConciliacaoCiencia.fechamento_id == fechamento_id, models.ConciliacaoCiencia.papel_assinatura.isnot(None))
+        .distinct()
+        .all()
+    }
+    papeis_faltantes = [nome for codigo, nome in PAPEIS_ASSINATURA_VALIDOS.items() if codigo not in papeis_assinados]
+    return {
+        "status": "Inventário Fechado" if not papeis_faltantes else "Inventário em Aberto",
+        "papeis_assinados": [PAPEIS_ASSINATURA_VALIDOS[c] for c in papeis_assinados if c in PAPEIS_ASSINATURA_VALIDOS],
+        "papeis_faltantes": papeis_faltantes,
+    }
+
+
 @router.post("/{fechamento_id}/ciencia", response_model=schemas.ConciliacaoCienciaOut)
 def gerar_ciencia(fechamento_id: int, payload: schemas.ConciliacaoCienciaCreate, usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
     """Confirmação autenticada de um gestor de que revisou a conciliação
     - a 'assinatura' aqui é o usuário logado + timestamp, não uma
     assinatura manuscrita. Congela os itens divergentes ATUAIS num
-    snapshot, pra o documento gerado nunca mudar depois."""
+    snapshot, pra o documento gerado nunca mudar depois. Exige um papel
+    de assinatura válido (Diretor de Operações ou Coordenador
+    Financeiro) - o fechamento só passa a "Inventário Fechado" quando os
+    dois papéis já tiverem assinado."""
+    if payload.papel_assinatura not in PAPEIS_ASSINATURA_VALIDOS:
+        raise HTTPException(400, f"Papel de assinatura inválido. Use um de: {list(PAPEIS_ASSINATURA_VALIDOS)}")
+
     fechamento = db.query(models.FechamentoInventario).get(fechamento_id)
     if not fechamento:
         raise HTTPException(404, "Fechamento não encontrado.")
@@ -1070,12 +1140,12 @@ def gerar_ciencia(fechamento_id: int, payload: schemas.ConciliacaoCienciaCreate,
 
     ciencia = models.ConciliacaoCiencia(
         fechamento_id=fechamento_id, gestor_username=usuario.username, gestor_nome=usuario.nome_exibicao,
-        observacao=payload.observacao, itens_divergentes_snapshot=snapshot,
+        papel_assinatura=payload.papel_assinatura, observacao=payload.observacao, itens_divergentes_snapshot=snapshot,
         total_itens_divergentes=len(itens_divergentes), valor_total_divergente=round(valor_total, 2),
     )
     db.add(ciencia)
     registrar_log(db, usuario.username, "gerar_ciencia_conciliacao", entidade="fechamento", entidade_id=fechamento_id,
-                  detalhes={"total_itens_divergentes": len(itens_divergentes), "valor_total": round(valor_total, 2)})
+                  detalhes={"total_itens_divergentes": len(itens_divergentes), "valor_total": round(valor_total, 2), "papel_assinatura": payload.papel_assinatura})
     db.commit()
     db.refresh(ciencia)
     return ciencia
@@ -1084,6 +1154,11 @@ def gerar_ciencia(fechamento_id: int, payload: schemas.ConciliacaoCienciaCreate,
 @router.get("/{fechamento_id}/ciencia", response_model=list[schemas.ConciliacaoCienciaOut])
 def listar_ciencia(fechamento_id: int, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     return db.query(models.ConciliacaoCiencia).filter_by(fechamento_id=fechamento_id).order_by(models.ConciliacaoCiencia.data_assinatura.desc()).all()
+
+
+@router.get("/{fechamento_id}/status-assinatura")
+def obter_status_assinatura(fechamento_id: int, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    return status_assinatura_fechamento(db, fechamento_id)
 
 
 @router.patch("/{fechamento_id}/corrigir-almoxarifado")
