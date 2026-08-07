@@ -530,6 +530,9 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 .badge-aberta{background:color-mix(in srgb, var(--alto) 18%, transparent); color:var(--alto)}
 .badge-em_investigacao{background:color-mix(in srgb, var(--medio) 18%, transparent); color:var(--medio)}
 .badge-resolvida{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.badge-pendente{background:color-mix(in srgb, var(--alto) 18%, transparent); color:var(--alto)}
+.badge-aprovada{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.badge-reprovada{background:color-mix(in srgb, var(--critico) 18%, transparent); color:var(--critico)}
 
 .lista-wrap{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:8px 20px}
 

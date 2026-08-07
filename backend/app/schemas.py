@@ -42,6 +42,7 @@ class DivergenciaOut(BaseModel):
     tempo_resolucao_minutos: Optional[float]
     status: str
     tem_investigacao_pendente: bool = False
+    aviso_baixa_pendente: Optional[str] = None
 
     class Config:
         from_attributes = True

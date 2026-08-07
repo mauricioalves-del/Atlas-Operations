@@ -490,6 +490,7 @@ function mostrarView(nome) {
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
+  if (nome === "relatorio-baixa") carregarRelatorioBaixa();
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
@@ -872,7 +873,7 @@ async function carregarLista(pagina = 1) {
   tbody.innerHTML = divs
     .map(
       (d) => `<tr data-id="${d.id}">
-        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
+        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}${d.aviso_baixa_pendente ? ` <span title="${d.aviso_baixa_pendente.replace(/"/g, "&quot;")}" style="color:var(--alto)">📦⏳</span>` : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
         <td>${formatarDataCurta(d.data_deteccao)}</td>
         <td>${formatarMoeda(d.valor_estimado)}</td>
         <td>${rotulo(d.hipotese_ia)}</td><td>${d.confianca_ia != null ? d.confianca_ia + "%" : "—"}</td>
@@ -909,6 +910,92 @@ if (btnRecalcularValores) {
   });
 }
 
+// ---------- relatório de baixa (integração Lovable) ----------
+let filtrosRelatorioBaixaPreenchidos = false;
+
+function badgeStatusFluxo(statusFluxo) {
+  if (!statusFluxo) return "—";
+  const texto = { PENDENTE: "Pendente", APROVADA: "Aprovada", REPROVADA: "Reprovada" }[statusFluxo] || statusFluxo;
+  return `<span class="badge badge-${statusFluxo.toLowerCase()}">${texto}</span>`;
+}
+
+async function carregarRelatorioBaixa() {
+  const status = document.getElementById("rb-filtro-status").value;
+  const almox = document.getElementById("rb-filtro-almoxarifado").value;
+  const hipotese = document.getElementById("rb-filtro-hipotese").value;
+  const params = new URLSearchParams();
+  if (status) params.set("status_fluxo", status);
+  if (almox) params.set("almoxarifado", almox);
+  if (hipotese) params.set("hipotese_aplicada", hipotese);
+
+  let resposta;
+  try {
+    resposta = await apiFetch(`${API}/baixas-operacionais?${params.toString()}`).then((r) => r.json());
+  } catch (erro) {
+    document.getElementById("rb-kpi-row").innerHTML =
+      `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-label" style="color:var(--critico)">Não consegui carregar o relatório de baixa</div><div style="font-size:13px;color:var(--muted);margin-top:6px">${erro.message}. Confirme que o backend foi atualizado para a versão mais recente (inclui a integração com o Lovable) e reinicie o servidor.</div></div>`;
+    return;
+  }
+
+  const resumo = resposta.resumo || {};
+  const itens = resposta.itens || [];
+
+  document.getElementById("rb-kpi-row").innerHTML = [
+    { label: "Total de baixas", value: resumo.total ?? 0 },
+    { label: "Pendentes (aguardando decisão no Lovable)", value: resumo.pendentes ?? 0, cor: "var(--alto)" },
+    { label: "Aprovadas", value: resumo.aprovadas ?? 0 },
+    { label: "Reprovadas", value: resumo.reprovadas ?? 0 },
+    { label: "Resolvidas automaticamente (bateram com divergência)", value: resumo.resolvidas_automaticamente ?? 0, cor: "var(--ok)" },
+    { label: "Aprovadas sem divergência correspondente", value: resumo.aguardando_divergencia ?? 0 },
+    { label: "Valor total", value: formatarMoeda(resumo.valor_total || 0) },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  if (!filtrosRelatorioBaixaPreenchidos && itens.length) {
+    const selAlmox = document.getElementById("rb-filtro-almoxarifado");
+    const selHipotese = document.getElementById("rb-filtro-hipotese");
+    [...new Set(itens.map((i) => i.almoxarifado).filter(Boolean))].sort().forEach((a) => {
+      const opt = document.createElement("option");
+      opt.value = a;
+      opt.textContent = a;
+      selAlmox.appendChild(opt);
+    });
+    [...new Set(itens.map((i) => i.hipotese_aplicada).filter(Boolean))].sort().forEach((h) => {
+      const opt = document.createElement("option");
+      opt.value = h;
+      opt.textContent = rotulo(h);
+      selHipotese.appendChild(opt);
+    });
+    filtrosRelatorioBaixaPreenchidos = true;
+  }
+
+  const tbody = document.querySelector("#tabela-relatorio-baixa tbody");
+  tbody.innerHTML =
+    itens
+      .map(
+        (i) => `<tr>
+        <td>${i.sku}</td><td>${i.almoxarifado}${i.almoxarifado && i.almoxarifado.startsWith("NAO_MAPEADO__") ? ' <span title="Almoxarifado do Lovable sem correspondência cadastrada no Atlas" style="color:var(--alto)">⚠️</span>' : ""}</td>
+        <td>${i.motivo || "—"}</td><td>${rotulo(i.hipotese_aplicada)}</td>
+        <td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total || 0)}</td>
+        <td>${badgeStatusFluxo(i.status_fluxo)}</td><td>${i.solicitante_nome || "—"}</td>
+        <td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
+        <td>${i.divergencia_vinculada_id ? `<a href="#" data-abrir-divergencia="${i.divergencia_vinculada_id}">#${i.divergencia_vinculada_id} — resolvida</a>` : i.status_fluxo === "APROVADA" ? "aguardando divergência" : "—"}</td>
+      </tr>`
+      )
+      .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma baixa operacional encontrada.</td></tr>`;
+
+  tbody.querySelectorAll("a[data-abrir-divergencia]").forEach((a) =>
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      mostrarView("lista");
+      abrirDetalhe(a.dataset.abrirDivergencia);
+    })
+  );
+}
+document.getElementById("rb-filtro-status").addEventListener("change", carregarRelatorioBaixa);
+document.getElementById("rb-filtro-almoxarifado").addEventListener("change", carregarRelatorioBaixa);
+document.getElementById("rb-filtro-hipotese").addEventListener("change", carregarRelatorioBaixa);
 
 // ---------- detalhe ----------
 let historicoSkuCompleto = [];
@@ -972,6 +1059,7 @@ async function abrirDetalhe(id) {
           </div>
         </div>
         ${d.tem_investigacao_pendente ? `<p style="color:var(--alto)">⚠️ Este SKU já tem outro caso ainda em investigação - pode ser reincidência antes da causa anterior ser resolvida.</p>` : ""}
+        ${d.aviso_baixa_pendente ? `<div style="background:rgba(255,180,0,0.12); border:1px solid var(--alto); border-radius:8px; padding:10px 12px; margin-bottom:10px"><strong>📦⏳ Baixa operacional pendente no Lovable</strong><p style="margin:4px 0 0">${d.aviso_baixa_pendente}</p></div>` : ""}
         <p><strong>Hipótese (motor de regras):</strong> ${rotulo(d.hipotese_regras)} ${d.confianca_regras != null ? "(" + d.confianca_regras + "%)" : ""}</p>
         <p><strong>Hipótese (modelo estatístico):</strong> ${rotulo(d.hipotese_ml)} ${d.confianca_ml != null ? "(" + d.confianca_ml + "%)" : ""}</p>
         <p><strong>Hipótese final reconciliada:</strong> ${rotulo(d.hipotese_ia)} ${d.confianca_ia != null ? "(" + d.confianca_ia + "%)" : ""}</p>

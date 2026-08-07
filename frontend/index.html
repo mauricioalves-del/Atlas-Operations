@@ -56,6 +56,7 @@
     <nav class="rail-nav">
       <button class="rail-item active" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
       <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
+      <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
       <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
       <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
       <button class="rail-item" data-view="fechamento-dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="rail-label">Painel Inventário</span></button>
@@ -232,6 +233,38 @@
         <h1 id="detalhe-titulo">Divergência</h1>
       </header>
       <div id="detalhe-conteudo" class="detalhe-conteudo"></div>
+    </section>
+
+    <section id="view-relatorio-baixa" class="view hidden">
+      <header class="view-header">
+        <h1>Relatório de Baixa</h1>
+        <div class="filtros">
+          <select id="rb-filtro-status" class="select-filtro">
+            <option value="">Todos os status</option>
+            <option value="PENDENTE">Pendente</option>
+            <option value="APROVADA">Aprovada</option>
+            <option value="REPROVADA">Reprovada</option>
+          </select>
+          <select id="rb-filtro-almoxarifado" class="select-filtro">
+            <option value="">Todos os almoxarifados</option>
+          </select>
+          <select id="rb-filtro-hipotese" class="select-filtro">
+            <option value="">Todos os motivos</option>
+          </select>
+        </div>
+      </header>
+      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas automaticamente do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto.</p>
+
+      <div class="kpi-row" id="rb-kpi-row"></div>
+
+      <div class="lista-wrap">
+        <table class="tabela" id="tabela-relatorio-baixa">
+          <thead>
+            <tr><th>SKU</th><th>Almoxarifado</th><th>Motivo</th><th>Hipótese</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Solicitante</th><th>Data</th><th>Divergência</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="view-importar" class="view hidden">

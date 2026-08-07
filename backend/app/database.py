@@ -45,7 +45,7 @@ def garantir_colunas_novas():
             conn.commit()
     if "ativo" not in colunas_produtos:
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE produtos ADD COLUMN ativo BOOLEAN DEFAULT 1"))
+            conn.execute(text("ALTER TABLE produtos ADD COLUMN ativo BOOLEAN DEFAULT TRUE"))
             conn.commit()
 
     if inspecao.has_table("conciliacoes_ciencia"):
@@ -58,11 +58,11 @@ def garantir_colunas_novas():
     colunas_almox = {c["name"] for c in inspecao.get_columns("almoxarifados")}
     if "ativo" not in colunas_almox:
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN ativo BOOLEAN DEFAULT 1"))
+            conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN ativo BOOLEAN DEFAULT TRUE"))
             conn.commit()
     if "participa_contagem_diaria" not in colunas_almox:
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN participa_contagem_diaria BOOLEAN DEFAULT 1"))
+            conn.execute(text("ALTER TABLE almoxarifados ADD COLUMN participa_contagem_diaria BOOLEAN DEFAULT TRUE"))
             conn.commit()
         # ajuste inicial pedido explicitamente: esses almoxarifados não
         # fazem parte da contagem diária no planejamento atual. Fica
@@ -74,13 +74,13 @@ def garantir_colunas_novas():
         ]
         with engine.connect() as conn:
             for codigo in excluidos_da_contagem_diaria:
-                conn.execute(text("UPDATE almoxarifados SET participa_contagem_diaria = 0 WHERE codigo = :codigo"), {"codigo": codigo})
+                conn.execute(text("UPDATE almoxarifados SET participa_contagem_diaria = FALSE WHERE codigo = :codigo"), {"codigo": codigo})
             conn.commit()
 
     colunas_hipoteses = {c["name"] for c in inspecao.get_columns("hipoteses")}
     if "ativo" not in colunas_hipoteses:
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE hipoteses ADD COLUMN ativo BOOLEAN DEFAULT 1"))
+            conn.execute(text("ALTER TABLE hipoteses ADD COLUMN ativo BOOLEAN DEFAULT TRUE"))
             conn.commit()
 
     colunas_usuarios = {c["name"] for c in inspecao.get_columns("usuarios")}
@@ -159,6 +159,22 @@ def garantir_colunas_novas():
     if "lote_importacao_id" not in colunas_historico:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE movimentacoes_historico ADD COLUMN lote_importacao_id INTEGER"))
+            conn.commit()
+
+    # baixas_operacionais: tabela nova (create_all cuida na primeira vez),
+    # mas se um deploy anterior já criou sem essas colunas (evolução da
+    # integração Lovable - agora importa PENDENTE/REPROVADA também, não só
+    # APROVADA), adiciona o que faltar.
+    if inspecao.has_table("baixas_operacionais"):
+        colunas_baixas = {c["name"] for c in inspecao.get_columns("baixas_operacionais")}
+        novas_colunas_baixas = {
+            "valor_total": "FLOAT", "status_fluxo": "VARCHAR",
+            "solicitante_nome": "VARCHAR", "atualizado_em": "TIMESTAMP",
+        }
+        with engine.connect() as conn:
+            for coluna, tipo in novas_colunas_baixas.items():
+                if coluna not in colunas_baixas:
+                    conn.execute(text(f"ALTER TABLE baixas_operacionais ADD COLUMN {coluna} {tipo}"))
             conn.commit()
 
 

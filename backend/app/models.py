@@ -167,6 +167,37 @@ class Divergencia(Base):
     resolvido_em = Column(DateTime, nullable=True)
 
 
+class BaixaOperacional(Base):
+    """Baixas operacionais (avaria, vencimento, descarte, degustação etc.)
+    importadas do sistema externo Lovable/Supabase (tabela
+    'baixa_operacional' lá) - de QUALQUER status (PENDENTE, APROVADA,
+    REPROVADA), pra dar visibilidade completa no relatório de baixa
+    dentro do Atlas. Só as APROVADA acionam o cruzamento automático
+    contra divergências do mesmo SKU+almoxarifado numa janela de dias -
+    casando, a divergência é resolvida sozinha, sem passar por um
+    analista (ver baixas_operacionais.py). Uma linha aqui é atualizada
+    (upsert por origem_id) quando o status muda no Lovable - ex: uma
+    linha nasce PENDENTE e depois é atualizada pra APROVADA/REPROVADA,
+    sem duplicar registro."""
+    __tablename__ = "baixas_operacionais"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    origem_id = Column(String, index=True, nullable=True, unique=True)  # id (uuid) da linha no Lovable/Supabase - chave de upsert, evita duplicar
+    sku = Column(String, index=True)  # codigo_produto no Lovable
+    almoxarifado_origem = Column(String, index=True, nullable=True)  # id_local bruto, como veio do Lovable (ex: "Alm_SP_Loja")
+    almoxarifado = Column(String, index=True)  # já convertido pro código oficial do Atlas (ex: "Almox_SP_Loja") - ver ALMOXARIFADO_LOVABLE_PARA_ATLAS
+    motivo_baixa_bruto = Column(String, nullable=True)  # descrição original do motivo (ex: "Avaria", "Degustação")
+    hipotese_aplicada = Column(String, index=True, nullable=True)  # código oficial já mapeado do catálogo de hipóteses
+    quantidade = Column(Float, nullable=True)
+    valor_total = Column(Float, nullable=True)
+    status_fluxo = Column(String, index=True, nullable=True)  # PENDENTE | APROVADA | REPROVADA - espelha o status no Lovable
+    solicitante_nome = Column(String, nullable=True)
+    data_baixa = Column(Date, index=True)
+    payload_bruto = Column(JSON, nullable=True)  # registro completo recebido, para auditoria/debug
+    divergencia_vinculada_id = Column(Integer, ForeignKey("divergencias.id"), nullable=True, index=True)
+    recebido_em = Column(DateTime, default=datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Transferencia(Base):
     __tablename__ = "transferencias"
     id = Column(Integer, primary_key=True, autoincrement=True)
