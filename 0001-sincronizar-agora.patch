@@ -1,0 +1,419 @@
+From ad29f1b4779ea2abd9a3619a7bbb3f66f471927a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 8 Aug 2026 15:58:31 +0000
+Subject: [PATCH] Adiciona botao "Sincronizar agora" pra rebuscar baixas do
+ Lovable
+
+Busca ao vivo, sob demanda, o estado atual da tabela baixa_operacional
+no Supabase do Lovable (paginado via REST/PostgREST, ordenado por id
+pra evitar o bug de paginacao instavel que causou linhas perdidas no
+backfill) e reimporta tudo pelo importar_lote existente, que faz upsert
+por origem_id - atualiza status (ex: Pendente -> Aprovada) sem duplicar
+nada. Endpoint POST /api/baixas-operacionais/sincronizar + botao na
+tela Relatorio de Baixa. Requer LOVABLE_SUPABASE_URL/LOVABLE_SUPABASE_KEY
+no ambiente do servidor.
+---
+ backend/app/baixas_operacionais.py            |  94 ++++++++++
+ .../app/routers/baixas_operacionais_router.py |  20 +-
+ backend/tests/test_sincronizacao_lovable.py   | 176 ++++++++++++++++++
+ frontend/app.js                               |  35 ++++
+ frontend/index.html                           |   3 +-
+ 5 files changed, 326 insertions(+), 2 deletions(-)
+ create mode 100644 backend/tests/test_sincronizacao_lovable.py
+
+diff --git a/backend/app/baixas_operacionais.py b/backend/app/baixas_operacionais.py
+index 465c499..11917c9 100644
+--- a/backend/app/baixas_operacionais.py
++++ b/backend/app/baixas_operacionais.py
+@@ -43,6 +43,10 @@ pode ser qualquer uma das duas):
+ Nenhum commit acontece aqui dentro - quem chama decide quando persistir
+ (mesmo padrão do resto do projeto: investigar() nunca comita).
+ """
++import json
++import os
++import urllib.error
++import urllib.request
+ from collections import defaultdict
+ from datetime import datetime, date
+ from typing import Optional
+@@ -385,3 +389,93 @@ def importar_lote(db: Session, registros: list) -> dict:
+         except BaixaInvalida as e:
+             erros.append({"origem_id": registro.get("id"), "erro": str(e)})
+     return {"total_recebido": len(registros), "contagem": contagem, "erros": erros}
++
++
++# Colunas de baixa_operacional que processar_baixa_recebida sabe ler -
++# pedir só essas no REST do Supabase (em vez de "select=*") deixa a
++# resposta mais leve e explícita sobre o que este código depende.
++_COLUNAS_BAIXA_OPERACIONAL = (
++    "id,codigo_produto,id_local,motivo_baixa_id,quantidade,valor_total,"
++    "status_fluxo,data_ocorrencia,data_solicitacao,responsavel_nome"
++)
++
++# Tamanho de página do REST do Supabase/PostgREST - o próprio serviço já
++# limita a 1000 por padrão, então pedir exatamente isso por página (via
++# header Range) evita qualquer surpresa e faz uma paginação previsível.
++_TAMANHO_PAGINA_SUPABASE = 1000
++
++
++class SincronizacaoIndisponivel(Exception):
++    """LOVABLE_SUPABASE_URL/LOVABLE_SUPABASE_KEY não configuradas, ou a
++    chamada ao Supabase do Lovable falhou (rede, autenticação, etc.)."""
++
++
++def buscar_baixas_lovable_agora() -> list[dict]:
++    """Busca AGORA, direto no Supabase do projeto Lovable, o estado atual
++    completo da tabela `baixa_operacional` (de qualquer status_fluxo),
++    paginando pelo REST nativo do Supabase (PostgREST) via header Range.
++
++    Ordena por `id` (não por um timestamp) de propósito: colunas de data
++    tipo created_at/data_solicitacao têm muita linha com o mesmo valor
++    (baixas importadas em lote no Lovable), e paginar por LIMIT/OFFSET
++    com ORDER BY instável pula e duplica linha entre páginas - foi
++    exatamente esse bug que causou 37 linhas perdidas no backfill inicial
++    (ver conversa de 2026-08-07). `id` é uuid único, então a ordenação -
++    embora não tenha significado cronológico - é estável entre páginas.
++
++    Não grava nada no Atlas - só busca e devolve a lista de dicts, no
++    mesmo formato que importar_lote espera em `registros`. Quem chama
++    decide o que fazer com o resultado (ver sincronizar_com_lovable)."""
++    base_url = os.environ.get("LOVABLE_SUPABASE_URL")
++    api_key = os.environ.get("LOVABLE_SUPABASE_KEY")
++    if not base_url or not api_key:
++        raise SincronizacaoIndisponivel(
++            "Sincronização com o Lovable não configurada: defina LOVABLE_SUPABASE_URL "
++            "(a URL do projeto Supabase do Lovable, ex: https://xxxxxxxx.supabase.co) e "
++            "LOVABLE_SUPABASE_KEY (uma API key daquele projeto com permissão de leitura "
++            "na tabela baixa_operacional) no ambiente do servidor (Render)."
++        )
++    base_url = base_url.rstrip("/")
++
++    registros: list[dict] = []
++    offset = 0
++    while True:
++        url = f"{base_url}/rest/v1/baixa_operacional?select={_COLUNAS_BAIXA_OPERACIONAL}&order=id.asc"
++        requisicao = urllib.request.Request(url, method="GET")
++        requisicao.add_header("apikey", api_key)
++        requisicao.add_header("Authorization", f"Bearer {api_key}")
++        requisicao.add_header("Range-Unit", "items")
++        requisicao.add_header("Range", f"{offset}-{offset + _TAMANHO_PAGINA_SUPABASE - 1}")
++        try:
++            with urllib.request.urlopen(requisicao, timeout=30) as resposta:
++                pagina = json.loads(resposta.read().decode("utf-8"))
++        except urllib.error.HTTPError as e:
++            corpo = e.read().decode("utf-8", errors="replace")
++            raise SincronizacaoIndisponivel(
++                f"Supabase do Lovable respondeu {e.code} ao buscar baixa_operacional: {corpo}. "
++                f"Confira se LOVABLE_SUPABASE_URL/LOVABLE_SUPABASE_KEY estão corretas e se a "
++                f"chave tem permissão de leitura nessa tabela (RLS)."
++            ) from e
++        except urllib.error.URLError as e:
++            raise SincronizacaoIndisponivel(f"Não consegui alcançar o Supabase do Lovable: {e.reason}") from e
++
++        registros.extend(pagina)
++        if len(pagina) < _TAMANHO_PAGINA_SUPABASE:
++            break
++        offset += _TAMANHO_PAGINA_SUPABASE
++
++    return registros
++
++
++def sincronizar_com_lovable(db: Session) -> dict:
++    """Busca o estado atual da tabela baixa_operacional no Lovable e
++    reimporta tudo pro Atlas de uma vez (usado pelo botão "Sincronizar
++    agora" da tela Relatório de Baixa). importar_lote faz upsert por
++    origem_id, então isso também ATUALIZA baixas que estavam Pendente e
++    foram aprovadas/reprovadas no Lovable desde a última sincronização -
++    não duplica nada, e é seguro clicar de novo quantas vezes quiser.
++    Não comita - quem chama decide (ver baixas_operacionais_router)."""
++    registros = buscar_baixas_lovable_agora()
++    resultado = importar_lote(db, registros)
++    resultado["total_na_origem"] = len(registros)
++    return resultado
+diff --git a/backend/app/routers/baixas_operacionais_router.py b/backend/app/routers/baixas_operacionais_router.py
+index c6e5e56..875504f 100644
+--- a/backend/app/routers/baixas_operacionais_router.py
++++ b/backend/app/routers/baixas_operacionais_router.py
+@@ -6,16 +6,34 @@ Diferente de baixas_operacionais.py (a lógica de importação/casamento),
+ este router só lê o que já foi importado - é pra tela de relatório, não
+ pra receber webhook."""
+ from datetime import date
+-from fastapi import APIRouter, Depends, Query
++from fastapi import APIRouter, Depends, HTTPException, Query
+ from sqlalchemy.orm import Session
+ 
+ from .. import models
+ from ..database import get_db
+ from ..deps import obter_usuario_atual
++from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel
+ 
+ router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
+ 
+ 
++@router.post("/sincronizar")
++def sincronizar(
++    usuario: models.Usuario = Depends(obter_usuario_atual),
++    db: Session = Depends(get_db),
++):
++    """Botão "Sincronizar agora" da tela Relatório de Baixa: busca ao vivo
++    o estado atual da tabela baixa_operacional no Supabase do Lovable e
++    reimporta tudo pro Atlas (upsert por origem_id - atualiza o que mudou
++    de status lá, ex: Pendente -> Aprovada, sem duplicar nada)."""
++    try:
++        resultado = sincronizar_com_lovable(db)
++    except SincronizacaoIndisponivel as e:
++        raise HTTPException(500, str(e))
++    db.commit()
++    return resultado
++
++
+ @router.get("")
+ def listar_baixas(
+     status_fluxo: str | None = Query(None, description="PENDENTE | APROVADA | REPROVADA"),
+diff --git a/backend/tests/test_sincronizacao_lovable.py b/backend/tests/test_sincronizacao_lovable.py
+new file mode 100644
+index 0000000..d1ba07e
+--- /dev/null
++++ b/backend/tests/test_sincronizacao_lovable.py
+@@ -0,0 +1,176 @@
++"""Testes do botão "Sincronizar agora": buscar_baixas_lovable_agora (busca
++paginada no REST do Supabase do Lovable) e sincronizar_com_lovable
++(integração com importar_lote). Usa um servidor HTTP local de mentira no
++lugar do Supabase de verdade, pra não depender de rede nem de credenciais
++reais - só precisa responder ao header Range do jeito que o PostgREST
++responde."""
++import json
++import threading
++from http.server import BaseHTTPRequestHandler, HTTPServer
++from urllib.parse import urlparse, parse_qs
++
++import pytest
++
++from app.baixas_operacionais import (
++    buscar_baixas_lovable_agora,
++    sincronizar_com_lovable,
++    SincronizacaoIndisponivel,
++)
++
++
++def _linha_fake(i, status_fluxo="APROVADA", motivo="9717e486-c7a0-4b3d-9515-272f28adbebd", id_local="Alm_SP_Loja"):
++    return {
++        "id": f"00000000-0000-0000-0000-{i:012d}",
++        "codigo_produto": f"SKU{i}",
++        "id_local": id_local,
++        "motivo_baixa_id": motivo,
++        "quantidade": 1,
++        "valor_total": 10.0,
++        "status_fluxo": status_fluxo,
++        "data_ocorrencia": "2026-08-01",
++        "data_solicitacao": "2026-08-01T12:00:00+00:00",
++        "responsavel_nome": "Teste",
++    }
++
++
++class _FakeSupabaseHandler(BaseHTTPRequestHandler):
++    linhas = []
++    chave_esperada = "chave-teste-123"
++    requisicoes_recebidas = []
++
++    def do_GET(self):
++        # Headers HTTP não diferenciam maiúsculas/minúsculas (urllib manda
++        # "Apikey", não "apikey") - guarda com chave em minúsculo pra não
++        # depender de qual capitalização o cliente escolheu.
++        type(self).requisicoes_recebidas.append({k.lower(): v for k, v in self.headers.items()})
++        if self.headers.get("apikey") != self.chave_esperada or self.headers.get("Authorization") != f"Bearer {self.chave_esperada}":
++            self.send_response(401)
++            self.end_headers()
++            self.wfile.write(b'{"message": "chave invalida"}')
++            return
++
++        parsed = urlparse(self.path)
++        assert parsed.path == "/rest/v1/baixa_operacional"
++        qs = parse_qs(parsed.query)
++        assert qs.get("order") == ["id.asc"]
++
++        range_header = self.headers.get("Range", "0-999")
++        inicio, fim = (int(x) for x in range_header.split("-"))
++        pagina = self.linhas[inicio : fim + 1]
++
++        self.send_response(200)
++        self.send_header("Content-Type", "application/json")
++        self.end_headers()
++        self.wfile.write(json.dumps(pagina).encode("utf-8"))
++
++    def log_message(self, format, *args):
++        pass  # silencia o log padrão do http.server nos testes
++
++
++@pytest.fixture()
++def fake_supabase(monkeypatch):
++    """Sobe o servidor de mentira numa porta livre, aponta as env vars da
++    sincronização pra ele, e limpa tudo ao final do teste."""
++    servidor = HTTPServer(("127.0.0.1", 0), _FakeSupabaseHandler)
++    porta = servidor.server_port
++    thread = threading.Thread(target=servidor.serve_forever, daemon=True)
++    thread.start()
++
++    monkeypatch.setenv("LOVABLE_SUPABASE_URL", f"http://127.0.0.1:{porta}")
++    monkeypatch.setenv("LOVABLE_SUPABASE_KEY", _FakeSupabaseHandler.chave_esperada)
++
++    _FakeSupabaseHandler.linhas = []
++    _FakeSupabaseHandler.requisicoes_recebidas = []
++    yield _FakeSupabaseHandler
++    servidor.shutdown()
++    thread.join(timeout=5)
++
++
++def test_busca_pagina_unica_com_poucas_linhas(fake_supabase):
++    fake_supabase.linhas = [_linha_fake(i) for i in range(5)]
++    resultado = buscar_baixas_lovable_agora()
++    assert len(resultado) == 5
++    assert [r["id"] for r in resultado] == [f"00000000-0000-0000-0000-{i:012d}" for i in range(5)]
++
++
++def test_busca_pagina_mande_apikey_e_authorization(fake_supabase):
++    fake_supabase.linhas = [_linha_fake(0)]
++    buscar_baixas_lovable_agora()
++    assert len(fake_supabase.requisicoes_recebidas) == 1
++    cabecalhos = fake_supabase.requisicoes_recebidas[0]
++    assert cabecalhos["apikey"] == "chave-teste-123"
++    assert cabecalhos["authorization"] == "Bearer chave-teste-123"
++
++
++def test_busca_pagina_mais_de_1000_linhas_sem_perder_nem_duplicar(fake_supabase):
++    total = 1500
++    fake_supabase.linhas = [_linha_fake(i) for i in range(total)]
++    resultado = buscar_baixas_lovable_agora()
++    assert len(resultado) == total
++    ids = [r["id"] for r in resultado]
++    assert len(set(ids)) == total  # nenhum duplicado
++    assert ids == [f"00000000-0000-0000-0000-{i:012d}" for i in range(total)]  # nenhum pulado/fora de ordem
++    # exatamente 2 páginas: 1000 + 500
++    assert len(fake_supabase.requisicoes_recebidas) == 2
++
++
++def test_busca_exatamente_no_limite_da_pagina_faz_uma_terceira_chamada_vazia(fake_supabase):
++    # Caso de borda: se a origem tiver exatamente 1000 linhas, a primeira
++    # página vem cheia (len == tamanho_pagina) e o código precisa buscar
++    # a segunda pra confirmar que não tem mais nada.
++    fake_supabase.linhas = [_linha_fake(i) for i in range(1000)]
++    resultado = buscar_baixas_lovable_agora()
++    assert len(resultado) == 1000
++    assert len(fake_supabase.requisicoes_recebidas) == 2
++
++
++def test_sem_env_vars_configuradas_da_erro_claro(monkeypatch):
++    monkeypatch.delenv("LOVABLE_SUPABASE_URL", raising=False)
++    monkeypatch.delenv("LOVABLE_SUPABASE_KEY", raising=False)
++    with pytest.raises(SincronizacaoIndisponivel, match="LOVABLE_SUPABASE_URL"):
++        buscar_baixas_lovable_agora()
++
++
++def test_chave_errada_da_erro_claro(fake_supabase, monkeypatch):
++    fake_supabase.linhas = [_linha_fake(0)]
++    monkeypatch.setenv("LOVABLE_SUPABASE_KEY", "chave-errada")
++    with pytest.raises(SincronizacaoIndisponivel, match="401"):
++        buscar_baixas_lovable_agora()
++
++
++def test_sincronizar_com_lovable_importa_e_conta_direto_no_banco(fake_supabase, db_session):
++    fake_supabase.linhas = [
++        _linha_fake(0, status_fluxo="PENDENTE"),
++        _linha_fake(1, status_fluxo="APROVADA"),
++        _linha_fake(2, status_fluxo="APROVADA", id_local="Alm_Paulista"),  # sem de-para -> aguardando_de_para_almoxarifado
++        _linha_fake(3, status_fluxo="APROVADA", motivo="uuid-nao-cadastrado"),  # motivo desconhecido -> BaixaInvalida
++    ]
++    resultado = sincronizar_com_lovable(db_session)
++    db_session.commit()
++
++    assert resultado["total_na_origem"] == 4
++    assert resultado["total_recebido"] == 4
++    assert resultado["contagem"]["importada_sem_resolver"] == 1  # a PENDENTE
++    assert resultado["contagem"]["aguardando_de_para_almoxarifado"] == 1  # a do Alm_Paulista
++    assert resultado["contagem"]["aguardando_divergencia"] == 1  # a APROVADA normal, sem divergência aberta pra casar
++    assert len(resultado["erros"]) == 1  # a de motivo não cadastrado
++
++
++def test_sincronizar_de_novo_atualiza_status_em_vez_de_duplicar(fake_supabase, db_session):
++    from app import models
++
++    # primeira sincronização: a baixa nasce Pendente
++    fake_supabase.linhas = [_linha_fake(0, status_fluxo="PENDENTE")]
++    sincronizar_com_lovable(db_session)
++    db_session.commit()
++    assert db_session.query(models.BaixaOperacional).count() == 1
++    assert db_session.query(models.BaixaOperacional).first().status_fluxo == "PENDENTE"
++
++    # segunda sincronização: a MESMA baixa (mesmo id) foi aprovada no Lovable
++    fake_supabase.linhas = [_linha_fake(0, status_fluxo="APROVADA")]
++    resultado = sincronizar_com_lovable(db_session)
++    db_session.commit()
++
++    assert db_session.query(models.BaixaOperacional).count() == 1  # não duplicou
++    assert db_session.query(models.BaixaOperacional).first().status_fluxo == "APROVADA"  # atualizou
++    assert resultado["contagem"]["aguardando_divergencia"] == 1
+diff --git a/frontend/app.js b/frontend/app.js
+index 0968062..8ad315c 100644
+--- a/frontend/app.js
++++ b/frontend/app.js
+@@ -997,6 +997,41 @@ document.getElementById("rb-filtro-status").addEventListener("change", carregarR
+ document.getElementById("rb-filtro-almoxarifado").addEventListener("change", carregarRelatorioBaixa);
+ document.getElementById("rb-filtro-hipotese").addEventListener("change", carregarRelatorioBaixa);
+ 
++const btnSincronizarLovable = document.getElementById("btn-sincronizar-lovable");
++if (btnSincronizarLovable) {
++  btnSincronizarLovable.addEventListener("click", async () => {
++    const textoOriginal = btnSincronizarLovable.textContent;
++    btnSincronizarLovable.disabled = true;
++    btnSincronizarLovable.textContent = "Sincronizando...";
++    try {
++      const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST" });
++      const data = await res.json();
++      if (!res.ok) {
++        alert(`Não consegui sincronizar com o Lovable:\n\n${data.detail || "erro desconhecido"}`);
++      } else {
++        const c = data.contagem || {};
++        alert(
++          "Sincronização concluída.\n\n" +
++          `Registros encontrados no Lovable agora: ${data.total_na_origem}\n` +
++          `Resolvidas automaticamente: ${c.resolvida_automaticamente ?? 0}\n` +
++          `Aprovadas aguardando divergência: ${c.aguardando_divergencia ?? 0}\n` +
++          `Aguardando de-para de almoxarifado: ${c.aguardando_de_para_almoxarifado ?? 0}\n` +
++          `Já estavam resolvidas (sem mudança): ${c.ja_resolvida ?? 0}\n` +
++          `Pendentes/reprovadas importadas: ${c.importada_sem_resolver ?? 0}` +
++          (data.erros && data.erros.length ? `\n\n${data.erros.length} registro(s) com erro - veja o console.` : "")
++        );
++        if (data.erros && data.erros.length) console.warn("Erros na sincronização com o Lovable:", data.erros);
++        carregarRelatorioBaixa();
++      }
++    } catch (erro) {
++      alert(`Não consegui sincronizar com o Lovable: ${erro.message}`);
++    } finally {
++      btnSincronizarLovable.disabled = false;
++      btnSincronizarLovable.textContent = textoOriginal;
++    }
++  });
++}
++
+ // ---------- detalhe ----------
+ let historicoSkuCompleto = [];
+ 
+diff --git a/frontend/index.html b/frontend/index.html
+index 4af167f..f86d785 100644
+--- a/frontend/index.html
++++ b/frontend/index.html
+@@ -251,9 +251,10 @@
+           <select id="rb-filtro-hipotese" class="select-filtro">
+             <option value="">Todos os motivos</option>
+           </select>
++          <button id="btn-sincronizar-lovable" class="btn-secundario">🔄 Sincronizar agora</button>
+         </div>
+       </header>
+-      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas automaticamente do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto.</p>
++      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable (por exemplo, depois de aprovar ou reprovar algo lá).</p>
+ 
+       <div class="kpi-row" id="rb-kpi-row"></div>
+ 
+-- 
+2.43.0
+

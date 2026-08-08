@@ -997,6 +997,41 @@ document.getElementById("rb-filtro-status").addEventListener("change", carregarR
 document.getElementById("rb-filtro-almoxarifado").addEventListener("change", carregarRelatorioBaixa);
 document.getElementById("rb-filtro-hipotese").addEventListener("change", carregarRelatorioBaixa);
 
+const btnSincronizarLovable = document.getElementById("btn-sincronizar-lovable");
+if (btnSincronizarLovable) {
+  btnSincronizarLovable.addEventListener("click", async () => {
+    const textoOriginal = btnSincronizarLovable.textContent;
+    btnSincronizarLovable.disabled = true;
+    btnSincronizarLovable.textContent = "Sincronizando...";
+    try {
+      const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Não consegui sincronizar com o Lovable:\n\n${data.detail || "erro desconhecido"}`);
+      } else {
+        const c = data.contagem || {};
+        alert(
+          "Sincronização concluída.\n\n" +
+          `Registros encontrados no Lovable agora: ${data.total_na_origem}\n` +
+          `Resolvidas automaticamente: ${c.resolvida_automaticamente ?? 0}\n` +
+          `Aprovadas aguardando divergência: ${c.aguardando_divergencia ?? 0}\n` +
+          `Aguardando de-para de almoxarifado: ${c.aguardando_de_para_almoxarifado ?? 0}\n` +
+          `Já estavam resolvidas (sem mudança): ${c.ja_resolvida ?? 0}\n` +
+          `Pendentes/reprovadas importadas: ${c.importada_sem_resolver ?? 0}` +
+          (data.erros && data.erros.length ? `\n\n${data.erros.length} registro(s) com erro - veja o console.` : "")
+        );
+        if (data.erros && data.erros.length) console.warn("Erros na sincronização com o Lovable:", data.erros);
+        carregarRelatorioBaixa();
+      }
+    } catch (erro) {
+      alert(`Não consegui sincronizar com o Lovable: ${erro.message}`);
+    } finally {
+      btnSincronizarLovable.disabled = false;
+      btnSincronizarLovable.textContent = textoOriginal;
+    }
+  });
+}
+
 // ---------- detalhe ----------
 let historicoSkuCompleto = [];
 

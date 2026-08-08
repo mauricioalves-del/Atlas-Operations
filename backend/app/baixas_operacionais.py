@@ -43,6 +43,10 @@ pode ser qualquer uma das duas):
 Nenhum commit acontece aqui dentro - quem chama decide quando persistir
 (mesmo padrão do resto do projeto: investigar() nunca comita).
 """
+import json
+import os
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from datetime import datetime, date
 from typing import Optional
@@ -385,3 +389,93 @@ def importar_lote(db: Session, registros: list) -> dict:
         except BaixaInvalida as e:
             erros.append({"origem_id": registro.get("id"), "erro": str(e)})
     return {"total_recebido": len(registros), "contagem": contagem, "erros": erros}
+
+
+# Colunas de baixa_operacional que processar_baixa_recebida sabe ler -
+# pedir só essas no REST do Supabase (em vez de "select=*") deixa a
+# resposta mais leve e explícita sobre o que este código depende.
+_COLUNAS_BAIXA_OPERACIONAL = (
+    "id,codigo_produto,id_local,motivo_baixa_id,quantidade,valor_total,"
+    "status_fluxo,data_ocorrencia,data_solicitacao,responsavel_nome"
+)
+
+# Tamanho de página do REST do Supabase/PostgREST - o próprio serviço já
+# limita a 1000 por padrão, então pedir exatamente isso por página (via
+# header Range) evita qualquer surpresa e faz uma paginação previsível.
+_TAMANHO_PAGINA_SUPABASE = 1000
+
+
+class SincronizacaoIndisponivel(Exception):
+    """LOVABLE_SUPABASE_URL/LOVABLE_SUPABASE_KEY não configuradas, ou a
+    chamada ao Supabase do Lovable falhou (rede, autenticação, etc.)."""
+
+
+def buscar_baixas_lovable_agora() -> list[dict]:
+    """Busca AGORA, direto no Supabase do projeto Lovable, o estado atual
+    completo da tabela `baixa_operacional` (de qualquer status_fluxo),
+    paginando pelo REST nativo do Supabase (PostgREST) via header Range.
+
+    Ordena por `id` (não por um timestamp) de propósito: colunas de data
+    tipo created_at/data_solicitacao têm muita linha com o mesmo valor
+    (baixas importadas em lote no Lovable), e paginar por LIMIT/OFFSET
+    com ORDER BY instável pula e duplica linha entre páginas - foi
+    exatamente esse bug que causou 37 linhas perdidas no backfill inicial
+    (ver conversa de 2026-08-07). `id` é uuid único, então a ordenação -
+    embora não tenha significado cronológico - é estável entre páginas.
+
+    Não grava nada no Atlas - só busca e devolve a lista de dicts, no
+    mesmo formato que importar_lote espera em `registros`. Quem chama
+    decide o que fazer com o resultado (ver sincronizar_com_lovable)."""
+    base_url = os.environ.get("LOVABLE_SUPABASE_URL")
+    api_key = os.environ.get("LOVABLE_SUPABASE_KEY")
+    if not base_url or not api_key:
+        raise SincronizacaoIndisponivel(
+            "Sincronização com o Lovable não configurada: defina LOVABLE_SUPABASE_URL "
+            "(a URL do projeto Supabase do Lovable, ex: https://xxxxxxxx.supabase.co) e "
+            "LOVABLE_SUPABASE_KEY (uma API key daquele projeto com permissão de leitura "
+            "na tabela baixa_operacional) no ambiente do servidor (Render)."
+        )
+    base_url = base_url.rstrip("/")
+
+    registros: list[dict] = []
+    offset = 0
+    while True:
+        url = f"{base_url}/rest/v1/baixa_operacional?select={_COLUNAS_BAIXA_OPERACIONAL}&order=id.asc"
+        requisicao = urllib.request.Request(url, method="GET")
+        requisicao.add_header("apikey", api_key)
+        requisicao.add_header("Authorization", f"Bearer {api_key}")
+        requisicao.add_header("Range-Unit", "items")
+        requisicao.add_header("Range", f"{offset}-{offset + _TAMANHO_PAGINA_SUPABASE - 1}")
+        try:
+            with urllib.request.urlopen(requisicao, timeout=30) as resposta:
+                pagina = json.loads(resposta.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            corpo = e.read().decode("utf-8", errors="replace")
+            raise SincronizacaoIndisponivel(
+                f"Supabase do Lovable respondeu {e.code} ao buscar baixa_operacional: {corpo}. "
+                f"Confira se LOVABLE_SUPABASE_URL/LOVABLE_SUPABASE_KEY estão corretas e se a "
+                f"chave tem permissão de leitura nessa tabela (RLS)."
+            ) from e
+        except urllib.error.URLError as e:
+            raise SincronizacaoIndisponivel(f"Não consegui alcançar o Supabase do Lovable: {e.reason}") from e
+
+        registros.extend(pagina)
+        if len(pagina) < _TAMANHO_PAGINA_SUPABASE:
+            break
+        offset += _TAMANHO_PAGINA_SUPABASE
+
+    return registros
+
+
+def sincronizar_com_lovable(db: Session) -> dict:
+    """Busca o estado atual da tabela baixa_operacional no Lovable e
+    reimporta tudo pro Atlas de uma vez (usado pelo botão "Sincronizar
+    agora" da tela Relatório de Baixa). importar_lote faz upsert por
+    origem_id, então isso também ATUALIZA baixas que estavam Pendente e
+    foram aprovadas/reprovadas no Lovable desde a última sincronização -
+    não duplica nada, e é seguro clicar de novo quantas vezes quiser.
+    Não comita - quem chama decide (ver baixas_operacionais_router)."""
+    registros = buscar_baixas_lovable_agora()
+    resultado = importar_lote(db, registros)
+    resultado["total_na_origem"] = len(registros)
+    return resultado

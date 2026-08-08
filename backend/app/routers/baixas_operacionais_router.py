@@ -6,14 +6,32 @@ Diferente de baixas_operacionais.py (a lógica de importação/casamento),
 este router só lê o que já foi importado - é pra tela de relatório, não
 pra receber webhook."""
 from datetime import date
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
 from ..deps import obter_usuario_atual
+from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
+
+
+@router.post("/sincronizar")
+def sincronizar(
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Botão "Sincronizar agora" da tela Relatório de Baixa: busca ao vivo
+    o estado atual da tabela baixa_operacional no Supabase do Lovable e
+    reimporta tudo pro Atlas (upsert por origem_id - atualiza o que mudou
+    de status lá, ex: Pendente -> Aprovada, sem duplicar nada)."""
+    try:
+        resultado = sincronizar_com_lovable(db)
+    except SincronizacaoIndisponivel as e:
+        raise HTTPException(500, str(e))
+    db.commit()
+    return resultado
 
 
 @router.get("")
