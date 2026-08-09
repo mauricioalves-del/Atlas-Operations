@@ -390,31 +390,38 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 
 .rail, .content{position:relative; z-index:1}
 
-/* ---- hub orbital (tela inicial) ---- */
+/* ---- hub orbital (tela inicial) ----
+   Dimensionado em vmin/clamp() pra crescer e encolher proporcional ao
+   tamanho real da tela (antes era tudo em px fixo e ficava pequeno
+   sobrando espaço em telas grandes). O JS (renderizarHub) lê o tamanho
+   renderizado do .hub-wrap pra posicionar os nós na mesma proporção. */
 .hub-wrap{
-  position:relative; width:100%; height:640px;
+  position:relative;
+  width: clamp(320px, 80vmin, 880px);
+  height: clamp(320px, 80vmin, 880px);
+  max-width:100%;
   display:flex; align-items:center; justify-content:center;
-  margin:10px 0 4px;
+  margin:10px auto 4px;
 }
 .hub-rings{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none}
 .hub-ring{position:absolute; border-radius:50%; border:1px solid var(--hud-border)}
-.hub-ring-1{width:280px; height:280px}
-.hub-ring-2{width:440px; height:440px; border-style:dashed; animation:hubSpin 70s linear infinite}
-.hub-ring-3{width:600px; height:600px; opacity:0.6; animation:hubSpin 100s linear infinite reverse}
+.hub-ring-1{width:44%; height:44%}
+.hub-ring-2{width:69%; height:69%; border-style:dashed; animation:hubSpin 70s linear infinite}
+.hub-ring-3{width:94%; height:94%; opacity:0.6; animation:hubSpin 100s linear infinite reverse}
 @keyframes hubSpin{ from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 :root[data-theme="light"] .hub-ring-2, :root[data-theme="light"] .hub-ring-3{opacity:0.3}
 
 .hub-center{
   position:relative; z-index:2; display:flex; flex-direction:column; align-items:center; gap:6px;
-  width:150px; height:150px; border-radius:50%;
+  width:clamp(130px, 24vmin, 220px); height:clamp(130px, 24vmin, 220px); border-radius:50%;
   background:radial-gradient(circle at 50% 40%, var(--panel-2), var(--panel));
   border:1px solid var(--hud-border); box-shadow:var(--glow-strong);
   justify-content:center;
 }
-.hub-logo{width:64px; height:64px; object-fit:contain; filter:drop-shadow(0 0 6px rgba(111,163,168,0.6))}
-.hub-title{font-family:var(--display); font-weight:700; letter-spacing:2px; font-size:13px; color:var(--text); text-shadow:var(--hud-text-glow)}
+.hub-logo{width:clamp(56px, 11vmin, 100px); height:clamp(56px, 11vmin, 100px); object-fit:contain; filter:drop-shadow(0 0 6px rgba(111,163,168,0.6))}
+.hub-title{font-family:var(--display); font-weight:700; letter-spacing:2px; font-size:clamp(11px, 1.6vmin, 16px); color:var(--text); text-shadow:var(--hud-text-glow)}
 .hub-mic-btn{
-  background:none; border:1px solid var(--hud-border); border-radius:50%; width:34px; height:34px;
+  background:none; border:1px solid var(--hud-border); border-radius:50%; width:clamp(30px, 5vmin, 40px); height:clamp(30px, 5vmin, 40px);
   display:flex; align-items:center; justify-content:center; color:var(--accent); cursor:pointer; padding:0;
   transition:box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
@@ -449,10 +456,22 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
   text-align:center; min-height:20px; color:var(--accent); font-family:var(--mono); font-size:13px; margin-top:4px;
 }
 
-@media (max-width:900px){
-  .hub-wrap{height:auto; min-height:480px}
-  .hub-ring-2, .hub-ring-3{display:none}
+@media (max-width:480px){
+  .hub-wrap{width:min(92vw, 340px); height:min(92vw, 340px)}
+  .hub-ring-3{display:none}
 }
+
+/* ---- apresentação formal do módulo (uma vez por sessão) ---- */
+.atlas-apresentacao{
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:8px;
+  background:var(--panel-2); border:1px solid var(--hud-border); border-left:3px solid var(--accent);
+  border-radius:var(--radius-input, 8px); padding:10px 14px; margin-bottom:16px;
+  font-family:var(--mono); font-size:13px; color:var(--text); box-shadow:var(--glow-soft);
+  animation:atlasApresentacaoEntrada 0.3s ease;
+}
+.atlas-apresentacao strong{color:var(--accent); letter-spacing:1px}
+.atlas-apresentacao-resumo{color:var(--muted); font-size:12px}
+@keyframes atlasApresentacaoEntrada{ from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:translateY(0)} }
 
 /* ---- rail lateral ---- */
 .rail{

@@ -488,6 +488,7 @@ function mostrarView(nome) {
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   document.getElementById("view-" + nome).classList.remove("hidden");
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
+  apresentarModuloSeNecessario(nome);
   if (nome === "hub") renderizarHub();
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
@@ -3453,7 +3454,13 @@ function renderizarHub() {
     .filter((b) => b.dataset.view !== "hub" && !b.classList.contains("hidden"))
     .map((b) => ({ view: b.dataset.view, label: b.querySelector(".rail-label").textContent }));
 
-  const raio = itens.length > 9 ? 300 : 260;
+  // raio proporcional ao tamanho real renderizado do hub (não mais fixo em
+  // px) - assim os nós acompanham o .hub-wrap em qualquer tamanho de tela
+  // (ver clamp()/vmin em style.css). Com muitos módulos os nós ficam perto
+  // do anel externo; com poucos, perto do anel do meio.
+  const wrapEl = container.closest(".hub-wrap") || container.parentElement;
+  const tamanhoBase = Math.min(wrapEl.clientWidth || 0, wrapEl.clientHeight || 0) || 640;
+  const raio = (tamanhoBase / 2) * (itens.length > 9 ? 0.47 : 0.41);
   const anguloInicial = -90; // primeiro nó no topo
   container.innerHTML = "";
 
@@ -3477,6 +3484,60 @@ function renderizarHub() {
     node.addEventListener("click", () => mostrarView(item.view));
     container.appendChild(node);
   });
+}
+
+// recalcula o raio dos nós quando a janela é redimensionada, só se o hub
+// estiver visível agora (evita trabalho desnecessário nas outras telas)
+let _atlasHubResizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(_atlasHubResizeTimer);
+  _atlasHubResizeTimer = setTimeout(() => {
+    const viewHub = document.getElementById("view-hub");
+    if (viewHub && !viewHub.classList.contains("hidden")) renderizarHub();
+  }, 150);
+});
+
+// ---------- apresentação formal dos módulos (voz do "Exterminador",
+// uma única vez por sessão de navegador - sessionStorage some ao fechar
+// a aba) ----------
+const ATLAS_APRESENTACAO_MODULOS = {
+  dashboard: { frase: "Vigilância central. Todos os indicadores, num único alvo.", resumo: "Visão consolidada dos principais indicadores do sistema em tempo real." },
+  lista: { frase: "Anomalias detectadas. Serão neutralizadas.", resumo: "Lista e trata inconsistências encontradas entre registros e contagens." },
+  "cobertura-conferencia": { frase: "Nenhum item escapa à varredura.", resumo: "Percentual de itens já conferidos no processo de inventário." },
+  importar: { frase: "Dados assimilados. Sistema atualizado.", resumo: "Envia planilhas e arquivos externos para dentro do sistema Atlas." },
+  "fechamento-dashboard": { frase: "Alvo do inventário, sob mira constante.", resumo: "Painel com o status geral do inventário em andamento." },
+  "acuracia-ponderada": { frase: "Precisão calculada. Erro é inaceitável.", resumo: "Mede a exatidão do inventário considerando o peso de cada item." },
+  compras: { frase: "Suprimentos rastreados, ponto a ponto.", resumo: "Acompanha pedidos, entradas e status das compras." },
+  fechamentos: { frase: "Missão concluída. O resultado será registrado.", resumo: "Consolida e encerra oficialmente o ciclo de inventário atual." },
+  "pos-inventario": { frase: "A missão não termina na contagem. Eu analiso o depois.", resumo: "Análises e ações realizadas após o encerramento do inventário." },
+  cadastros: { frase: "Bases de dados, organizadas sob meu comando.", resumo: "Cadastro e manutenção das informações base do sistema." },
+  auditoria: { frase: "Cada ação, registrada. Nada se esconde de mim.", resumo: "Histórico completo de ações e alterações realizadas no sistema." },
+  usuarios: { frase: "Identifiquei os operadores. Acesso sob controle.", resumo: "Gestão de contas, permissões e acessos dos usuários do sistema." },
+};
+
+function _atlasModulosJaApresentados() {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem("atlas_modulos_apresentados") || "[]"));
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function apresentarModuloSeNecessario(view) {
+  const info = ATLAS_APRESENTACAO_MODULOS[view];
+  if (!info) return;
+  const apresentados = _atlasModulosJaApresentados();
+  if (apresentados.has(view)) return; // já apresentado nesta sessão - não repete
+  apresentados.add(view);
+  sessionStorage.setItem("atlas_modulos_apresentados", JSON.stringify([...apresentados]));
+
+  const secao = document.getElementById("view-" + view);
+  if (!secao) return;
+  const banner = document.createElement("div");
+  banner.className = "atlas-apresentacao";
+  banner.innerHTML = `<strong>ATLAS:</strong> "${info.frase}" <span class="atlas-apresentacao-resumo">${info.resumo}</span>`;
+  secao.prepend(banner);
+  setTimeout(() => banner.remove(), 9000);
 }
 
 // ---------- comando de voz (navegação por fala) ----------
@@ -3504,8 +3565,15 @@ function _normalizarTextoVoz(txt) {
     .trim();
 }
 
+// remove a palavra de ativa\u00e7\u00e3o "atlas" do in\u00edcio da frase, se houver -
+// permite comandos no formato "Atlas, cadastro" al\u00e9m de dizer s\u00f3 o nome
+// do m\u00f3dulo direto (ex: "cadastro")
+function _removerPalavraDeAtivacao(alvoNormalizado) {
+  return alvoNormalizado.replace(/^(e[ai]?\s+)?atlas[,\s]*/, "").trim();
+}
+
 function _acharViewPorVoz(transcricao) {
-  const alvo = _normalizarTextoVoz(transcricao);
+  const alvo = _removerPalavraDeAtivacao(_normalizarTextoVoz(transcricao));
   let melhorView = null;
   let melhorTamanho = 0;
   for (const [view, palavras] of Object.entries(HUB_PALAVRAS_CHAVE_POR_VIEW)) {
@@ -3571,7 +3639,22 @@ function _acharViewPorVoz(transcricao) {
     } else {
       status.textContent = `❓ Não reconheci "${transcricao}" como um módulo do Atlas.`;
     }
+    _registrarComandoDeVozNoBanco(transcricao, view);
   });
+
+  // grava no banco (auditoria) todo comando de voz dado no hub - reconhecido
+  // ou não - pra ter rastreabilidade de como o pessoal navega por voz.
+  async function _registrarComandoDeVozNoBanco(transcricao, viewDestino) {
+    try {
+      await apiFetch(`${API}/voz/comando`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcricao, view_destino: viewDestino || null, reconhecido: !!viewDestino }),
+      });
+    } catch (e) {
+      console.warn("Atlas: não consegui registrar o comando de voz no banco.", e);
+    }
+  }
 
   reconhecimento.addEventListener("error", (ev) => {
     escutando = false;
