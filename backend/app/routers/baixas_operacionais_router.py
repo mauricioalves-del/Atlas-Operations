@@ -6,15 +6,39 @@ Diferente de baixas_operacionais.py (a lógica de importação/casamento),
 este router só lê o que já foi importado - é pra tela de relatório, não
 pra receber webhook."""
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
 from ..deps import obter_usuario_atual
-from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel
+from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
+
+
+@router.post("/importar-lote")
+def importar_lote_colado(
+    payload: dict = Body(...),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Fecha manualmente uma lacuna histórica entre o que existe no
+    Lovable e o que já foi importado pro Atlas (ex: linhas de antes do
+    webhook automático existir, ou alguma falha pontual de entrega).
+    Protegido por login (mesmo usuário logado na tela, não pela chave de
+    integração - por isso fica aqui, junto do relatório, e não em
+    integracoes_router.py) porque quem aciona isso é uma pessoa colando
+    um export tirado na mão do SQL editor do Lovable, não um sistema
+    automático. Espera {"registros": [ {...}, ... ]} - mesmo formato de
+    linha que .../integracoes/lovable/baixas/lote. Upsert por origem_id,
+    então pode ser rodado de novo com o mesmo lote sem duplicar nada."""
+    registros = payload.get("registros")
+    if not isinstance(registros, list):
+        raise HTTPException(400, "Payload precisa ter uma lista em 'registros'.")
+    resultado = importar_lote(db, registros)
+    db.commit()
+    return resultado
 
 
 @router.post("/sincronizar")
