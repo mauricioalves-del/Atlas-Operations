@@ -3454,15 +3454,21 @@ function renderizarHub() {
     .filter((b) => b.dataset.view !== "hub" && !b.classList.contains("hidden"))
     .map((b) => ({ view: b.dataset.view, label: b.querySelector(".rail-label").textContent }));
 
-  // raio proporcional ao tamanho real renderizado do hub (não mais fixo em
-  // px) - assim os nós acompanham o .hub-wrap em qualquer tamanho de tela
-  // (ver clamp()/vmin em style.css). Com muitos módulos os nós ficam perto
-  // do anel externo; com poucos, perto do anel do meio.
+  // raio proporcional ao tamanho real renderizado do hub - agora ALÉM do
+  // anel externo (94% de diâmetro = 47% de raio), pra dar a sensação de
+  // módulos orbitando no espaço, fora do núcleo. Em telas pequenas usa uma
+  // fração menor pra não estourar a largura da tela.
   const wrapEl = container.closest(".hub-wrap") || container.parentElement;
   const tamanhoBase = Math.min(wrapEl.clientWidth || 0, wrapEl.clientHeight || 0) || 640;
-  const raio = (tamanhoBase / 2) * (itens.length > 9 ? 0.47 : 0.41);
+  const fracaoExpandida = itens.length > 9 ? 0.62 : 0.56;
+  const fracaoCompacta = itens.length > 9 ? 0.44 : 0.4;
+  const raio = tamanhoBase * (tamanhoBase < 480 ? fracaoCompacta : fracaoExpandida);
   const anguloInicial = -90; // primeiro nó no topo
   container.innerHTML = "";
+
+  // paleta de cores da marca ciclada nos nós - cada módulo com uma cor,
+  // visual mais tecnológico/vibrante do que um único tom uniforme
+  const CORES_NODOS = ["--accent", "--info", "--teal", "--support", "--critico", "--medio"];
 
   itens.forEach((item, i) => {
     const angulo = anguloInicial + (360 / itens.length) * i;
@@ -3475,10 +3481,12 @@ function renderizarHub() {
     const comprimento = Math.sqrt(x * x + y * y);
     linha.style.width = comprimento + "px";
     linha.style.transform = `rotate(${angulo}deg)`;
+    linha.style.setProperty("--node-cor", `var(${CORES_NODOS[i % CORES_NODOS.length]})`);
     container.appendChild(linha);
 
     const node = document.createElement("button");
     node.className = "hub-node";
+    node.style.setProperty("--node-cor", `var(${CORES_NODOS[i % CORES_NODOS.length]})`);
     node.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
     node.innerHTML = `<span class="hub-node-dot"></span><span class="hub-node-label">${item.label}</span>`;
     node.addEventListener("click", () => mostrarView(item.view));
@@ -3523,6 +3531,32 @@ function _atlasModulosJaApresentados() {
   }
 }
 
+// escolhe, entre as vozes disponíveis no navegador, uma em português - a
+// lista de vozes carrega de forma assíncrona em alguns navegadores, então
+// isso pode retornar vazio na primeiríssima chamada (nesse caso o
+// utterance ainda funciona, só usa a voz padrão do sistema pro lang pt-BR)
+function _atlasEscolherVoz() {
+  if (!("speechSynthesis" in window)) return null;
+  const vozes = window.speechSynthesis.getVoices();
+  return vozes.find((v) => v.lang && v.lang.toLowerCase().startsWith("pt")) || null;
+}
+
+function falarResumoModulo(texto) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
+    const fala = new SpeechSynthesisUtterance(texto);
+    fala.lang = "pt-BR";
+    fala.rate = 0.95;
+    fala.pitch = 0.8; // tom mais grave, no clima "Exterminador"
+    const voz = _atlasEscolherVoz();
+    if (voz) fala.voice = voz;
+    window.speechSynthesis.speak(fala);
+  } catch (e) {
+    console.warn("Atlas: não consegui falar o resumo do módulo.", e);
+  }
+}
+
 function apresentarModuloSeNecessario(view) {
   const info = ATLAS_APRESENTACAO_MODULOS[view];
   if (!info) return;
@@ -3538,6 +3572,8 @@ function apresentarModuloSeNecessario(view) {
   banner.innerHTML = `<strong>ATLAS:</strong> "${info.frase}" <span class="atlas-apresentacao-resumo">${info.resumo}</span>`;
   secao.prepend(banner);
   setTimeout(() => banner.remove(), 9000);
+
+  falarResumoModulo(`${info.frase} ${info.resumo}`);
 }
 
 // ---------- comando de voz (navegação por fala) ----------
