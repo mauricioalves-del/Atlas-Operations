@@ -9,7 +9,6 @@ from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
 from ..deps import requer_papel, obter_usuario_atual
 from ..audit import registrar_log
-from ..baixas_operacionais import buscar_avisos_baixa_pendente
 
 router = APIRouter(prefix="/divergencias", tags=["divergencias"])
 
@@ -98,7 +97,6 @@ def listar(
     divergencias = q.offset((pagina - 1) * tamanho_pagina).limit(tamanho_pagina).all()
     _preencher_descricao_produto(db, divergencias)
     _marcar_investigacao_pendente(db, divergencias)
-    buscar_avisos_baixa_pendente(db, divergencias)
 
     return {
         "itens": [schemas.DivergenciaOut.model_validate(d).model_dump() for d in divergencias],

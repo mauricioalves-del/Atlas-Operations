@@ -42,7 +42,7 @@ function mostrarApp() {
   document.getElementById("shell-app").classList.remove("hidden");
   aplicarPermissoesNaUI();
   atualizarHipotesesCache();
-  mostrarView("dashboard");
+  mostrarView("hub");
 }
 
 function aplicarPermissoesNaUI() {
@@ -488,9 +488,9 @@ function mostrarView(nome) {
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   document.getElementById("view-" + nome).classList.remove("hidden");
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
+  if (nome === "hub") renderizarHub();
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
-  if (nome === "relatorio-baixa") carregarRelatorioBaixa();
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
@@ -873,7 +873,7 @@ async function carregarLista(pagina = 1) {
   tbody.innerHTML = divs
     .map(
       (d) => `<tr data-id="${d.id}">
-        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}${d.aviso_baixa_pendente ? ` <span title="${d.aviso_baixa_pendente.replace(/"/g, "&quot;")}" style="color:var(--alto)">📦⏳</span>` : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
+        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
         <td>${formatarDataCurta(d.data_deteccao)}</td>
         <td>${formatarMoeda(d.valor_estimado)}</td>
         <td>${rotulo(d.hipotese_ia)}</td><td>${d.confianca_ia != null ? d.confianca_ia + "%" : "—"}</td>
@@ -910,127 +910,6 @@ if (btnRecalcularValores) {
   });
 }
 
-// ---------- relatório de baixa (integração Lovable) ----------
-let filtrosRelatorioBaixaPreenchidos = false;
-
-function badgeStatusFluxo(statusFluxo) {
-  if (!statusFluxo) return "—";
-  const texto = { PENDENTE: "Pendente", APROVADA: "Aprovada", REPROVADA: "Reprovada" }[statusFluxo] || statusFluxo;
-  return `<span class="badge badge-${statusFluxo.toLowerCase()}">${texto}</span>`;
-}
-
-async function carregarRelatorioBaixa() {
-  const status = document.getElementById("rb-filtro-status").value;
-  const almox = document.getElementById("rb-filtro-almoxarifado").value;
-  const hipotese = document.getElementById("rb-filtro-hipotese").value;
-  const params = new URLSearchParams();
-  if (status) params.set("status_fluxo", status);
-  if (almox) params.set("almoxarifado", almox);
-  if (hipotese) params.set("hipotese_aplicada", hipotese);
-
-  let resposta;
-  try {
-    resposta = await apiFetch(`${API}/baixas-operacionais?${params.toString()}`).then((r) => r.json());
-  } catch (erro) {
-    document.getElementById("rb-kpi-row").innerHTML =
-      `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-label" style="color:var(--critico)">Não consegui carregar o relatório de baixa</div><div style="font-size:13px;color:var(--muted);margin-top:6px">${erro.message}. Confirme que o backend foi atualizado para a versão mais recente (inclui a integração com o Lovable) e reinicie o servidor.</div></div>`;
-    return;
-  }
-
-  const resumo = resposta.resumo || {};
-  const itens = resposta.itens || [];
-
-  document.getElementById("rb-kpi-row").innerHTML = [
-    { label: "Total de baixas", value: resumo.total ?? 0 },
-    { label: "Pendentes (aguardando decisão no Lovable)", value: resumo.pendentes ?? 0, cor: "var(--alto)" },
-    { label: "Aprovadas", value: resumo.aprovadas ?? 0 },
-    { label: "Reprovadas", value: resumo.reprovadas ?? 0 },
-    { label: "Resolvidas automaticamente (bateram com divergência)", value: resumo.resolvidas_automaticamente ?? 0, cor: "var(--ok)" },
-    { label: "Aprovadas sem divergência correspondente", value: resumo.aguardando_divergencia ?? 0 },
-    { label: "Valor total", value: formatarMoeda(resumo.valor_total || 0) },
-  ]
-    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
-    .join("");
-
-  if (!filtrosRelatorioBaixaPreenchidos && itens.length) {
-    const selAlmox = document.getElementById("rb-filtro-almoxarifado");
-    const selHipotese = document.getElementById("rb-filtro-hipotese");
-    [...new Set(itens.map((i) => i.almoxarifado).filter(Boolean))].sort().forEach((a) => {
-      const opt = document.createElement("option");
-      opt.value = a;
-      opt.textContent = a;
-      selAlmox.appendChild(opt);
-    });
-    [...new Set(itens.map((i) => i.hipotese_aplicada).filter(Boolean))].sort().forEach((h) => {
-      const opt = document.createElement("option");
-      opt.value = h;
-      opt.textContent = rotulo(h);
-      selHipotese.appendChild(opt);
-    });
-    filtrosRelatorioBaixaPreenchidos = true;
-  }
-
-  const tbody = document.querySelector("#tabela-relatorio-baixa tbody");
-  tbody.innerHTML =
-    itens
-      .map(
-        (i) => `<tr>
-        <td>${i.sku}</td><td>${i.almoxarifado}${i.almoxarifado && i.almoxarifado.startsWith("NAO_MAPEADO__") ? ' <span title="Almoxarifado do Lovable sem correspondência cadastrada no Atlas" style="color:var(--alto)">⚠️</span>' : ""}</td>
-        <td>${i.motivo || "—"}</td><td>${rotulo(i.hipotese_aplicada)}</td>
-        <td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total || 0)}</td>
-        <td>${badgeStatusFluxo(i.status_fluxo)}</td><td>${i.solicitante_nome || "—"}</td>
-        <td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
-        <td>${i.divergencia_vinculada_id ? `<a href="#" data-abrir-divergencia="${i.divergencia_vinculada_id}">#${i.divergencia_vinculada_id} — resolvida</a>` : i.status_fluxo === "APROVADA" ? "aguardando divergência" : "—"}</td>
-      </tr>`
-      )
-      .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma baixa operacional encontrada.</td></tr>`;
-
-  tbody.querySelectorAll("a[data-abrir-divergencia]").forEach((a) =>
-    a.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      mostrarView("lista");
-      abrirDetalhe(a.dataset.abrirDivergencia);
-    })
-  );
-}
-document.getElementById("rb-filtro-status").addEventListener("change", carregarRelatorioBaixa);
-document.getElementById("rb-filtro-almoxarifado").addEventListener("change", carregarRelatorioBaixa);
-document.getElementById("rb-filtro-hipotese").addEventListener("change", carregarRelatorioBaixa);
-
-const btnSincronizarLovable = document.getElementById("btn-sincronizar-lovable");
-if (btnSincronizarLovable) {
-  btnSincronizarLovable.addEventListener("click", async () => {
-    const textoOriginal = btnSincronizarLovable.textContent;
-    btnSincronizarLovable.disabled = true;
-    btnSincronizarLovable.textContent = "Sincronizando...";
-    try {
-      const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        alert(`Não consegui sincronizar com o Lovable:\n\n${data.detail || "erro desconhecido"}`);
-      } else {
-        const c = data.contagem || {};
-        alert(
-          "Sincronização concluída.\n\n" +
-          `Registros encontrados no Lovable agora: ${data.total_na_origem}\n` +
-          `Resolvidas automaticamente: ${c.resolvida_automaticamente ?? 0}\n` +
-          `Aprovadas aguardando divergência: ${c.aguardando_divergencia ?? 0}\n` +
-          `Aguardando de-para de almoxarifado: ${c.aguardando_de_para_almoxarifado ?? 0}\n` +
-          `Já estavam resolvidas (sem mudança): ${c.ja_resolvida ?? 0}\n` +
-          `Pendentes/reprovadas importadas: ${c.importada_sem_resolver ?? 0}` +
-          (data.erros && data.erros.length ? `\n\n${data.erros.length} registro(s) com erro - veja o console.` : "")
-        );
-        if (data.erros && data.erros.length) console.warn("Erros na sincronização com o Lovable:", data.erros);
-        carregarRelatorioBaixa();
-      }
-    } catch (erro) {
-      alert(`Não consegui sincronizar com o Lovable: ${erro.message}`);
-    } finally {
-      btnSincronizarLovable.disabled = false;
-      btnSincronizarLovable.textContent = textoOriginal;
-    }
-  });
-}
 
 // ---------- detalhe ----------
 let historicoSkuCompleto = [];
@@ -1094,7 +973,6 @@ async function abrirDetalhe(id) {
           </div>
         </div>
         ${d.tem_investigacao_pendente ? `<p style="color:var(--alto)">⚠️ Este SKU já tem outro caso ainda em investigação - pode ser reincidência antes da causa anterior ser resolvida.</p>` : ""}
-        ${d.aviso_baixa_pendente ? `<div style="background:rgba(255,180,0,0.12); border:1px solid var(--alto); border-radius:8px; padding:10px 12px; margin-bottom:10px"><strong>📦⏳ Baixa operacional pendente no Lovable</strong><p style="margin:4px 0 0">${d.aviso_baixa_pendente}</p></div>` : ""}
         <p><strong>Hipótese (motor de regras):</strong> ${rotulo(d.hipotese_regras)} ${d.confianca_regras != null ? "(" + d.confianca_regras + "%)" : ""}</p>
         <p><strong>Hipótese (modelo estatístico):</strong> ${rotulo(d.hipotese_ml)} ${d.confianca_ml != null ? "(" + d.confianca_ml + "%)" : ""}</p>
         <p><strong>Hipótese final reconciliada:</strong> ${rotulo(d.hipotese_ia)} ${d.confianca_ia != null ? "(" + d.confianca_ia + "%)" : ""}</p>
@@ -3565,6 +3443,148 @@ async function carregarAuditoria(pagina = 1) {
   if (btnAnt) btnAnt.addEventListener("click", () => carregarAuditoria(resposta.pagina - 1));
   if (btnProx) btnProx.addEventListener("click", () => carregarAuditoria(resposta.pagina + 1));
 }
+
+// ---------- hub orbital (tela inicial) ----------
+function renderizarHub() {
+  const container = document.getElementById("hub-nodes");
+  // usa os mesmos itens do menu lateral que estão visíveis pro usuário
+  // (respeita permissão - Cadastros/Auditoria/Usuários só aparecem pra quem tem acesso)
+  const itens = Array.from(document.querySelectorAll(".rail-item"))
+    .filter((b) => b.dataset.view !== "hub" && !b.classList.contains("hidden"))
+    .map((b) => ({ view: b.dataset.view, label: b.querySelector(".rail-label").textContent }));
+
+  const raio = itens.length > 9 ? 300 : 260;
+  const anguloInicial = -90; // primeiro nó no topo
+  container.innerHTML = "";
+
+  itens.forEach((item, i) => {
+    const angulo = anguloInicial + (360 / itens.length) * i;
+    const rad = (angulo * Math.PI) / 180;
+    const x = Math.cos(rad) * raio;
+    const y = Math.sin(rad) * raio;
+
+    const linha = document.createElement("div");
+    linha.className = "hub-node-line";
+    const comprimento = Math.sqrt(x * x + y * y);
+    linha.style.width = comprimento + "px";
+    linha.style.transform = `rotate(${angulo}deg)`;
+    container.appendChild(linha);
+
+    const node = document.createElement("button");
+    node.className = "hub-node";
+    node.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+    node.innerHTML = `<span class="hub-node-dot"></span><span class="hub-node-label">${item.label}</span>`;
+    node.addEventListener("click", () => mostrarView(item.view));
+    container.appendChild(node);
+  });
+}
+
+// ---------- comando de voz (navegação por fala) ----------
+const HUB_PALAVRAS_CHAVE_POR_VIEW = {
+  hub: ["início", "inicio", "hub", "home"],
+  dashboard: ["painel de divergências", "painel", "divergências abertas"],
+  lista: ["divergências", "lista de divergências", "divergência"],
+  "cobertura-conferencia": ["cobertura de conferência", "cobertura", "conferência"],
+  importar: ["importar", "importação", "importa"],
+  "fechamento-dashboard": ["painel inventário", "painel de inventário", "painel do inventário"],
+  "acuracia-ponderada": ["acurácia ponderada", "acurácia"],
+  compras: ["controle de compras", "compras", "pedido de compra"],
+  fechamentos: ["fechamento inventário", "fechamento de inventário", "fechamento"],
+  "pos-inventario": ["pós-inventário", "pós inventário", "pos inventario"],
+  cadastros: ["cadastros", "cadastro"],
+  auditoria: ["auditoria"],
+  usuarios: ["usuários", "usuarios"],
+};
+
+function _normalizarTextoVoz(txt) {
+  return txt
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function _acharViewPorVoz(transcricao) {
+  const alvo = _normalizarTextoVoz(transcricao);
+  let melhorView = null;
+  let melhorTamanho = 0;
+  for (const [view, palavras] of Object.entries(HUB_PALAVRAS_CHAVE_POR_VIEW)) {
+    for (const palavra of palavras) {
+      const p = _normalizarTextoVoz(palavra);
+      if (alvo.includes(p) && p.length > melhorTamanho) {
+        melhorView = view;
+        melhorTamanho = p.length;
+      }
+    }
+  }
+  return melhorView;
+}
+
+(function configurarComandoDeVoz() {
+  const btn = document.getElementById("hub-mic-btn");
+  const status = document.getElementById("hub-voice-status");
+  const Reconhecimento = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!Reconhecimento) {
+    btn.disabled = true;
+    btn.title = "Comando de voz não é suportado neste navegador (funciona no Chrome e Edge)";
+    btn.style.opacity = "0.35";
+    return;
+  }
+
+  const reconhecimento = new Reconhecimento();
+  reconhecimento.lang = "pt-BR";
+  reconhecimento.continuous = false;
+  reconhecimento.interimResults = false;
+
+  let escutando = false;
+
+  btn.addEventListener("click", () => {
+    if (escutando) {
+      reconhecimento.stop();
+      return;
+    }
+    try {
+      reconhecimento.start();
+    } catch (e) {
+      console.error("Atlas: falha ao iniciar reconhecimento de voz", e);
+    }
+  });
+
+  reconhecimento.addEventListener("start", () => {
+    escutando = true;
+    btn.classList.add("escutando");
+    status.textContent = "🎤 Ouvindo... diga o nome do módulo";
+  });
+
+  reconhecimento.addEventListener("end", () => {
+    escutando = false;
+    btn.classList.remove("escutando");
+  });
+
+  reconhecimento.addEventListener("result", (ev) => {
+    const transcricao = ev.results[0][0].transcript;
+    const view = _acharViewPorVoz(transcricao);
+    if (view) {
+      status.textContent = `✅ "${transcricao}" → abrindo ${document.querySelector(`.rail-item[data-view="${view}"] .rail-label`)?.textContent || view}`;
+      setTimeout(() => mostrarView(view), 500);
+    } else {
+      status.textContent = `❓ Não reconheci "${transcricao}" como um módulo do Atlas.`;
+    }
+  });
+
+  reconhecimento.addEventListener("error", (ev) => {
+    escutando = false;
+    btn.classList.remove("escutando");
+    if (ev.error === "not-allowed") {
+      status.textContent = "⚠️ Permissão de microfone negada - autorize o microfone nas configurações do navegador.";
+    } else if (ev.error === "no-speech") {
+      status.textContent = "Não detectei nenhuma fala. Tenta de novo.";
+    } else {
+      status.textContent = "⚠️ Erro no reconhecimento de voz: " + ev.error;
+    }
+  });
+})();
 
 // ---------- inicialização ----------
 inicializarSessao();

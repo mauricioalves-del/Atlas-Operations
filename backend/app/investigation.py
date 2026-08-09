@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from . import models
 from .hipoteses_config import buscar_evidencias_texto, normalizar_almoxarifado
 from .feature_extraction import extrair_sinais_contexto
-from .baixas_operacionais import buscar_baixa_compativel, resolver_divergencia_automaticamente
 
 
 def _peso(db: Session, codigo_hipotese: str) -> float:
@@ -40,23 +39,6 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
         })
         if encontrado:
             scores[hipotese] += peso
-
-    # -1) Baixa operacional (Avaria/Vencimento/Descarte/...) já aprovada
-    #     no sistema externo (Lovable) pra esse SKU+almoxarifado, ainda
-    #     sem divergência vinculada. Diferente das outras evidências
-    #     abaixo (todas inferidas), essa é uma causa já confirmada por
-    #     quem opera o almoxarifado - por isso resolve a divergência
-    #     direto, em vez de só sugerir. Ainda assim entra como evidência
-    #     de peso máximo, pra ficar visível no histórico/auditoria de por
-    #     que foi resolvida sozinha. Ver baixas_operacionais.py.
-    baixa_compativel = buscar_baixa_compativel(db, div.sku, div.almoxarifado, div.data_deteccao)
-    if baixa_compativel:
-        registrar(
-            baixa_compativel.hipotese_aplicada,
-            f"baixa_operacional_aprovada_no_lovable(motivo={baixa_compativel.motivo_baixa_bruto})",
-            True, peso=100,
-        )
-        resolver_divergencia_automaticamente(db, div, baixa_compativel)
 
     # 0) Observação original da planilha (texto livre, escrita à mão por
     #    quem fez a contagem). Isso costuma ser a pista mais direta que

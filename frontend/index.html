@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=50">
+<link rel="stylesheet" href="style.css?v=51">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -54,9 +54,9 @@
       <span class="brand-name">Atlas</span>
     </div>
     <nav class="rail-nav">
-      <button class="rail-item active" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
+      <button class="rail-item active" data-view="hub"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 3"/></svg></span><span class="rail-label">Início</span></button>
+      <button class="rail-item" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
       <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
-      <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
       <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
       <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
       <button class="rail-item" data-view="fechamento-dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="rail-label">Painel Inventário</span></button>
@@ -83,7 +83,29 @@
 
   <main class="content">
 
-    <section id="view-dashboard" class="view">
+    <section id="view-hub" class="view">
+      <div class="hub-wrap">
+        <div class="hub-rings">
+          <div class="hub-ring hub-ring-1"></div>
+          <div class="hub-ring hub-ring-2"></div>
+          <div class="hub-ring hub-ring-3"></div>
+        </div>
+        <div class="hub-center">
+          <img src="assets/logo.png" alt="Atlas" class="hub-logo">
+          <div class="hub-title">ATLAS</div>
+          <button id="hub-mic-btn" class="hub-mic-btn" title="Comando de voz">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
+        </div>
+        <div class="hub-nodes" id="hub-nodes"></div>
+      </div>
+      <p id="hub-voice-status" class="hub-voice-status"></p>
+      <p class="hint" style="text-align:center; margin-top:4px">
+        Clique num módulo pra abrir, ou no microfone e diga o nome do módulo (ex: "cobertura de conferência").
+      </p>
+    </section>
+
+    <section id="view-dashboard" class="view hidden">
       <header class="view-header">
         <h1>Painel de Divergências</h1>
         <div class="filtros">
@@ -233,39 +255,6 @@
         <h1 id="detalhe-titulo">Divergência</h1>
       </header>
       <div id="detalhe-conteudo" class="detalhe-conteudo"></div>
-    </section>
-
-    <section id="view-relatorio-baixa" class="view hidden">
-      <header class="view-header">
-        <h1>Relatório de Baixa</h1>
-        <div class="filtros">
-          <select id="rb-filtro-status" class="select-filtro">
-            <option value="">Todos os status</option>
-            <option value="PENDENTE">Pendente</option>
-            <option value="APROVADA">Aprovada</option>
-            <option value="REPROVADA">Reprovada</option>
-          </select>
-          <select id="rb-filtro-almoxarifado" class="select-filtro">
-            <option value="">Todos os almoxarifados</option>
-          </select>
-          <select id="rb-filtro-hipotese" class="select-filtro">
-            <option value="">Todos os motivos</option>
-          </select>
-          <button id="btn-sincronizar-lovable" class="btn-secundario">🔄 Sincronizar agora</button>
-        </div>
-      </header>
-      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable (por exemplo, depois de aprovar ou reprovar algo lá).</p>
-
-      <div class="kpi-row" id="rb-kpi-row"></div>
-
-      <div class="lista-wrap">
-        <table class="tabela" id="tabela-relatorio-baixa">
-          <thead>
-            <tr><th>SKU</th><th>Almoxarifado</th><th>Motivo</th><th>Hipótese</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Solicitante</th><th>Data</th><th>Divergência</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
     </section>
 
     <section id="view-importar" class="view hidden">

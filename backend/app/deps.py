@@ -1,5 +1,3 @@
-import os
-
 from fastapi import Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 
@@ -35,20 +33,3 @@ def requer_papel(*papeis_permitidos: str):
         return usuario
 
     return verificador
-
-
-def verificar_chave_integracao(x_atlas_integration_key: str | None = Header(None)) -> None:
-    """Autenticação para chamadas máquina-a-máquina (webhooks de sistemas
-    externos, ex: baixas operacionais do Lovable) - não usa login/JWT
-    porque não há um usuário humano na ponta, só uma chave fixa
-    compartilhada, enviada no header 'X-Atlas-Integration-Key'.
-
-    A chave é lida da variável de ambiente ATLAS_INTEGRATION_API_KEY (
-    configurar no Render, igual ATLAS_SECRET_KEY). Sem essa variável
-    definida, o endpoint fica bloqueado por padrão em vez de aceitar
-    qualquer coisa."""
-    chave_esperada = os.environ.get("ATLAS_INTEGRATION_API_KEY")
-    if not chave_esperada:
-        raise HTTPException(500, "Integração não configurada: defina ATLAS_INTEGRATION_API_KEY no ambiente do servidor.")
-    if not x_atlas_integration_key or x_atlas_integration_key != chave_esperada:
-        raise HTTPException(401, "Chave de integração ausente ou inválida (header X-Atlas-Integration-Key).")

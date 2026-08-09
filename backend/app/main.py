@@ -8,8 +8,7 @@ from .database import engine, Base, garantir_colunas_novas, SessionLocal
 from .routers import (
     import_router, divergencias_router, dashboard_router, auth_router,
     usuarios_router, auditoria_router, cadastros_router, fechamento_router,
-    backup_router, ml_router, compras_router, integracoes_router,
-    baixas_operacionais_router,
+    backup_router, ml_router, compras_router,
 )
 from . import models
 from .auth import hash_senha
@@ -90,8 +89,6 @@ app.include_router(import_router.router, prefix="/api")
 app.include_router(divergencias_router.router, prefix="/api")
 app.include_router(dashboard_router.router, prefix="/api")
 app.include_router(compras_router.router, prefix="/api")
-app.include_router(integracoes_router.router, prefix="/api")
-app.include_router(baixas_operacionais_router.router, prefix="/api")
 
 
 @app.get("/api/health")

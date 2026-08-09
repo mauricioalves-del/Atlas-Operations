@@ -38,19 +38,6 @@ HIPOTESES = [
     # códigos novos, adicionados nesta correção:
     ("Sem_Divergencia_Real",        "Sem Divergência Real (Falso Positivo)", "Após checagem, não há divergência real - erro de contagem/leitura pontual."),
     ("Outros_Nao_Categorizado",     "Outros / Não Categorizado",           "Caso legítimo mas que não se encaixa em nenhuma hipótese conhecida ainda."),
-    # códigos novos - integração automática com as baixas operacionais do
-    # Lovable (ver baixas_operacionais.py). Cobrem os 9 motivos cadastrados
-    # lá hoje (tabela motivo_baixa) - Avaria já tinha Avaria_Perda; os
-    # outros 8 não tinham causa própria e caiam genericamente em
-    # Erro_Operacional, o que deixava os relatórios imprecisos.
-    ("Vencimento_Produto",          "Vencimento de Produto",               "Baixa por vencimento registrada no sistema operacional de baixas (Lovable)."),
-    ("Descarte_Operacional",        "Descarte/Qualidade",                  "Baixa por descarte de qualidade registrada no sistema operacional de baixas (Lovable)."),
-    ("Cortesia_Amostra",            "Cortesia",                            "Baixa por cortesia (amostra oferecida) registrada no sistema operacional de baixas (Lovable)."),
-    ("Degustacao_Amostra",          "Degustação",                          "Baixa por degustação registrada no sistema operacional de baixas (Lovable)."),
-    ("Envio_Laboratorio_Analise",   "Envio/Laboratório",                   "Baixa por envio a laboratório/análise registrada no sistema operacional de baixas (Lovable)."),
-    ("Perda_Furto_Registrado",      "Perda/Furto Registrado",              "Perda ou furto JÁ documentado no sistema operacional de baixas (Lovable) - diferente de Perda_Nao_Identificada, que é sem causa raiz conhecida."),
-    ("Uso_Consumo_Interno",         "Uso e Consumo Interno",               "Baixa por uso/consumo interno registrada no sistema operacional de baixas (Lovable)."),
-    ("Amostra_Sensorial_Inovacao",  "Sensorial/Inovações",                 "Baixa para testes sensoriais/inovação registrada no sistema operacional de baixas (Lovable)."),
 ]
 
 HIPOTESE_CODIGOS = {codigo for codigo, _, _ in HIPOTESES}
