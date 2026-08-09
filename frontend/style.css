@@ -398,11 +398,16 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
    visual, os nós "flutuam" no espaço fora deles. */
 .hub-wrap{
   position:relative;
-  width: clamp(340px, 86vmin, 960px);
-  height: clamp(340px, 86vmin, 960px);
+  /* limitado pela ALTURA disponível (não só pela largura) - com muitos
+     módulos "flutuando" fora do anel externo, se o núcleo crescer só em
+     função da largura da tela ele estoura pra fora do topo/rodapé em
+     monitores largos e baixos. O calc() reserva espaço pro texto de dica
+     e status de voz que ficam embaixo. */
+  width: clamp(260px, min(50vmin, calc(58vh - 140px)), 560px);
+  height: clamp(260px, min(50vmin, calc(58vh - 140px)), 560px);
   max-width:100%;
   display:flex; align-items:center; justify-content:center;
-  margin:10px auto 4px;
+  margin:6px auto 4px;
 }
 .hub-rings{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none}
 .hub-ring{position:absolute; border-radius:50%; border:1px solid var(--hud-border)}
@@ -644,6 +649,9 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 .badge-aberta{background:color-mix(in srgb, var(--alto) 18%, transparent); color:var(--alto)}
 .badge-em_investigacao{background:color-mix(in srgb, var(--medio) 18%, transparent); color:var(--medio)}
 .badge-resolvida{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.badge-pendente{background:color-mix(in srgb, var(--medio) 18%, transparent); color:var(--medio)}
+.badge-aprovada{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.badge-reprovada{background:color-mix(in srgb, var(--critico) 18%, transparent); color:var(--critico)}
 
 .lista-wrap{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:8px 20px}
 

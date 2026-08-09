@@ -427,6 +427,31 @@ class RecebimentoPedido(Base):
     criado_em = Column(DateTime, default=datetime.utcnow)
 
 
+class BaixaOperacional(Base):
+    """Baixa operacional (Avaria, Vencimento, Descarte, Degustação, etc.)
+    importada do sistema construído no Lovable - ver
+    backend/app/baixas_operacionais.py pra entender o mapeamento e o
+    casamento automático com Divergencia. Guarda QUALQUER status_fluxo
+    (Pendente/Aprovada/Reprovada) pra alimentar a tela de Relatório de
+    Baixa - só é usada pra resolver uma divergência quando Aprovada."""
+    __tablename__ = "baixas_operacionais"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    origem_id = Column(String, unique=True, index=True, nullable=True)  # id (uuid) da linha no Lovable - chave do upsert
+    sku = Column(String, index=True)
+    almoxarifado = Column(String, index=True, nullable=True)  # já traduzido pro código do Atlas (Almox_...)
+    almoxarifado_origem = Column(String, nullable=True)  # id_local bruto do Lovable (Alm_...), guardado pra auditoria
+    motivo_baixa_bruto = Column(String, nullable=True)  # rótulo legível (Avaria, Vencimento, ...)
+    hipotese_aplicada = Column(String, nullable=True)  # código de Hipotese correspondente
+    quantidade = Column(Float, nullable=True)
+    valor_total = Column(Float, nullable=True)
+    status_fluxo = Column(String, index=True, nullable=True)  # PENDENTE | APROVADA | REPROVADA
+    solicitante_nome = Column(String, nullable=True)
+    data_baixa = Column(Date, index=True, nullable=True)
+    payload_bruto = Column(JSON, nullable=True)  # linha crua recebida do Lovable, pra depuração
+    divergencia_vinculada_id = Column(Integer, ForeignKey("divergencias.id"), nullable=True, index=True)
+    recebido_em = Column(DateTime, default=datetime.utcnow)
+
+
 class CasoMLFeedback(Base):
     """Casos confirmados que alimentam o retreino do modelo. Persistido
     no MESMO banco do resto do app (Postgres/SQLite via DATABASE_URL) -

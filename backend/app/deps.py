@@ -1,3 +1,4 @@
+import os
 from fastapi import Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,24 @@ def obter_usuario_atual(authorization: str | None = Header(None), db: Session = 
     if not usuario or not usuario.ativo:
         raise HTTPException(401, "Usuário não encontrado ou desativado.")
     return usuario
+
+
+def verificar_chave_integracao(x_atlas_chave: str | None = Header(None, alias="X-Atlas-Chave")):
+    """Autenticação por chave fixa pra endpoints chamados por SISTEMAS
+    externos (ex: webhook do Supabase do Lovable), não por uma pessoa
+    logada - ver integracoes_router.py. Defina ATLAS_INTEGRACAO_CHAVE no
+    ambiente do servidor (Render) e configure o mesmo valor no header
+    'X-Atlas-Chave' do lado de quem chama (ex: no cabeçalho customizado do
+    Database Webhook do Supabase)."""
+    chave_esperada = os.environ.get("ATLAS_INTEGRACAO_CHAVE")
+    if not chave_esperada:
+        raise HTTPException(
+            500,
+            "ATLAS_INTEGRACAO_CHAVE não configurada no servidor - defina essa variável de "
+            "ambiente antes de habilitar integrações externas (ver integracoes_router.py).",
+        )
+    if not x_atlas_chave or x_atlas_chave != chave_esperada:
+        raise HTTPException(401, "Chave de integração inválida ou ausente (header X-Atlas-Chave).")
 
 
 def requer_papel(*papeis_permitidos: str):

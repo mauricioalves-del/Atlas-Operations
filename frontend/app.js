@@ -493,6 +493,7 @@ function mostrarView(nome) {
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
+  if (nome === "relatorio-baixa") carregarRelatorioBaixa();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
   if (nome === "auditoria") carregarAuditoria();
@@ -3445,6 +3446,103 @@ async function carregarAuditoria(pagina = 1) {
   if (btnProx) btnProx.addEventListener("click", () => carregarAuditoria(resposta.pagina + 1));
 }
 
+// ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
+function badgeStatusBaixa(statusFluxo) {
+  const cls = "badge-" + (statusFluxo || "").toLowerCase();
+  const texto = { PENDENTE: "Pendente", APROVADA: "Aprovada", REPROVADA: "Reprovada" }[statusFluxo] || statusFluxo || "—";
+  return `<span class="badge ${cls}">${texto}</span>`;
+}
+
+function _preencherFiltroRelatorioBaixa(idSelect, valores) {
+  const sel = document.getElementById(idSelect);
+  if (sel.options.length > 1) return; // já populado - evita perder opções quando a lista já está filtrada
+  const unicos = [...new Set(valores.filter(Boolean))].sort();
+  unicos.forEach((v) => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = idSelect === "rb-filtro-hipotese" ? rotulo(v) : v;
+    sel.appendChild(opt);
+  });
+}
+
+async function carregarRelatorioBaixa() {
+  const params = new URLSearchParams();
+  const status = document.getElementById("rb-filtro-status").value;
+  const almox = document.getElementById("rb-filtro-almoxarifado").value;
+  const hipotese = document.getElementById("rb-filtro-hipotese").value;
+  if (status) params.set("status_fluxo", status);
+  if (almox) params.set("almoxarifado", almox);
+  if (hipotese) params.set("hipotese_aplicada", hipotese);
+  const qs = params.toString();
+
+  let dados;
+  try {
+    dados = await apiFetch(`${API}/baixas-operacionais${qs ? "?" + qs : ""}`).then((r) => r.json());
+  } catch (erro) {
+    console.error("Atlas: falha ao carregar relatório de baixa:", erro);
+    document.getElementById("rb-kpi-row").innerHTML = `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-label" style="color:var(--critico)">Não consegui carregar</div></div>`;
+    return;
+  }
+  const resumo = dados.resumo || {};
+  const itens = dados.itens || [];
+
+  document.getElementById("rb-kpi-row").innerHTML = [
+    { label: "Total de baixas", value: resumo.total ?? 0 },
+    { label: "Pendentes", value: resumo.pendentes ?? 0, cor: "var(--medio)" },
+    { label: "Aprovadas", value: resumo.aprovadas ?? 0, cor: "var(--ok)" },
+    { label: "Reprovadas", value: resumo.reprovadas ?? 0, cor: "var(--critico)" },
+    { label: "Resolveram divergência sozinhas", value: resumo.resolvidas_automaticamente ?? 0 },
+    { label: "Aguardando divergência", value: resumo.aguardando_divergencia ?? 0 },
+    { label: "Valor total", value: (resumo.valor_total ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  _preencherFiltroRelatorioBaixa("rb-filtro-almoxarifado", itens.map((i) => i.almoxarifado));
+  _preencherFiltroRelatorioBaixa("rb-filtro-hipotese", itens.map((i) => i.hipotese_aplicada));
+
+  document.querySelector("#tabela-relatorio-baixa tbody").innerHTML = itens
+    .map(
+      (b) => `<tr>
+        <td>${b.sku || "—"}</td><td>${b.almoxarifado || "—"}</td><td>${b.motivo || "—"}</td>
+        <td>${rotulo(b.hipotese_aplicada)}</td><td>${b.quantidade ?? "—"}</td>
+        <td>${b.valor_total != null ? b.valor_total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}</td>
+        <td>${badgeStatusBaixa(b.status_fluxo)}</td><td>${b.solicitante_nome || "—"}</td>
+        <td>${b.data_baixa ? formatarDataCurta(b.data_baixa) : "—"}</td>
+        <td>${b.divergencia_vinculada_id ? "#" + b.divergencia_vinculada_id : "—"}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma baixa importada ainda.</td></tr>`;
+}
+
+document.getElementById("rb-filtro-status").addEventListener("change", carregarRelatorioBaixa);
+document.getElementById("rb-filtro-almoxarifado").addEventListener("change", carregarRelatorioBaixa);
+document.getElementById("rb-filtro-hipotese").addEventListener("change", carregarRelatorioBaixa);
+
+document.getElementById("btn-sincronizar-lovable").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-sincronizar-lovable");
+  btn.disabled = true;
+  btn.textContent = "Sincronizando...";
+  try {
+    const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || "Não foi possível sincronizar com o Lovable.");
+    } else {
+      await carregarRelatorioBaixa();
+      alert(
+        `Sincronização concluída: ${data.total_na_origem} baixa(s) na origem do Lovable, ` +
+          `${data.contagem?.resolvida_automaticamente || 0} resolveram divergências automaticamente.`
+      );
+    }
+  } catch (erro) {
+    alert("Falha ao sincronizar com o Lovable: " + erro.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔄 Sincronizar agora";
+  }
+});
+
 // ---------- hub orbital (tela inicial) ----------
 function renderizarHub() {
   const container = document.getElementById("hub-nodes");
@@ -3460,8 +3558,8 @@ function renderizarHub() {
   // fração menor pra não estourar a largura da tela.
   const wrapEl = container.closest(".hub-wrap") || container.parentElement;
   const tamanhoBase = Math.min(wrapEl.clientWidth || 0, wrapEl.clientHeight || 0) || 640;
-  const fracaoExpandida = itens.length > 9 ? 0.62 : 0.56;
-  const fracaoCompacta = itens.length > 9 ? 0.44 : 0.4;
+  const fracaoExpandida = itens.length > 9 ? 0.52 : 0.5;
+  const fracaoCompacta = itens.length > 9 ? 0.42 : 0.38;
   const raio = tamanhoBase * (tamanhoBase < 480 ? fracaoCompacta : fracaoExpandida);
   const anguloInicial = -90; // primeiro nó no topo
   container.innerHTML = "";
@@ -3521,6 +3619,7 @@ const ATLAS_APRESENTACAO_MODULOS = {
   cadastros: { frase: "Bases de dados, organizadas sob meu comando.", resumo: "Cadastro e manutenção das informações base do sistema." },
   auditoria: { frase: "Cada ação, registrada. Nada se esconde de mim.", resumo: "Histórico completo de ações e alterações realizadas no sistema." },
   usuarios: { frase: "Identifiquei os operadores. Acesso sob controle.", resumo: "Gestão de contas, permissões e acessos dos usuários do sistema." },
+  "relatorio-baixa": { frase: "Baixas rastreadas. Nenhum descarte passa sem registro.", resumo: "Baixas operacionais importadas do Lovable e seu cruzamento com divergências." },
 };
 
 function _atlasModulosJaApresentados() {
@@ -3591,6 +3690,7 @@ const HUB_PALAVRAS_CHAVE_POR_VIEW = {
   cadastros: ["cadastros", "cadastro"],
   auditoria: ["auditoria"],
   usuarios: ["usuários", "usuarios"],
+  "relatorio-baixa": ["relatório de baixa", "relatorio de baixa", "relatório de baixas", "baixas operacionais", "baixa operacional"],
 };
 
 function _normalizarTextoVoz(txt) {
@@ -3636,50 +3736,114 @@ function _acharViewPorVoz(transcricao) {
     return;
   }
 
-  const reconhecimento = new Reconhecimento();
-  reconhecimento.lang = "pt-BR";
-  reconhecimento.continuous = false;
-  reconhecimento.interimResults = false;
+  // Modo "sempre ouvindo": em vez de precisar clicar no microfone a cada
+  // comando (push-to-talk), o botão liga/desliga uma escuta CONTÍNUA que
+  // fica ativa em qualquer tela do Atlas e só age quando ouve a palavra de
+  // ativação "Atlas" antes do nome do módulo (evita disparar sozinho numa
+  // conversa qualquer perto do computador). A preferência fica salva -
+  // numa próxima visita, se o navegador já tiver concedido permissão de
+  // microfone, a escuta liga sozinha de novo, sem precisar clicar.
+  const CHAVE_ESCUTA_CONTINUA = "atlas_voz_continua_ativa";
+  let escutaContinuaDesejada = localStorage.getItem(CHAVE_ESCUTA_CONTINUA) === "1";
+  let reconhecimento = null;
+  let paradaIntencional = false;
+  let reiniciarTimer = null;
 
-  let escutando = false;
+  function _criarReconhecimento() {
+    const r = new Reconhecimento();
+    r.lang = "pt-BR";
+    r.continuous = true;
+    r.interimResults = false;
 
-  btn.addEventListener("click", () => {
-    if (escutando) {
-      reconhecimento.stop();
-      return;
-    }
+    r.addEventListener("start", () => {
+      btn.classList.add("escutando");
+      btn.title = 'Sempre ouvindo - diga "Atlas, [nome do módulo]" (clique pra desligar)';
+      status.textContent = '🎤 Sempre ouvindo... diga "Atlas" e o nome do módulo, em qualquer tela.';
+    });
+
+    r.addEventListener("end", () => {
+      btn.classList.remove("escutando");
+      // o navegador corta a escuta contínua de tempos em tempos (silêncio
+      // prolongado, limite interno, etc) - reinicia sozinho pra manter
+      // "sempre ouvindo" sem precisar clicar de novo, a menos que o
+      // desligamento tenha sido intencional (clique no botão) ou a
+      // permissão de microfone tenha sido negada.
+      if (escutaContinuaDesejada && !paradaIntencional) {
+        clearTimeout(reiniciarTimer);
+        reiniciarTimer = setTimeout(_iniciar, 400);
+      }
+      paradaIntencional = false;
+    });
+
+    r.addEventListener("result", (ev) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const resultado = ev.results[i];
+        if (!resultado.isFinal) continue;
+        const transcricao = resultado[0].transcript;
+        const alvoNormalizado = _normalizarTextoVoz(transcricao);
+        const ouviuPalavraDeAtivacao = _removerPalavraDeAtivacao(alvoNormalizado) !== alvoNormalizado;
+        if (!ouviuPalavraDeAtivacao) continue; // ambiente/conversa normal, sem "Atlas" - ignora
+
+        const view = _acharViewPorVoz(transcricao);
+        if (view) {
+          status.textContent = `✅ "${transcricao}" → abrindo ${document.querySelector(`.rail-item[data-view="${view}"] .rail-label`)?.textContent || view}`;
+          setTimeout(() => mostrarView(view), 400);
+        } else {
+          status.textContent = `❓ Ouvi "Atlas", mas não reconheci "${transcricao}" como um módulo.`;
+        }
+        _registrarComandoDeVozNoBanco(transcricao, view);
+      }
+    });
+
+    r.addEventListener("error", (ev) => {
+      if (ev.error === "not-allowed") {
+        escutaContinuaDesejada = false;
+        localStorage.removeItem(CHAVE_ESCUTA_CONTINUA);
+        btn.classList.remove("escutando");
+        status.textContent = "⚠️ Permissão de microfone negada - autorize o microfone nas configurações do navegador.";
+      } else if (ev.error === "no-speech" || ev.error === "aborted") {
+        // silêncio prolongado é normal em modo contínuo - o "end" que
+        // segue este erro já cuida de reiniciar sozinho.
+      } else {
+        status.textContent = "⚠️ Erro no reconhecimento de voz: " + ev.error;
+      }
+    });
+
+    return r;
+  }
+
+  function _iniciar() {
+    reconhecimento = _criarReconhecimento();
     try {
       reconhecimento.start();
     } catch (e) {
-      console.error("Atlas: falha ao iniciar reconhecimento de voz", e);
+      console.error("Atlas: falha ao iniciar reconhecimento de voz contínuo", e);
     }
-  });
+  }
 
-  reconhecimento.addEventListener("start", () => {
-    escutando = true;
-    btn.classList.add("escutando");
-    status.textContent = "🎤 Ouvindo... diga o nome do módulo";
-  });
-
-  reconhecimento.addEventListener("end", () => {
-    escutando = false;
+  function _parar() {
+    paradaIntencional = true;
+    clearTimeout(reiniciarTimer);
+    if (reconhecimento) reconhecimento.stop();
     btn.classList.remove("escutando");
-  });
+    btn.title = 'Clique para ligar a escuta contínua ("Atlas, [módulo]")';
+    status.textContent = "";
+  }
 
-  reconhecimento.addEventListener("result", (ev) => {
-    const transcricao = ev.results[0][0].transcript;
-    const view = _acharViewPorVoz(transcricao);
-    if (view) {
-      status.textContent = `✅ "${transcricao}" → abrindo ${document.querySelector(`.rail-item[data-view="${view}"] .rail-label`)?.textContent || view}`;
-      setTimeout(() => mostrarView(view), 500);
+  btn.addEventListener("click", () => {
+    escutaContinuaDesejada = !escutaContinuaDesejada;
+    if (escutaContinuaDesejada) {
+      localStorage.setItem(CHAVE_ESCUTA_CONTINUA, "1");
+      _iniciar();
     } else {
-      status.textContent = `❓ Não reconheci "${transcricao}" como um módulo do Atlas.`;
+      localStorage.removeItem(CHAVE_ESCUTA_CONTINUA);
+      _parar();
     }
-    _registrarComandoDeVozNoBanco(transcricao, view);
   });
 
-  // grava no banco (auditoria) todo comando de voz dado no hub - reconhecido
-  // ou não - pra ter rastreabilidade de como o pessoal navega por voz.
+  // grava no banco (auditoria) todo comando de voz reconhecido pela
+  // palavra de ativação "Atlas" - reconhecido ou não - pra ter
+  // rastreabilidade de como o pessoal navega por voz.
   async function _registrarComandoDeVozNoBanco(transcricao, viewDestino) {
     try {
       await apiFetch(`${API}/voz/comando`, {
@@ -3692,17 +3856,10 @@ function _acharViewPorVoz(transcricao) {
     }
   }
 
-  reconhecimento.addEventListener("error", (ev) => {
-    escutando = false;
-    btn.classList.remove("escutando");
-    if (ev.error === "not-allowed") {
-      status.textContent = "⚠️ Permissão de microfone negada - autorize o microfone nas configurações do navegador.";
-    } else if (ev.error === "no-speech") {
-      status.textContent = "Não detectei nenhuma fala. Tenta de novo.";
-    } else {
-      status.textContent = "⚠️ Erro no reconhecimento de voz: " + ev.error;
-    }
-  });
+  // se numa visita anterior a escuta contínua já tinha sido ligada (mesma
+  // origem), a permissão de microfone já foi concedida - liga sozinho de
+  // novo, sem precisar clicar no botão.
+  if (escutaContinuaDesejada) _iniciar();
 })();
 
 // ---------- inicialização ----------
