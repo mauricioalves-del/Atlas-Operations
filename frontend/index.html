@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=56">
+<link rel="stylesheet" href="style.css?v=57">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -323,28 +323,30 @@
 
       <div class="kpi-row" id="mp-kpi-row"></div>
 
+      <div class="panel" id="mp-panel-principal" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 10%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Evolução Mensal (MoM) — Análise Principal</h2>
+          <span class="hint" style="margin:0">Colunas: quantidade de baixas aplicadas por mês · Linha em destaque: curva de evolução (valor acumulado do processo)</span>
+        </div>
+        <p class="panel-sub">Clique numa coluna ou num ponto da linha pra ver os produtos daquele mês</p>
+        <div style="height:340px"><canvas id="mp-chart-evolucao-mensal"></canvas></div>
+      </div>
+
+      <div class="panel" id="mp-panel-fluxo-inventario" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #4caf50 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Fluxo de Inventário — Entradas x Saídas x Resultado (Todos os Inventários)</h2>
+          <span class="hint" style="margin:0">Total de Entradas − Total de Saídas do mês = Resultado Total do Mês, somando todos os almoxarifados/inventários</span>
+        </div>
+        <p class="panel-sub">Barras: entradas (sobra no inventário) e saídas (falta no inventário) em R$ · Linha: resultado do mês. Clique numa barra ou num ponto pra ver os itens de fechamento daquele mês.</p>
+        <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
+      </div>
+
       <div class="grid-2">
         <div class="panel">
           <h2>Status Operacionais Usados</h2>
           <p class="panel-sub">Clique numa fatia pra ver as baixas daquele status</p>
           <canvas id="mp-chart-status-pizza"></canvas>
         </div>
-        <div class="panel">
-          <h2>Mapeamento de Passivos com o Inventário</h2>
-          <p class="panel-sub">De onde vem o casamento de cada baixa aprovada — inventário mensal, movimentação diária, ou ainda sem decisão</p>
-          <canvas id="mp-chart-mapeamento-origem"></canvas>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title-row">
-          <h2>Evolução Mensal (MoM)</h2>
-          <span class="hint" style="margin:0">Colunas: valor de baixas aplicadas · Linha: taxa de resolução automática de divergência</span>
-        </div>
-        <canvas id="mp-chart-evolucao-mensal"></canvas>
-      </div>
-
-      <div class="grid-2">
         <div class="panel">
           <h2>Top 10 Passivos Mais Recorrentes</h2>
           <p class="panel-sub">Por quantidade de baixas aprovadas — clique numa linha</p>
@@ -353,14 +355,15 @@
             <tbody></tbody>
           </table>
         </div>
-        <div class="panel">
-          <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
-          <p class="panel-sub">Por valor total baixado — clique numa linha</p>
-          <table class="tabela" id="mp-tabela-impacto-financeiro">
-            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
+        <p class="panel-sub">Por valor total baixado — clique numa linha</p>
+        <table class="tabela" id="mp-tabela-impacto-financeiro">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
@@ -1197,6 +1200,22 @@
   </div>
 </div>
 
+<div id="modal-fluxo-inventario-itens-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(1000px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-fluxo-inventario-itens-titulo">Itens do fluxo de inventário</h2>
+      <button id="btn-fechar-modal-fluxo-inventario-itens" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
+      <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Fechamento</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div id="modal-painel-periodo-overlay" class="modal-overlay hidden">
   <div class="modal-card" style="width:min(920px, 94vw)">
     <div class="modal-header">
@@ -1213,6 +1232,6 @@
   </div>
 </div>
 
-<script src="app.js?v=56"></script>
+<script src="app.js?v=57"></script>
 </body>
 </html>

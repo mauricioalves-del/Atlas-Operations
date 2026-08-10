@@ -243,7 +243,10 @@ def dashboard_passivos_evolucao_mensal(usuario: models.Usuario = Depends(obter_u
     Pendente/Reprovada não é passivo real ainda/nunca vai ser), mês a mês
     por data_baixa: valor total (coluna) e taxa de resolução automática -
     % que casou com uma divergência, seja de inventário mensal seja de
-    movimentação (linha) - a "curva de evolução do processo" pedida."""
+    movimentação (linha) - a "curva de evolução do processo" pedida.
+    Também traz, por mês, o resultado do fluxo de inventário (Entradas -
+    Saídas de TODOS os inventários, ver _fluxo_inventario_por_mes) somado
+    ao lado do mapeamento de passivos, pra ficar tudo na mesma visão MoM."""
     aprovadas = db.query(models.BaixaOperacional).filter(models.BaixaOperacional.status_fluxo == "APROVADA").all()
     por_mes = defaultdict(lambda: {"quantidade": 0, "valor": 0.0, "resolvidas": 0})
     for b in aprovadas:
@@ -255,12 +258,146 @@ def dashboard_passivos_evolucao_mensal(usuario: models.Usuario = Depends(obter_u
         if b.divergencia_vinculada_id:
             por_mes[mes]["resolvidas"] += 1
 
+    fluxo_por_mes = _fluxo_inventario_por_mes(db)
+    todos_meses = sorted(set(por_mes.keys()) | set(fluxo_por_mes.keys()))
+
     resultado = []
-    for mes in sorted(por_mes.keys()):
+    for mes in todos_meses:
         v = por_mes[mes]
         taxa = round(v["resolvidas"] / v["quantidade"] * 100, 1) if v["quantidade"] else None
-        resultado.append({"mes": mes, "quantidade": v["quantidade"], "valor": round(v["valor"], 2), "taxa_resolucao_automatica_pct": taxa})
+        fluxo = fluxo_por_mes.get(mes, {"entradas_valor": 0.0, "saidas_valor": 0.0, "resultado_valor": 0.0})
+        resultado.append({
+            "mes": mes, "quantidade": v["quantidade"], "valor": round(v["valor"], 2), "taxa_resolucao_automatica_pct": taxa,
+            "resultado_inventario_mes": round(fluxo["resultado_valor"], 2),
+            "entradas_inventario_mes": round(fluxo["entradas_valor"], 2),
+            "saidas_inventario_mes": round(fluxo["saidas_valor"], 2),
+        })
     return resultado
+
+
+# ---------------------------------------------------------------------------
+# Fluxo de Inventário (Entradas x Saídas x Resultado) - "Mapeamento de
+# grana de TODOS os inventários": Total de Entradas - Total de Saídas do
+# mês = Resultado Total do Mês. Base: ItemFechamento (cada linha de cada
+# fechamento de inventário, de qualquer almoxarifado), comparando
+# qtd_contagem (físico) x qtd_sistema (esperado). Contagem > sistema =
+# sobra encontrada no inventário = Entrada. Contagem < sistema = falta =
+# Saída. valor_estimado de cada item já vem em R$ (ver fechamento_router).
+# ---------------------------------------------------------------------------
+
+def _direcao_item_fechamento(item) -> str | None:
+    if not item.divergencia_qtd:
+        return None
+    return "entrada" if item.divergencia_qtd > 0 else "saida"
+
+
+def _itens_fechamento_com_fechamento(db: Session, mes: str | None = None, direcao: str | None = None) -> list:
+    """[(ItemFechamento, FechamentoInventario), ...] só dos itens
+    divergentes (sem divergência não tem entrada/saída - contagem bateu
+    com o sistema), com o mês (YYYY-MM) do fechamento já resolvido."""
+    linhas = (
+        db.query(models.ItemFechamento, models.FechamentoInventario)
+        .join(models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id)
+        .filter(models.ItemFechamento.divergente.is_(True))
+        .all()
+    )
+    resultado = []
+    for item, fechamento in linhas:
+        if not fechamento.data_fechamento or not item.divergencia_qtd:
+            continue
+        mes_item = str(fechamento.data_fechamento)[:7]
+        if mes and mes_item != mes:
+            continue
+        direcao_item = _direcao_item_fechamento(item)
+        if not direcao_item:
+            continue
+        if direcao and direcao_item != direcao:
+            continue
+        resultado.append((item, fechamento, mes_item, direcao_item))
+    return resultado
+
+
+def _fluxo_inventario_por_mes(db: Session) -> dict:
+    """{mes: {entradas_valor, saidas_valor, resultado_valor, entradas_qtd, saidas_qtd}}
+    somando TODOS os inventários (todos os almoxarifados juntos)."""
+    linhas = _itens_fechamento_com_fechamento(db)
+    por_mes = defaultdict(lambda: {"entradas_valor": 0.0, "saidas_valor": 0.0, "entradas_qtd": 0, "saidas_qtd": 0})
+    for item, _fechamento, mes_item, direcao_item in linhas:
+        valor = abs(item.valor_estimado or 0)
+        if direcao_item == "entrada":
+            por_mes[mes_item]["entradas_valor"] += valor
+            por_mes[mes_item]["entradas_qtd"] += 1
+        else:
+            por_mes[mes_item]["saidas_valor"] += valor
+            por_mes[mes_item]["saidas_qtd"] += 1
+    for v in por_mes.values():
+        v["resultado_valor"] = v["entradas_valor"] - v["saidas_valor"]
+    return dict(por_mes)
+
+
+@router.get("/dashboard/fluxo-inventario-mensal")
+def dashboard_fluxo_inventario_mensal(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Total de Entradas - Total de Saídas do mês = Resultado Total do Mês,
+    mês a mês, somando TODOS os inventários (todos os almoxarifados)."""
+    fluxo_por_mes = _fluxo_inventario_por_mes(db)
+    resultado = []
+    for mes in sorted(fluxo_por_mes.keys()):
+        v = fluxo_por_mes[mes]
+        resultado.append({
+            "mes": mes,
+            "entradas_valor": round(v["entradas_valor"], 2), "saidas_valor": round(v["saidas_valor"], 2),
+            "resultado_valor": round(v["entradas_valor"] - v["saidas_valor"], 2),
+            "entradas_qtd": v["entradas_qtd"], "saidas_qtd": v["saidas_qtd"],
+        })
+    return resultado
+
+
+@router.get("/dashboard/fluxo-inventario-totais")
+def dashboard_fluxo_inventario_totais(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """KPIs agregados de TODOS os meses/inventários: Entradas, Saídas e
+    Resultado Total - "Mapeamento de grana de todos os inventários"."""
+    fluxo_por_mes = _fluxo_inventario_por_mes(db)
+    entradas = round(sum(v["entradas_valor"] for v in fluxo_por_mes.values()), 2)
+    saidas = round(sum(v["saidas_valor"] for v in fluxo_por_mes.values()), 2)
+    return {
+        "entradas_valor": entradas, "saidas_valor": saidas, "resultado_valor": round(entradas - saidas, 2),
+        "entradas_qtd": sum(v["entradas_qtd"] for v in fluxo_por_mes.values()),
+        "saidas_qtd": sum(v["saidas_qtd"] for v in fluxo_por_mes.values()),
+        "meses_com_fechamento": len(fluxo_por_mes),
+    }
+
+
+@router.get("/dashboard/itens-fluxo-inventario")
+def dashboard_itens_fluxo_inventario(
+    mes: str | None = Query(None, description="YYYY-MM"),
+    direcao: str | None = Query(None, description="entrada | saida"),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Drill-down do painel de Fluxo de Inventário e da série 'Resultado do
+    Fluxo de Inventário' no MoM - lista os itens de fechamento (SKU x
+    almoxarifado) que geraram entrada/saída no mês/direção clicados."""
+    linhas = _itens_fechamento_com_fechamento(db, mes=mes, direcao=direcao)
+    skus = {item.sku for item, _f, _m, _d in linhas if item.sku}
+    descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus)).all()}
+
+    itens = [
+        {
+            "id": item.id, "sku": item.sku, "descricao_produto": item.descricao_produto or descricoes.get(item.sku),
+            "almoxarifado": item.almoxarifado, "categoria_produto": item.categoria_produto,
+            "qtd_sistema": item.qtd_sistema, "qtd_contagem": item.qtd_contagem, "divergencia_qtd": item.divergencia_qtd,
+            "valor_estimado": abs(item.valor_estimado or 0), "direcao": direcao_item,
+            "data_fechamento": str(fechamento.data_fechamento) if fechamento.data_fechamento else None,
+            "fechamento_id": fechamento.id,
+        }
+        for item, fechamento, _mes_item, direcao_item in linhas
+    ]
+    itens.sort(key=lambda x: abs(x["valor_estimado"] or 0), reverse=True)
+    return {
+        "itens": itens, "total": len(itens),
+        "entradas_valor": round(sum(i["valor_estimado"] for i in itens if i["direcao"] == "entrada"), 2),
+        "saidas_valor": round(sum(i["valor_estimado"] for i in itens if i["direcao"] == "saida"), 2),
+    }
 
 
 def _top_10_por_sku(baixas: list, db: Session, chave_ordenacao) -> list:
