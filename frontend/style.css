@@ -454,8 +454,11 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 }
 .hub-mic-btn svg{width:16px; height:16px}
 .hub-mic-btn:hover{border-color:var(--accent); box-shadow:0 0 18px rgba(111,163,168,0.75)}
-.hub-mic-btn.escutando{background:var(--critico); border-color:var(--critico); color:#fff; animation:hubMicPulso 1s ease-in-out infinite}
-@keyframes hubMicPulso{ 0%,100%{box-shadow:0 0 0 0 rgba(198,40,40,0.5)} 50%{box-shadow:0 0 0 10px rgba(198,40,40,0)} }
+/* escuta contínua agora é o estado padrão (quase constante), não mais
+   uma ação pontual - por isso o pulso calmo em vez do vermelho urgente
+   usado antes só pra um push-to-talk breve */
+.hub-mic-btn.escutando{background:var(--teal); border-color:var(--teal); color:#fff; animation:hubMicPulso 2.2s ease-in-out infinite}
+@keyframes hubMicPulso{ 0%,100%{box-shadow:0 0 0 0 rgba(111,163,168,0.45)} 50%{box-shadow:0 0 0 8px rgba(111,163,168,0)} }
 
 .hub-nodes{position:absolute; inset:0}
 .hub-node{

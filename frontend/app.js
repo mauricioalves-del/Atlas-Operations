@@ -43,6 +43,7 @@ function mostrarApp() {
   aplicarPermissoesNaUI();
   atualizarHipotesesCache();
   mostrarView("hub");
+  window.ativarEscutaAtlasSeNecessario();
 }
 
 function aplicarPermissoesNaUI() {
@@ -3552,27 +3553,132 @@ function renderizarHub() {
     .filter((b) => b.dataset.view !== "hub" && !b.classList.contains("hidden"))
     .map((b) => ({ view: b.dataset.view, label: b.querySelector(".rail-label").textContent }));
 
-  // raio proporcional ao tamanho real renderizado do hub - agora ALÉM do
-  // anel externo (94% de diâmetro = 47% de raio), pra dar a sensação de
-  // módulos orbitando no espaço, fora do núcleo. Em telas pequenas usa uma
-  // fração menor pra não estourar a largura da tela.
+  if (!itens.length) { container.innerHTML = ""; return; }
+
   const wrapEl = container.closest(".hub-wrap") || container.parentElement;
-  const tamanhoBase = Math.min(wrapEl.clientWidth || 0, wrapEl.clientHeight || 0) || 640;
+  const wrapRect = wrapEl.getBoundingClientRect();
+  const centroX = wrapRect.left + wrapRect.width / 2;
+  const centroY = wrapRect.top + wrapRect.height / 2;
+
+  // ---- geometria real da tela, não estimativa de CSS ----
+  // Em vez de confiar em %/vmin do CSS pra adivinhar quanto espaço existe
+  // (o que já causou nós cortados em monitores largos/baixos e rótulos
+  // sobrepostos em monitores menores), medimos a posição REAL do centro
+  // do hub e as bordas REAIS da viewport e dos textos vizinhos (status de
+  // voz / dica), e calculamos um raio máximo que NUNCA pode ser violado -
+  // isso garante os módulos sempre dentro da área visível, em qualquer
+  // monitor em que o Atlas for aberto.
+  const margem = 14;
+  const statusEl = document.getElementById("hub-voice-status");
+  const hintEl = document.querySelector("#view-hub .hint");
+  let limiteInferior = window.innerHeight - margem;
+  [statusEl, hintEl].forEach((el) => {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top > 0 && r.top < limiteInferior) limiteInferior = r.top;
+  });
+
+  const espacoEsquerda = centroX - margem;
+  const espacoDireita = window.innerWidth - margem - centroX;
+  const espacoAcima = centroY - margem;
+  const espacoAbaixo = limiteInferior - margem - centroY;
+
+  // "metade" de segurança de um nó (não é só um ponto - tem largura e
+  // altura reais que também precisam caber dentro da área calculada acima)
+  const METADE_LARGURA_MIN = 32; // metade da largura mínima aceitável de um nó (64px)
+  const METADE_ALTURA_NODE = 50; // cobre ícone + até ~3 linhas de rótulo + padding
+
+  const raioMaxEsquerda = espacoEsquerda - METADE_LARGURA_MIN;
+  const raioMaxDireita = espacoDireita - METADE_LARGURA_MIN;
+  const raioMaxAcima = espacoAcima - METADE_ALTURA_NODE;
+  const raioMaxAbaixo = espacoAbaixo - METADE_ALTURA_NODE;
+
+  // raio "ideal" pro visual pretendido (módulos flutuando fora do anel
+  // externo) - só é usado se a tela tiver espaço de sobra pra isso
+  const tamanhoBase = Math.min(wrapRect.width, wrapRect.height) || 320;
   const fracaoExpandida = itens.length > 9 ? 0.52 : 0.5;
-  const fracaoCompacta = itens.length > 9 ? 0.42 : 0.38;
-  const raio = tamanhoBase * (tamanhoBase < 480 ? fracaoCompacta : fracaoExpandida);
-  const anguloInicial = -90; // primeiro nó no topo
+  const raioIdeal = (tamanhoBase / 2) * (1 + fracaoExpandida);
+  const RAIO_MINIMO_ALVO = 150; // espalhamento mínimo desejado, quando cabe
+
+  // teto por direção - cada lado da tela tem seu próprio limite real (a
+  // barra lateral come espaço à esquerda, o texto de voz/dica come espaço
+  // abaixo etc.) então o alvo de cada direção nunca passa do que é seguro
+  // NAQUELA direção especificamente, mas também não passa do "ideal" só
+  // porque sobra espaço - isso evita um formato espichado sem necessidade
+  // em monitores muito largos.
+  // nunca deixa o raio-alvo ficar menor que o próprio núcleo "buraco
+  // negro" (senão os nós flutuantes ficam por baixo do brilho do núcleo,
+  // pouco legíveis) - mas isso ainda respeita o teto de segurança acima
+  const hubCenterEl = wrapEl.querySelector(".hub-center");
+  const raioNucleo = hubCenterEl
+    ? Math.max(hubCenterEl.getBoundingClientRect().width, hubCenterEl.getBoundingClientRect().height) / 2
+    : 0;
+  const raioAlvo = (limiteDaDirecao) => Math.min(limiteDaDirecao, Math.max(raioIdeal, RAIO_MINIMO_ALVO, raioNucleo + 10));
+  const raioDir = Math.max(60, raioAlvo(raioMaxDireita));
+  const raioEsq = Math.max(60, raioAlvo(raioMaxEsquerda));
+  const raioBaixo = Math.max(60, raioAlvo(raioMaxAbaixo));
+  const raioCima = Math.max(60, raioAlvo(raioMaxAcima));
+
+  const anguloInicial = -Math.PI / 2; // primeiro nó no topo
   container.innerHTML = "";
 
   // paleta de cores da marca ciclada nos nós - cada módulo com uma cor,
   // visual mais tecnológico/vibrante do que um único tom uniforme
   const CORES_NODOS = ["--accent", "--info", "--teal", "--support", "--critico", "--medio"];
 
+  // ---- distribuição por comprimento de arco real, não por ângulo ----
+  // Espaçar os nós por ângulo bruto ao redor de uma curva assimétrica (o
+  // caso comum, já que o espaço disponível não é igual nos 4 lados) faz
+  // com que eles se espremam bem nos pontos onde a curva "anda pouco por
+  // grau" - foi exatamente aí que a colisão de rótulos apareceu nos
+  // testes. Por isso amostramos a curva e distribuímos os nós por FRAÇÃO
+  // REAL DE DISTÂNCIA percorrida, o que os mantém uniformemente espaçados
+  // de verdade, seja qual for o formato resultante da tela.
+  function raioNaDirecao(ang) {
+    const cx = Math.cos(ang);
+    const sy = Math.sin(ang);
+    return { rx: cx >= 0 ? raioDir : raioEsq, ry: sy >= 0 ? raioBaixo : raioCima };
+  }
+  const N_AMOSTRAS = 480;
+  const amostras = [];
+  for (let k = 0; k <= N_AMOSTRAS; k++) {
+    const ang = anguloInicial + (k / N_AMOSTRAS) * 2 * Math.PI;
+    const { rx, ry } = raioNaDirecao(ang);
+    amostras.push({ x: Math.cos(ang) * rx, y: Math.sin(ang) * ry });
+  }
+  const acumulado = [0];
+  for (let k = 1; k <= N_AMOSTRAS; k++) {
+    const dx = amostras[k].x - amostras[k - 1].x;
+    const dy = amostras[k].y - amostras[k - 1].y;
+    acumulado.push(acumulado[k - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  const comprimentoTotal = acumulado[N_AMOSTRAS] || 1;
+  function posicaoPorFracao(fracao) {
+    const alvo = fracao * comprimentoTotal;
+    let lo = 0, hi = N_AMOSTRAS;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (acumulado[mid] < alvo) lo = mid + 1; else hi = mid;
+    }
+    return amostras[lo];
+  }
+  const posicoes = itens.map((_, i) => posicaoPorFracao(i / itens.length));
+
+  // largura do rótulo baseada na MENOR distância real entre nós vizinhos
+  // (garante que nenhum par colide, seja qual for o formato da curva)
+  let distanciaMinima = Infinity;
+  for (let i = 0; i < posicoes.length; i++) {
+    const a = posicoes[i];
+    const b = posicoes[(i + 1) % posicoes.length];
+    const d = Math.hypot(b.x - a.x, b.y - a.y);
+    if (d < distanciaMinima) distanciaMinima = d;
+  }
+  const larguraNode = Math.max(64, Math.min(150, distanciaMinima * 0.82));
+  const fonteNode = Math.max(9.5, Math.min(14, larguraNode / 9));
+
   itens.forEach((item, i) => {
-    const angulo = anguloInicial + (360 / itens.length) * i;
-    const rad = (angulo * Math.PI) / 180;
-    const x = Math.cos(rad) * raio;
-    const y = Math.sin(rad) * raio;
+    const { x, y } = posicoes[i];
+    const angulo = (Math.atan2(y, x) * 180) / Math.PI;
 
     const linha = document.createElement("div");
     linha.className = "hub-node-line";
@@ -3586,7 +3692,8 @@ function renderizarHub() {
     node.className = "hub-node";
     node.style.setProperty("--node-cor", `var(${CORES_NODOS[i % CORES_NODOS.length]})`);
     node.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
-    node.innerHTML = `<span class="hub-node-dot"></span><span class="hub-node-label">${item.label}</span>`;
+    node.style.width = larguraNode + "px";
+    node.innerHTML = `<span class="hub-node-dot"></span><span class="hub-node-label" style="font-size:${fonteNode}px">${item.label}</span>`;
     node.addEventListener("click", () => mostrarView(item.view));
     container.appendChild(node);
   });
@@ -3724,7 +3831,13 @@ function _acharViewPorVoz(transcricao) {
   return melhorView;
 }
 
-(function configurarComandoDeVoz() {
+// Chamado de dentro de mostrarApp() (depois do login) - não antes, pra não
+// ligar o microfone ainda na tela de login. Definido fora da função de
+// configuração pra existir mesmo se o navegador não suportar reconhecimento
+// de voz (nesse caso é só um no-op).
+window.ativarEscutaAtlasSeNecessario = function () {};
+
+function configurarComandoDeVoz() {
   const btn = document.getElementById("hub-mic-btn");
   const status = document.getElementById("hub-voice-status");
   const Reconhecimento = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3736,15 +3849,15 @@ function _acharViewPorVoz(transcricao) {
     return;
   }
 
-  // Modo "sempre ouvindo": em vez de precisar clicar no microfone a cada
-  // comando (push-to-talk), o botão liga/desliga uma escuta CONTÍNUA que
-  // fica ativa em qualquer tela do Atlas e só age quando ouve a palavra de
-  // ativação "Atlas" antes do nome do módulo (evita disparar sozinho numa
-  // conversa qualquer perto do computador). A preferência fica salva -
-  // numa próxima visita, se o navegador já tiver concedido permissão de
-  // microfone, a escuta liga sozinha de novo, sem precisar clicar.
-  const CHAVE_ESCUTA_CONTINUA = "atlas_voz_continua_ativa";
-  let escutaContinuaDesejada = localStorage.getItem(CHAVE_ESCUTA_CONTINUA) === "1";
+  // Modo "sempre ouvindo": LIGADO POR PADRÃO desde a primeira vez que o
+  // Atlas é aberto (não precisa clicar no microfone pra ativar) - fica
+  // escutando em qualquer tela e só age quando ouve a palavra de ativação
+  // "Atlas" antes do nome do módulo (evita disparar sozinho numa conversa
+  // qualquer perto do computador). O botão de microfone serve só pra
+  // DESLIGAR, se alguém quiser - e essa preferência de desligado é que
+  // fica salva entre visitas (o padrão é sempre ligado).
+  const CHAVE_DESATIVADO = "atlas_voz_continua_desativada";
+  let escutaContinuaDesejada = localStorage.getItem(CHAVE_DESATIVADO) !== "1";
   let reconhecimento = null;
   let paradaIntencional = false;
   let reiniciarTimer = null;
@@ -3798,9 +3911,9 @@ function _acharViewPorVoz(transcricao) {
     r.addEventListener("error", (ev) => {
       if (ev.error === "not-allowed") {
         escutaContinuaDesejada = false;
-        localStorage.removeItem(CHAVE_ESCUTA_CONTINUA);
+        localStorage.setItem(CHAVE_DESATIVADO, "1");
         btn.classList.remove("escutando");
-        status.textContent = "⚠️ Permissão de microfone negada - autorize o microfone nas configurações do navegador.";
+        status.textContent = "⚠️ Permissão de microfone negada - autorize o microfone nas configurações do navegador e clique no ícone pra tentar de novo.";
       } else if (ev.error === "no-speech" || ev.error === "aborted") {
         // silêncio prolongado é normal em modo contínuo - o "end" que
         // segue este erro já cuida de reiniciar sozinho.
@@ -3826,17 +3939,17 @@ function _acharViewPorVoz(transcricao) {
     clearTimeout(reiniciarTimer);
     if (reconhecimento) reconhecimento.stop();
     btn.classList.remove("escutando");
-    btn.title = 'Clique para ligar a escuta contínua ("Atlas, [módulo]")';
-    status.textContent = "";
+    btn.title = 'Escuta contínua desligada - clique pra ligar de novo ("Atlas, [módulo]")';
+    status.textContent = "🔇 Escuta contínua desligada.";
   }
 
   btn.addEventListener("click", () => {
     escutaContinuaDesejada = !escutaContinuaDesejada;
     if (escutaContinuaDesejada) {
-      localStorage.setItem(CHAVE_ESCUTA_CONTINUA, "1");
+      localStorage.removeItem(CHAVE_DESATIVADO);
       _iniciar();
     } else {
-      localStorage.removeItem(CHAVE_ESCUTA_CONTINUA);
+      localStorage.setItem(CHAVE_DESATIVADO, "1");
       _parar();
     }
   });
@@ -3856,11 +3969,14 @@ function _acharViewPorVoz(transcricao) {
     }
   }
 
-  // se numa visita anterior a escuta contínua já tinha sido ligada (mesma
-  // origem), a permissão de microfone já foi concedida - liga sozinho de
-  // novo, sem precisar clicar no botão.
-  if (escutaContinuaDesejada) _iniciar();
-})();
+  // exposto pra mostrarApp() chamar depois do login - é ligado por padrão
+  // (a menos que o usuário tenha desligado explicitamente antes).
+  window.ativarEscutaAtlasSeNecessario = function () {
+    if (escutaContinuaDesejada) _iniciar();
+  };
+}
+
+configurarComandoDeVoz();
 
 // ---------- inicialização ----------
 inicializarSessao();
