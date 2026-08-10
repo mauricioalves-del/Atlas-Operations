@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, shelf_life
 from ..database import get_db
 from ..deps import obter_usuario_atual
 
@@ -316,9 +316,13 @@ def itens_periodo(
 #      contabilmente mas já foi solicitado);
 #   2) risco de obsolescência por baixo giro (produto com saldo em estoque
 #      mas sem nenhuma saída/venda recente - farol 30/60/90 dias);
-#   3) risco de validade (Shelf Life) - AINDA NÃO IMPLEMENTADO: esse dado
-#      vive só no módulo Shelf Life do Lovable, que o Atlas ainda não lê.
-#      Fica null até essa integração existir - ver DECISOES.md.
+#   3) risco de validade (Shelf Life) - farol vencido/30/60/90 dias
+#      calculado em cima dos lotes cadastrados em LoteShelfLife (ver
+#      shelf_life.py e shelf_life_router.py) - alimentado por importação
+#      da planilha do sistema interno e/ou cadastro manual na tela
+#      dedicada. Não é uma leitura do módulo Shelf Life do Lovable (sem
+#      acesso de SQL editor lá, só a tela) - é uma fonte equivalente que o
+#      próprio Atlas controla.
 # ---------------------------------------------------------------------------
 
 DIAS_MINIMO_RISCO_OBSOLESCENCIA = 30
@@ -438,12 +442,12 @@ def _calcular_risco_obsolescencia(db: Session, dias_minimo: int = DIAS_MINIMO_RI
 @router.get("/mapa-demandas")
 def mapa_demandas(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """Painel fixo da tela Início - baixas operacionais pendentes
-    (passivo em aberto) + risco de obsolescência por baixo giro (farol
-    30/60/90 dias). Risco de validade (Shelf Life) ainda não entra aqui -
-    esse dado vive só no Lovable e a integração de leitura ainda não
-    existe (ver DECISOES.md)."""
+    (passivo em aberto), risco de obsolescência por baixo giro (farol
+    30/60/90 dias) e risco de validade / Shelf Life (farol vencido/30/60/
+    90 dias + pendente de validade), calculado a partir dos lotes
+    cadastrados na tela Shelf Life (ver shelf_life.py)."""
     return {
         "baixas_pendentes": _calcular_baixas_pendentes(db),
         "obsolescencia": _calcular_risco_obsolescencia(db),
-        "shelf_life": None,
+        "shelf_life": shelf_life.calcular_resumo_shelf_life(db, incluir_itens=False),
     }

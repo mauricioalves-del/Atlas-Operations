@@ -495,6 +495,7 @@ function mostrarView(nome) {
   if (nome === "lista") carregarLista();
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
   if (nome === "relatorio-baixa") carregarRelatorioBaixa();
+  if (nome === "shelf-life") carregarShelfLife();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
   if (nome === "auditoria") carregarAuditoria();
@@ -3642,12 +3643,15 @@ async function carregarMapaDemandas() {
   const baixas = dados.baixas_pendentes || { total: 0, valor_total: 0, por_motivo: [] };
   const obsol = dados.obsolescencia || { resumo: { "30": { quantidade: 0, valor: 0 }, "60": { quantidade: 0, valor: 0 }, "90": { quantidade: 0, valor: 0 } } };
   const r = obsol.resumo;
+  const shelf = dados.shelf_life;
 
   document.getElementById("md-kpi-row").innerHTML = `
     <div class="kpi-card"><div class="kpi-label">Baixas pendentes (passivo)</div><div class="kpi-value accent">${baixas.total}</div></div>
     <div class="kpi-card"><div class="kpi-label">Valor em baixas pendentes</div><div class="kpi-value">${formatarMoeda(baixas.valor_total)}</div></div>
     <div class="kpi-card"><div class="kpi-label">SKUs em risco de obsolescência</div><div class="kpi-value">${(r["30"].quantidade + r["60"].quantidade + r["90"].quantidade)}</div></div>
     <div class="kpi-card"><div class="kpi-label">Valor total em risco de obsolescência</div><div class="kpi-value" style="color:var(--alto)">${formatarMoeda(r["30"].valor + r["60"].valor + r["90"].valor)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Lotes em risco de validade</div><div class="kpi-value" style="color:var(--critico)">${shelf ? shelf.total_lotes_em_risco : "—"}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Valor total em risco de validade</div><div class="kpi-value" style="color:var(--critico)">${shelf ? formatarMoeda(shelf.valor_total) : "—"}</div></div>
   `;
 
   document.getElementById("md-baixas-por-motivo").innerHTML = baixas.total
@@ -3665,10 +3669,159 @@ async function carregarMapaDemandas() {
     linhaFarol("var(--alto)", "60-89 dias sem giro", r["60"]) +
     linhaFarol("var(--critico)", "90+ dias sem giro", r["90"]);
 
-  document.getElementById("md-shelf-life").innerHTML = dados.shelf_life
-    ? `Risco de validade (Shelf Life): ${dados.shelf_life.total_lotes_em_risco} lote(s) em risco, ${formatarMoeda(dados.shelf_life.valor_total)} em jogo.`
-    : `📋 Risco de validade (Shelf Life): ainda não conectado ao módulo do Lovable — aguardando a exportação/acesso pra trazer esses dados aqui.`;
+  if (shelf) {
+    const rs = shelf.resumo;
+    const linhaFarolShelf = (cor, label, faixa) =>
+      faixa
+        ? `<div class="evidencia-item sim"><span><span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${cor}; margin-right:8px"></span>${label}</span><span>${faixa.quantidade} lote(s) · ${formatarMoeda(faixa.valor)}</span></div>`
+        : "";
+    document.getElementById("md-shelf-life").innerHTML = `
+      <h3 style="font-family:var(--display); font-size:14px; margin:16px 0 10px">Risco de validade (Shelf Life)</h3>
+      ${linhaFarolShelf("var(--critico)", "Vencidos", rs.vencido)}
+      ${linhaFarolShelf("var(--critico)", "Risco em 30 dias", rs["30"])}
+      ${linhaFarolShelf("var(--alto)", "Risco em 60 dias", rs["60"])}
+      ${linhaFarolShelf("var(--medio)", "Risco em 90 dias", rs["90"])}
+      ${linhaFarolShelf("var(--muted)", "Pendente de validade (sem data cadastrada)", rs.sem_validade)}
+      <button id="btn-ir-shelf-life" class="btn-secundario" style="margin-top:10px">Abrir tela Shelf Life →</button>
+    `;
+    const btnIrShelfLife = document.getElementById("btn-ir-shelf-life");
+    if (btnIrShelfLife) btnIrShelfLife.addEventListener("click", () => mostrarView("shelf-life"));
+  } else {
+    document.getElementById("md-shelf-life").innerHTML = `📋 Risco de validade (Shelf Life): não foi possível carregar agora.`;
+  }
 }
+
+// ---------- tela dedicada Shelf Life (risco de validade) ----------
+const FAROL_LABEL_SHELF_LIFE = {
+  vencido: "Vencido", "30": "Risco 30 dias", "60": "Risco 60 dias", "90": "Risco 90 dias", sem_validade: "Pendente de validade",
+};
+const FAROL_COR_SHELF_LIFE = {
+  vencido: "var(--critico)", "30": "var(--critico)", "60": "var(--alto)", "90": "var(--medio)", sem_validade: "var(--muted)",
+};
+
+function badgeFarolShelfLife(farol) {
+  const cor = FAROL_COR_SHELF_LIFE[farol] || "var(--muted)";
+  const label = FAROL_LABEL_SHELF_LIFE[farol] || farol;
+  return `<span style="display:inline-flex; align-items:center; gap:6px"><span style="width:9px; height:9px; border-radius:50%; background:${cor}; display:inline-block"></span>${label}</span>`;
+}
+
+async function atualizarSelectAlmoxarifadoShelfLife() {
+  const lista = await apiFetch(`${API}/importar/almoxarifados`).then((r) => r.json());
+  const opcoes = lista.map((a) => `<option value="${a.codigo}">${a.nome} (${a.codigo})</option>`).join("");
+  const selFiltro = document.getElementById("sl-filtro-almoxarifado");
+  const selForm = document.getElementById("sl-almoxarifado");
+  if (selFiltro.options.length <= 1) selFiltro.insertAdjacentHTML("beforeend", opcoes);
+  if (selForm && !selForm.options.length) selForm.innerHTML = `<option value="">(nenhum)</option>` + opcoes;
+}
+
+async function carregarShelfLife() {
+  await atualizarSelectAlmoxarifadoShelfLife();
+
+  const resumo = await apiFetch(`${API}/shelf-life/resumo`).then((r) => r.json());
+  const rs = resumo.resumo;
+  document.getElementById("sl-kpi-row").innerHTML = [
+    { label: "Vencidos", value: rs.vencido.quantidade, valor: rs.vencido.valor, cor: "var(--critico)" },
+    { label: "Risco 30 dias", value: rs["30"].quantidade, valor: rs["30"].valor, cor: "var(--critico)" },
+    { label: "Risco 60 dias", value: rs["60"].quantidade, valor: rs["60"].valor, cor: "var(--alto)" },
+    { label: "Risco 90 dias", value: rs["90"].quantidade, valor: rs["90"].valor, cor: "var(--medio)" },
+    { label: "Pendente de validade", value: rs.sem_validade.quantidade, valor: rs.sem_validade.valor, cor: "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="color:${c.cor}">${c.value}</div><div class="hint" style="margin:2px 0 0">${formatarMoeda(c.valor)}</div></div>`)
+    .join("");
+
+  const farol = document.getElementById("sl-filtro-farol").value;
+  const almoxarifado = document.getElementById("sl-filtro-almoxarifado").value;
+  const busca = document.getElementById("sl-filtro-busca").value.trim();
+  const params = new URLSearchParams();
+  if (farol) params.set("farol", farol);
+  if (almoxarifado) params.set("almoxarifado", almoxarifado);
+  if (busca) params.set("busca", busca);
+
+  const lotes = await apiFetch(`${API}/shelf-life/lotes?${params.toString()}`).then((r) => r.json());
+  document.querySelector("#tabela-shelf-life tbody").innerHTML = lotes.length
+    ? lotes
+        .map(
+          (l) => `<tr data-id="${l.id}">
+            <td>${l.sku}</td><td class="col-descricao">${l.descricao_produto || "—"}</td><td>${l.lote || "—"}</td>
+            <td>${l.almoxarifado || "—"}</td><td>${l.quantidade ?? "—"} ${l.unidade || ""}</td>
+            <td>${l.data_validade ? formatarDataCurta(l.data_validade) : "—"}</td>
+            <td>${l.dias_para_vencer != null ? l.dias_para_vencer : "—"}</td>
+            <td>${formatarMoeda(l.valor_estimado)}</td>
+            <td>${badgeFarolShelfLife(l.farol)}</td>
+            <td><button class="btn-secundario btn-excluir-lote-shelf-life" data-id="${l.id}" style="padding:4px 10px">Excluir</button></td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="10" style="color:var(--muted)">Nenhum lote encontrado com esses filtros.</td></tr>`;
+
+  document.querySelectorAll(".btn-excluir-lote-shelf-life").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (!confirm("Excluir este lote?")) return;
+      const res = await apiFetch(`${API}/shelf-life/lotes/${btn.dataset.id}`, { method: "DELETE" });
+      if (res.ok) carregarShelfLife();
+    })
+  );
+}
+
+document.getElementById("sl-filtro-farol").addEventListener("change", carregarShelfLife);
+document.getElementById("sl-filtro-almoxarifado").addEventListener("change", carregarShelfLife);
+let _timeoutBuscaShelfLife = null;
+document.getElementById("sl-filtro-busca").addEventListener("input", () => {
+  clearTimeout(_timeoutBuscaShelfLife);
+  _timeoutBuscaShelfLife = setTimeout(carregarShelfLife, 400);
+});
+
+document.getElementById("btn-criar-lote-shelf-life").addEventListener("click", async () => {
+  const msg = document.getElementById("sl-msg");
+  const payload = {
+    sku: document.getElementById("sl-sku").value.trim(),
+    descricao_produto: document.getElementById("sl-descricao").value.trim() || null,
+    lote: document.getElementById("sl-lote").value.trim() || null,
+    almoxarifado: document.getElementById("sl-almoxarifado").value || null,
+    quantidade: parseFloat(document.getElementById("sl-quantidade").value),
+    unidade: document.getElementById("sl-unidade").value.trim() || null,
+    data_validade: document.getElementById("sl-data-validade").value || null,
+    custo_unitario: document.getElementById("sl-custo").value ? parseFloat(document.getElementById("sl-custo").value) : null,
+  };
+  if (!payload.sku || isNaN(payload.quantidade)) {
+    msg.textContent = "Informe pelo menos SKU e quantidade.";
+    return;
+  }
+  const res = await apiFetch(`${API}/shelf-life/lotes`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) { msg.textContent = data.detail || "Erro ao criar lote."; return; }
+  msg.textContent = "Lote adicionado.";
+  ["sl-sku", "sl-descricao", "sl-lote", "sl-quantidade", "sl-unidade", "sl-data-validade", "sl-custo"].forEach((id) => (document.getElementById(id).value = ""));
+  carregarShelfLife();
+});
+
+document.getElementById("btn-importar-shelf-life").addEventListener("click", async () => {
+  const input = document.getElementById("sl-input-arquivo");
+  const resultado = document.getElementById("sl-resultado-importacao");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", input.files[0]);
+  form.append("aba", document.getElementById("sl-input-aba").value || "Lote_Sistema");
+  resultado.textContent = "Importando...";
+  try {
+    const res = await apiFetch(`${API}/shelf-life/importar-planilha`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro (${res.status}): ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    resultado.textContent = JSON.stringify(data, null, 2);
+    carregarShelfLife();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  }
+});
 
 // ---------- hub orbital (tela inicial) ----------
 function renderizarHub() {

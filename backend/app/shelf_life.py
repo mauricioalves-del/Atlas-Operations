@@ -1,0 +1,238 @@
+"""
+Lógica de negócio do controle de Shelf Life (risco de validade de lote) do
+Atlas.
+
+Contexto: Maurício tem um módulo "Shelf Life" no sistema construído no
+Lovable (mapeamento de risco + ações de lote), mas sem acesso ao SQL
+editor de lá - só a tela. Sem um jeito de ler os dados de origem, o Atlas
+não pode se conectar a esse módulo. Em vez disso, este módulo constrói o
+MESMO tipo de farol de risco (vencido / 30 / 60 / 90 dias / sem validade)
+usando uma fonte de dados que o próprio Atlas controla: a planilha
+"Lote_Sistema.xlsx" exportada do sistema interno da empresa (aba
+"Lote_Sistema", com Dt_Validade real por lote) mais cadastro manual direto
+na tela Shelf Life.
+
+Farol de risco é sempre CALCULADO em cima de (data_validade - hoje), nunca
+armazenado - evita farol desatualizado se um lote ficar dias sem
+reimportar/revisar.
+"""
+from datetime import date, datetime, timedelta
+from sqlalchemy.orm import Session
+
+from . import models
+from .csv_utils import parse_sku, parse_decimal, parse_data, limpar_texto
+from .hipoteses_config import normalizar_almoxarifado
+
+# Cabeçalhos esperados na aba "Lote_Sistema" do arquivo exportado pelo
+# sistema interno da empresa (Lote_Sistema.xlsx, enviado por Maurício em
+# 2026-08). Se o layout de exportação mudar, ajuste aqui em vez de mudar a
+# lógica de importação.
+COLUNAS_LOTE_SISTEMA = {
+    "ativo": "Ativo",
+    "tipo_material": "TipoMaterial",
+    "sku": "Id_produto",
+    "descricao": "descricao",
+    "unidade": "um",
+    "origem": "Origem",
+    "quantidade": "Qtd",
+    "lote": "Lote",
+    "data_validade": "Dt_Validade",
+    "peso_kg": "Peso_Kg",
+    "custo": "Custo_Vlr",
+    "ean": "EAN",
+}
+
+COLUNAS_OBRIGATORIAS_LOTE_SISTEMA = (COLUNAS_LOTE_SISTEMA["sku"], COLUNAS_LOTE_SISTEMA["lote"], COLUNAS_LOTE_SISTEMA["data_validade"])
+
+FAROL_VENCIDO = "vencido"
+FAROL_30 = "30"
+FAROL_60 = "60"
+FAROL_90 = "90"
+FAROL_OK = "ok"
+FAROL_SEM_VALIDADE = "sem_validade"
+
+FAROIS_DE_RISCO = (FAROL_VENCIDO, FAROL_30, FAROL_60, FAROL_90)  # não inclui ok nem sem_validade
+
+
+def _data_excel_serial(valor_serial) -> date:
+    """Converte um número serial de data do Excel (dias desde 30/12/1899 -
+    a 'época' do Excel, que inclui um dia bissexto fictício em 1900) pra
+    date do Python. Só chamado quando a célula chega como número puro em
+    vez de datetime - openpyxl converte células com formatação de data
+    normalmente, mas uma célula sem essa formatação (mesmo contendo uma
+    data) chega como int/float bruto. Visto pelo menos 1 vez na planilha
+    real (Dt_Validade = 46476 -> 2027-03-01)."""
+    return date(1899, 12, 30) + timedelta(days=int(valor_serial))
+
+
+def parse_data_validade(valor):
+    """Aceita datetime (caso normal - openpyxl já converteu), date, número
+    serial do Excel (ver _data_excel_serial acima) ou vazio/None. None é
+    um resultado válido e esperado: significa material sem validade
+    rastreada no sistema de origem (ex: itens 'Diversos'), não um erro de
+    leitura - tratado como farol próprio (FAROL_SEM_VALIDADE), nunca
+    descartado silenciosamente."""
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    if isinstance(valor, (int, float)):
+        if valor != valor:  # NaN
+            return None
+        return _data_excel_serial(valor)
+    s = str(valor).strip()
+    if s == "" or s.lower() == "nan":
+        return None
+    return parse_data(s)
+
+
+def calcular_farol(data_validade, hoje=None):
+    """Farol de risco a partir de dias até o vencimento (data_validade -
+    hoje). Sem validade cadastrada não conta como 'ok' (isso escondería um
+    problema de cadastro) nem é forçado pra um risco (adivinharia errado)
+    - fica na sua própria categoria (FAROL_SEM_VALIDADE), igual ao KPI
+    'Pendente de Validade' do módulo de referência que Maurício mostrou no
+    Lovable."""
+    if data_validade is None:
+        return FAROL_SEM_VALIDADE
+    hoje = hoje or date.today()
+    dias = (data_validade - hoje).days
+    if dias < 0:
+        return FAROL_VENCIDO
+    if dias <= 30:
+        return FAROL_30
+    if dias <= 60:
+        return FAROL_60
+    if dias <= 90:
+        return FAROL_90
+    return FAROL_OK
+
+
+def _linha_para_campos(linha: dict):
+    """Traduz uma linha bruta (dict cabeçalho->valor, vinda da aba
+    Lote_Sistema) pros campos do modelo LoteShelfLife. Retorna None se a
+    linha não tem SKU (linha em branco/separadora da planilha) - não é
+    erro, só é ignorada."""
+    sku = parse_sku(linha.get(COLUNAS_LOTE_SISTEMA["sku"]))
+    if not sku:
+        return None
+    origem_bruta = limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["origem"]))
+    ativo_bruto = str(linha.get(COLUNAS_LOTE_SISTEMA["ativo"]) or "").strip().upper()
+    return {
+        "sku": sku,
+        "descricao_produto": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["descricao"])),
+        "tipo_material": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["tipo_material"])),
+        "almoxarifado": normalizar_almoxarifado(origem_bruta) if origem_bruta else None,
+        "almoxarifado_origem": origem_bruta,
+        "lote": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["lote"])),
+        "quantidade": parse_decimal(linha.get(COLUNAS_LOTE_SISTEMA["quantidade"], 0)),
+        "unidade": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["unidade"])),
+        "data_validade": parse_data_validade(linha.get(COLUNAS_LOTE_SISTEMA["data_validade"])),
+        "peso_kg": parse_decimal(linha.get(COLUNAS_LOTE_SISTEMA["peso_kg"], 0)),
+        # Custo_Vlr na planilha de origem é custo unitário do item (não o
+        # valor total do lote) - confere com a magnitude real dos dados
+        # enviados (ex: R$0,94/PC numa caixa, R$79,79/PC numa cerâmica) e
+        # com a convenção usada em todo o resto do Atlas (custo_unitario x
+        # quantidade = valor estimado).
+        "custo_unitario": parse_decimal(linha.get(COLUNAS_LOTE_SISTEMA["custo"], 0)),
+        "ativo": ativo_bruto not in ("N", "NAO", "NÃO", "FALSE", "0"),
+    }
+
+
+def importar_linhas_lote_sistema(db: Session, linhas: list[dict], usuario: str) -> dict:
+    """Upsert por chave natural (sku, lote, almoxarifado) - reimportar a
+    mesma planilha (ou uma exportação mais recente) atualiza os lotes já
+    conhecidos em vez de duplicar. Ao contrário do padrão 'substituição
+    completa' usado em outras importações do Atlas (Faturamento, BOM...),
+    aqui NÃO apaga o que não está na planilha nova: lotes cadastrados à
+    mão na tela, ou vindos de uma importação anterior e já consumidos na
+    planilha mais nova, continuam existindo (a planilha é uma fonte entre
+    outras, não a única - e query de "consumido" não é objetivo deste
+    importador)."""
+    criados, atualizados, ignorados_sem_sku, nao_mapeados = 0, 0, 0, set()
+    for linha in linhas:
+        campos = _linha_para_campos(linha)
+        if campos is None:
+            ignorados_sem_sku += 1
+            continue
+        if campos["almoxarifado"] and campos["almoxarifado"].startswith("NAO_MAPEADO__"):
+            nao_mapeados.add(campos["almoxarifado_origem"])
+
+        existente = db.query(models.LoteShelfLife).filter_by(
+            sku=campos["sku"], lote=campos["lote"], almoxarifado=campos["almoxarifado"],
+        ).first()
+        if existente:
+            for chave, valor in campos.items():
+                setattr(existente, chave, valor)
+            existente.origem_cadastro = "importacao_planilha"
+            existente.atualizado_em = datetime.utcnow()
+            atualizados += 1
+        else:
+            db.add(models.LoteShelfLife(**campos, origem_cadastro="importacao_planilha", criado_por=usuario))
+            criados += 1
+
+    return {
+        "criados": criados,
+        "atualizados": atualizados,
+        "ignorados_sem_sku": ignorados_sem_sku,
+        "almoxarifados_nao_mapeados": sorted(nao_mapeados),
+    }
+
+
+def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_itens: int = 200) -> dict:
+    """Farol de risco de validade - alimenta tanto a tela dedicada de
+    Shelf Life quanto o bloco de Shelf Life do Mapa de Demandas (tela
+    Início). Só considera lotes ativos com quantidade > 0 - lote zerado
+    ou inativado (Ativo=N na planilha de origem) não é risco: já saiu do
+    estoque ou foi descartado, não deveria continuar aparecendo."""
+    hoje = date.today()
+    lotes = db.query(models.LoteShelfLife).filter(models.LoteShelfLife.ativo.is_(True)).all()
+
+    resumo = {
+        FAROL_VENCIDO: {"quantidade": 0, "valor": 0.0},
+        FAROL_30: {"quantidade": 0, "valor": 0.0},
+        FAROL_60: {"quantidade": 0, "valor": 0.0},
+        FAROL_90: {"quantidade": 0, "valor": 0.0},
+        FAROL_SEM_VALIDADE: {"quantidade": 0, "valor": 0.0},
+    }
+    itens = []
+    for l in lotes:
+        if not l.quantidade or l.quantidade <= 0:
+            continue
+        farol = calcular_farol(l.data_validade, hoje)
+        valor = round((l.quantidade or 0) * (l.custo_unitario or 0), 2)
+        if farol == FAROL_OK:
+            continue
+        resumo[farol]["quantidade"] += 1
+        resumo[farol]["valor"] += valor
+        if incluir_itens:
+            itens.append({
+                "id": l.id,
+                "sku": l.sku,
+                "descricao_produto": l.descricao_produto,
+                "lote": l.lote,
+                "almoxarifado": l.almoxarifado,
+                "quantidade": l.quantidade,
+                "unidade": l.unidade,
+                "data_validade": str(l.data_validade) if l.data_validade else None,
+                "dias_para_vencer": (l.data_validade - hoje).days if l.data_validade else None,
+                "valor_estimado": valor,
+                "farol": farol,
+            })
+    for f in resumo:
+        resumo[f]["valor"] = round(resumo[f]["valor"], 2)
+    itens.sort(key=lambda x: x["dias_para_vencer"] if x["dias_para_vencer"] is not None else 999999)
+
+    total_lotes_em_risco = sum(resumo[f]["quantidade"] for f in FAROIS_DE_RISCO)
+    valor_total_em_risco = round(sum(resumo[f]["valor"] for f in FAROIS_DE_RISCO), 2)
+
+    return {
+        "resumo": resumo,
+        "total_lotes_em_risco": total_lotes_em_risco,
+        "valor_total": valor_total_em_risco,
+        "pendente_validade": resumo[FAROL_SEM_VALIDADE],
+        "itens": itens[:limite_itens],
+        "total_itens": len(itens),
+    }

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=54">
+<link rel="stylesheet" href="style.css?v=55">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -58,6 +58,7 @@
       <button class="rail-item" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
       <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
       <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
+      <button class="rail-item" data-view="shelf-life"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span><span class="rail-label">Shelf Life</span></button>
       <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
       <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
       <button class="rail-item" data-view="fechamento-dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="rail-label">Painel Inventário</span></button>
@@ -121,7 +122,7 @@
             <div id="md-obsolescencia-farol"></div>
           </div>
         </div>
-        <div id="md-shelf-life" class="hint" style="margin-top:16px"></div>
+        <div id="md-shelf-life" style="margin-top:6px"></div>
       </div>
     </section>
 
@@ -728,6 +729,71 @@
       </div>
     </section>
 
+    <section id="view-shelf-life" class="view hidden">
+      <header class="view-header">
+        <h1>Shelf Life — Risco de Validade</h1>
+        <div class="filtros">
+          <select id="sl-filtro-farol" class="select-filtro">
+            <option value="">Todos os faróis</option>
+            <option value="vencido">Vencidos</option>
+            <option value="30">Risco 30 dias</option>
+            <option value="60">Risco 60 dias</option>
+            <option value="90">Risco 90 dias</option>
+            <option value="sem_validade">Pendente de validade</option>
+          </select>
+          <select id="sl-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <input type="text" id="sl-filtro-busca" class="select-filtro" placeholder="Buscar SKU, descrição ou lote...">
+        </div>
+      </header>
+      <p class="hint">
+        Farol calculado a partir da validade de cada lote cadastrado aqui no Atlas (importação da planilha do sistema interno e/ou cadastro manual) —
+        substitui a dependência do módulo Shelf Life do Lovable, ao qual o Atlas não tem acesso direto de leitura.
+      </p>
+
+      <div class="kpi-row" id="sl-kpi-row"></div>
+
+      <div class="panel">
+        <h2>Novo lote</h2>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr)">
+          <div><label>SKU</label><input id="sl-sku" type="text"></div>
+          <div><label>Descrição</label><input id="sl-descricao" type="text"></div>
+          <div><label>Lote</label><input id="sl-lote" type="text"></div>
+          <div><label>Almoxarifado</label><select id="sl-almoxarifado"></select></div>
+        </div>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr); margin-top:10px">
+          <div><label>Quantidade</label><input id="sl-quantidade" type="number" step="0.0001"></div>
+          <div><label>Unidade</label><input id="sl-unidade" type="text"></div>
+          <div><label>Data de validade</label><input id="sl-data-validade" type="date"></div>
+          <div><label>Custo unitário (opcional)</label><input id="sl-custo" type="number" step="0.0001"></div>
+        </div>
+        <button id="btn-criar-lote-shelf-life" class="btn-primario" style="margin-top:14px">Adicionar lote</button>
+        <p id="sl-msg" class="hint"></p>
+      </div>
+
+      <div class="panel panel-importar">
+        <h2>Importar planilha do sistema (Lote_Sistema.xlsx)</h2>
+        <p class="hint">
+          Aba <code>Lote_Sistema</code> com colunas <code>Ativo, TipoMaterial, Id_produto, descricao, um, Origem, Qtd, Lote, Dt_Validade, Unidade, Peso_Kg, Custo_Vlr, EAN</code> —
+          igual ao arquivo exportado direto do sistema. Reimportar atualiza os lotes já conhecidos (por SKU + Lote + Almoxarifado) sem duplicar, e não apaga lotes cadastrados manualmente.
+        </p>
+        <input type="file" id="sl-input-arquivo" accept=".xlsx,.xlsm">
+        <div class="wrap-almoxarifado" style="display:inline-block; margin-left:10px">
+          <label for="sl-input-aba">Aba</label>
+          <input type="text" id="sl-input-aba" value="Lote_Sistema" style="min-width:160px">
+        </div>
+        <button id="btn-importar-shelf-life" class="btn-primario">Importar planilha</button>
+        <pre id="sl-resultado-importacao" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel">
+        <h2>Lotes em risco</h2>
+        <table class="tabela" id="tabela-shelf-life">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Almoxarifado</th><th>Quantidade</th><th>Validade</th><th>Dias</th><th>Valor</th><th>Farol</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="view-fechamento-dashboard" class="view hidden">
       <header class="view-header">
         <h1>Painel de Inventário</h1>
@@ -1078,6 +1144,6 @@
   </div>
 </div>
 
-<script src="app.js?v=54"></script>
+<script src="app.js?v=55"></script>
 </body>
 </html>

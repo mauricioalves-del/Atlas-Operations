@@ -452,6 +452,43 @@ class BaixaOperacional(Base):
     recebido_em = Column(DateTime, default=datetime.utcnow)
 
 
+class LoteShelfLife(Base):
+    """Lote físico (com validade) para controle de risco de shelf life -
+    alimenta a tela dedicada 'Shelf Life' e o bloco de Shelf Life do Mapa
+    de Demandas (tela Início). Duas origens possíveis: importação da
+    planilha do sistema interno (aba 'Lote_Sistema' de Lote_Sistema.xlsx -
+    ver shelf_life.py) ou cadastro manual direto na tela. Isso substitui a
+    dependência do módulo Shelf Life do Lovable (sem acesso de leitura
+    direta - só a tela, sem SQL editor) por uma fonte de dados que o
+    próprio Atlas controla e recalcula a qualquer momento.
+
+    Natural key (sku, lote, almoxarifado) faz a reimportação da planilha
+    ser um upsert (atualiza quantidade/validade do lote já visto) em vez
+    de duplicar - mas ao contrário de outras importações do Atlas
+    (Faturamento, BOM...), NÃO é 'substituição completa': lotes
+    cadastrados manualmente ou vindos de uma importação anterior que não
+    aparecem na planilha nova são mantidos, porque a planilha é uma fonte
+    de dados entre outras, não a única."""
+    __tablename__ = "lotes_shelf_life"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sku = Column(String, index=True)
+    descricao_produto = Column(String, nullable=True)
+    tipo_material = Column(String, nullable=True)  # MateriaPrima | Produto | SubConjunto | Diversos
+    almoxarifado = Column(String, index=True, nullable=True)  # já normalizado (Almox_...) - ou NAO_MAPEADO__<valor>
+    almoxarifado_origem = Column(String, nullable=True)  # valor bruto da planilha de origem, guardado pra auditoria
+    lote = Column(String, index=True, nullable=True)
+    quantidade = Column(Float, nullable=True)
+    unidade = Column(String, nullable=True)
+    data_validade = Column(Date, nullable=True, index=True)  # None = sem validade cadastrada (material não rastreado)
+    peso_kg = Column(Float, nullable=True)
+    custo_unitario = Column(Float, nullable=True)
+    ativo = Column(Boolean, default=True)
+    origem_cadastro = Column(String, default="manual")  # manual | importacao_planilha
+    criado_por = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class CasoMLFeedback(Base):
     """Casos confirmados que alimentam o retreino do modelo. Persistido
     no MESMO banco do resto do app (Postgres/SQLite via DATABASE_URL) -
