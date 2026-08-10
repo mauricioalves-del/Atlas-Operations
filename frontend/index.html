@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=55">
+<link rel="stylesheet" href="style.css?v=56">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -58,6 +58,7 @@
       <button class="rail-item" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
       <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
       <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
+      <button class="rail-item" data-view="mapeamento-passivos"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8a6 6 0 0 1-6.7 6.7"/><path d="M13 2.05A10 10 0 1 0 21.95 11H13z"/></svg></span><span class="rail-label">Mapeamento de Passivos</span></button>
       <button class="rail-item" data-view="shelf-life"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span><span class="rail-label">Shelf Life</span></button>
       <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
       <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
@@ -297,6 +298,7 @@
           <button id="btn-sincronizar-lovable" class="btn-secundario">🔄 Sincronizar agora</button>
         </div>
       </header>
+      <p class="hint" id="rb-sync-msg" style="min-height:16px"></p>
       <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable.</p>
 
       <div class="kpi-row" id="rb-kpi-row"></div>
@@ -308,6 +310,57 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="view-mapeamento-passivos" class="view hidden">
+      <header class="view-header">
+        <h1>Mapeamento de Passivos</h1>
+      </header>
+      <p class="hint">
+        Visão gerencial de todas as baixas operacionais já trazidas do Lovable. Clique em qualquer fatia, coluna, ponto da linha ou linha de tabela pra ver os produtos daquela categoria.
+      </p>
+
+      <div class="kpi-row" id="mp-kpi-row"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Status Operacionais Usados</h2>
+          <p class="panel-sub">Clique numa fatia pra ver as baixas daquele status</p>
+          <canvas id="mp-chart-status-pizza"></canvas>
+        </div>
+        <div class="panel">
+          <h2>Mapeamento de Passivos com o Inventário</h2>
+          <p class="panel-sub">De onde vem o casamento de cada baixa aprovada — inventário mensal, movimentação diária, ou ainda sem decisão</p>
+          <canvas id="mp-chart-mapeamento-origem"></canvas>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Evolução Mensal (MoM)</h2>
+          <span class="hint" style="margin:0">Colunas: valor de baixas aplicadas · Linha: taxa de resolução automática de divergência</span>
+        </div>
+        <canvas id="mp-chart-evolucao-mensal"></canvas>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Top 10 Passivos Mais Recorrentes</h2>
+          <p class="panel-sub">Por quantidade de baixas aprovadas — clique numa linha</p>
+          <table class="tabela" id="mp-tabela-recorrentes">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
+          <p class="panel-sub">Por valor total baixado — clique numa linha</p>
+          <table class="tabela" id="mp-tabela-impacto-financeiro">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -1128,6 +1181,22 @@
   </div>
 </div>
 
+<div id="modal-passivos-itens-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(1000px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-passivos-itens-titulo">Produtos</h2>
+      <button id="btn-fechar-modal-passivos-itens" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" id="modal-passivos-itens-resumo" style="margin-bottom:14px"></p>
+      <table class="tabela" id="tabela-modal-passivos-itens">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Motivo</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Data</th><th>Divergência</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div id="modal-painel-periodo-overlay" class="modal-overlay hidden">
   <div class="modal-card" style="width:min(920px, 94vw)">
     <div class="modal-header">
@@ -1144,6 +1213,6 @@
   </div>
 </div>
 
-<script src="app.js?v=55"></script>
+<script src="app.js?v=56"></script>
 </body>
 </html>

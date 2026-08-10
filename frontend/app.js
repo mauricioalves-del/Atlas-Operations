@@ -22,7 +22,12 @@ async function apiFetch(url, options = {}) {
   const token = tokenSalvo();
   const headers = { ...(options.headers || {}) };
   if (token) headers["Authorization"] = "Bearer " + token;
-  const res = await fetch(url, { ...options, headers });
+  // cache: "no-store" por padrão em toda chamada à API - sem isso, GET
+  // repetido pra mesma URL (ex: recarregar uma lista depois de
+  // sincronizar/importar) pode ser respondido pelo cache HTTP do
+  // navegador em vez de ir ao servidor, dando a impressão de que a tela
+  // "não atualizou" mesmo com o dado já mudado no banco.
+  const res = await fetch(url, { cache: "no-store", ...options, headers });
   if (res.status === 401) {
     limparSessao();
     mostrarTelaLogin("Sua sessão expirou. Faça login de novo.");
@@ -496,6 +501,7 @@ function mostrarView(nome) {
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
   if (nome === "relatorio-baixa") carregarRelatorioBaixa();
   if (nome === "shelf-life") carregarShelfLife();
+  if (nome === "mapeamento-passivos") carregarMapeamentoPassivos();
   if (nome === "usuarios") carregarUsuarios();
   if (nome === "cadastros") carregarAbaCadastroAtiva();
   if (nome === "auditoria") carregarAuditoria();
@@ -3536,15 +3542,25 @@ function badgeStatusBaixa(statusFluxo) {
 }
 
 function _preencherFiltroRelatorioBaixa(idSelect, valores) {
+  // Reconstrói as opções toda vez (não só na primeira carga) - depois de
+  // "Sincronizar agora" trazer baixas com um almoxarifado/motivo que
+  // ainda não existia na lista, esse valor precisa aparecer como opção
+  // de filtro sem precisar recarregar a página inteira. Preserva a
+  // seleção atual se o valor ainda existir na lista nova; senão volta
+  // pro "Todos".
   const sel = document.getElementById(idSelect);
-  if (sel.options.length > 1) return; // já populado - evita perder opções quando a lista já está filtrada
+  const selecionadoAntes = sel.value;
   const unicos = [...new Set(valores.filter(Boolean))].sort();
+  const opcaoTodos = sel.options[0]; // primeira opção ("Todos os...") é sempre fixa
+  sel.innerHTML = "";
+  sel.appendChild(opcaoTodos);
   unicos.forEach((v) => {
     const opt = document.createElement("option");
     opt.value = v;
     opt.textContent = idSelect === "rb-filtro-hipotese" ? rotulo(v) : v;
     sel.appendChild(opt);
   });
+  sel.value = unicos.includes(selecionadoAntes) ? selecionadoAntes : "";
 }
 
 async function carregarRelatorioBaixa() {
@@ -3559,7 +3575,7 @@ async function carregarRelatorioBaixa() {
 
   let dados;
   try {
-    dados = await apiFetch(`${API}/baixas-operacionais${qs ? "?" + qs : ""}`).then((r) => r.json());
+    dados = await apiFetch(`${API}/baixas-operacionais${qs ? "?" + qs : ""}`, { cache: "no-store" }).then((r) => r.json());
   } catch (erro) {
     console.error("Atlas: falha ao carregar relatório de baixa:", erro);
     document.getElementById("rb-kpi-row").innerHTML = `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-label" style="color:var(--critico)">Não consegui carregar</div></div>`;
@@ -3603,26 +3619,214 @@ document.getElementById("rb-filtro-hipotese").addEventListener("change", carrega
 
 document.getElementById("btn-sincronizar-lovable").addEventListener("click", async () => {
   const btn = document.getElementById("btn-sincronizar-lovable");
+  const msg = document.getElementById("rb-sync-msg");
   btn.disabled = true;
   btn.textContent = "Sincronizando...";
+  msg.textContent = "Buscando o estado atual no Lovable...";
+  msg.style.color = "";
   try {
-    const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST" });
+    const res = await apiFetch(`${API}/baixas-operacionais/sincronizar`, { method: "POST", cache: "no-store" });
     const data = await res.json();
     if (!res.ok) {
-      alert(data.detail || "Não foi possível sincronizar com o Lovable.");
+      msg.style.color = "var(--critico)";
+      msg.textContent = data.detail || "Não foi possível sincronizar com o Lovable.";
     } else {
+      // Zera os filtros ANTES de recarregar - depois de sincronizar, a
+      // tela deve mostrar os dados atuais completos (não um recorte
+      // filtrado de antes, que pode nem existir mais do jeito que
+      // estava - ex: itens que eram "Pendente" e sincronizaram como
+      // "Aprovada" desaparecem de um filtro travado em Pendente,
+      // dando a impressão de que a tela "não atualizou").
+      document.getElementById("rb-filtro-status").value = "";
+      document.getElementById("rb-filtro-almoxarifado").value = "";
+      document.getElementById("rb-filtro-hipotese").value = "";
       await carregarRelatorioBaixa();
-      alert(
-        `Sincronização concluída: ${data.total_na_origem} baixa(s) na origem do Lovable, ` +
-          `${data.contagem?.resolvida_automaticamente || 0} resolveram divergências automaticamente.`
-      );
+      msg.style.color = "var(--ok)";
+      msg.textContent =
+        `Sincronizado agora: ${data.total_na_origem} baixa(s) na origem do Lovable · ` +
+        `${data.contagem?.resolvida_automaticamente || 0} resolveram divergência sozinhas.`;
     }
   } catch (erro) {
-    alert("Falha ao sincronizar com o Lovable: " + erro.message);
+    msg.style.color = "var(--critico)";
+    msg.textContent = "Falha ao sincronizar com o Lovable: " + erro.message;
   } finally {
     btn.disabled = false;
     btn.textContent = "🔄 Sincronizar agora";
   }
+});
+
+// ---------- dashboard "Mapeamento de Passivos" ----------
+let chartMpStatusPizza = null, chartMpMapeamentoOrigem = null, chartMpEvolucaoMensal = null;
+let dadosMpStatusPizza = [], dadosMpMapeamentoOrigem = [], dadosMpEvolucaoMensal = [];
+
+const CORES_STATUS_BAIXA = { PENDENTE: "#f9a825", APROVADA: "#4caf50", REPROVADA: "#e5534b", NAO_INFORMADO: "#8ca0a3" };
+const CORES_MAPEAMENTO_ORIGEM = {
+  inventario_mensal: "#5b75ac", movimentacao_diaria: "#6fa3a8",
+  aguardando_divergencia: "#f9a825", nao_decidida: "#8ca0a3",
+};
+
+async function carregarMapeamentoPassivos() {
+  const [kpis, statusPizza, mapeamentoOrigem, evolucaoMensal, topRecorrentes, topImpacto] = await Promise.all([
+    apiFetch(`${API}/baixas-operacionais/dashboard/kpis`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/status-pizza`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/mapeamento-origem`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/evolucao-mensal`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/top-recorrentes`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/top-impacto-financeiro`).then((r) => r.json()),
+  ]);
+
+  const m = kpis.mapeamento;
+  document.getElementById("mp-kpi-row").innerHTML = [
+    { label: "Total de baixas", value: kpis.total },
+    { label: "Valor total (aprovadas)", value: formatarMoeda(kpis.valor_aprovadas) },
+    { label: "Mapeadas via Inventário Mensal", value: `${m.inventario_mensal.quantidade} · ${formatarMoeda(m.inventario_mensal.valor)}` },
+    { label: "Mapeadas via Movimentação Diária", value: `${m.movimentacao_diaria.quantidade} · ${formatarMoeda(m.movimentacao_diaria.valor)}` },
+    { label: "Aguardando divergência", value: m.aguardando_divergencia.quantidade, cor: "var(--medio)" },
+    { label: "Pendentes/Reprovadas", value: m.nao_decidida.quantidade, cor: "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  renderMpStatusPizza(statusPizza);
+  renderMpMapeamentoOrigem(mapeamentoOrigem);
+  renderMpEvolucaoMensal(evolucaoMensal);
+  renderMpTabelaTop("mp-tabela-recorrentes", topRecorrentes);
+  renderMpTabelaTop("mp-tabela-impacto-financeiro", topImpacto);
+}
+
+function renderMpStatusPizza(dados) {
+  dadosMpStatusPizza = dados;
+  const ctx = document.getElementById("mp-chart-status-pizza");
+  if (chartMpStatusPizza) chartMpStatusPizza.destroy();
+  chartMpStatusPizza = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: dados.map((d) => d.label),
+      datasets: [{ data: dados.map((d) => d.quantidade), backgroundColor: dados.map((d) => CORES_STATUS_BAIXA[d.status_fluxo] || "#8ca0a3"), borderWidth: 0 }],
+    },
+    options: {
+      onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
+      plugins: {
+        legend: { position: "right", labels: { color: "#8ca0a3", font: { size: 11 } } },
+        tooltip: { callbacks: { label: (ctx2) => `${ctx2.label}: ${ctx2.raw} · ${formatarMoeda(dados[ctx2.dataIndex].valor)}` } },
+      },
+    },
+  });
+  ctx.onclick = (ev) => {
+    const pontos = chartMpStatusPizza.getElementsAtEventForMode(ev, "nearest", { intersect: true }, true);
+    if (!pontos.length) return;
+    const d = dadosMpStatusPizza[pontos[0].index];
+    abrirModalPassivosItens({ status_fluxo: d.status_fluxo }, `Baixas com status "${d.label}"`);
+  };
+}
+
+function renderMpMapeamentoOrigem(dados) {
+  dadosMpMapeamentoOrigem = dados;
+  const ctx = document.getElementById("mp-chart-mapeamento-origem");
+  if (chartMpMapeamentoOrigem) chartMpMapeamentoOrigem.destroy();
+  chartMpMapeamentoOrigem = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: dados.map((d) => d.label),
+      datasets: [{ label: "Quantidade", data: dados.map((d) => d.quantidade), backgroundColor: dados.map((d) => CORES_MAPEAMENTO_ORIGEM[d.categoria] || "#8ca0a3"), borderRadius: 3 }],
+    },
+    options: {
+      onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { afterLabel: (ctx2) => formatarMoeda(dados[ctx2.dataIndex].valor) } },
+      },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { color: "#8ca0a3" }, grid: { color: "#2e3a40" }, beginAtZero: true },
+      },
+    },
+  });
+  ctx.onclick = (ev) => {
+    const pontos = chartMpMapeamentoOrigem.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
+    if (!pontos.length) return;
+    const d = dadosMpMapeamentoOrigem[pontos[0].index];
+    abrirModalPassivosItens({ categoria_mapeamento: d.categoria }, d.label);
+  };
+}
+
+function renderMpEvolucaoMensal(dados) {
+  dadosMpEvolucaoMensal = dados;
+  const ctx = document.getElementById("mp-chart-evolucao-mensal");
+  if (chartMpEvolucaoMensal) chartMpEvolucaoMensal.destroy();
+  chartMpEvolucaoMensal = new Chart(ctx, {
+    data: {
+      labels: dados.map((d) => d.mes),
+      datasets: [
+        { type: "bar", label: "Valor baixado (R$)", data: dados.map((d) => d.valor), backgroundColor: "#5b75ac", borderRadius: 3, yAxisID: "y", order: 2 },
+        { type: "line", label: "Taxa de resolução automática (%)", data: dados.map((d) => d.taxa_resolucao_automatica_pct), borderColor: "#f9a825", backgroundColor: "#f9a825", pointRadius: 4, yAxisID: "y1", order: 1 },
+      ],
+    },
+    options: {
+      onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
+      plugins: {
+        legend: { position: "bottom", labels: { color: "#8ca0a3" } },
+        tooltip: { callbacks: { afterBody: (items) => [`Baixas aplicadas no mês: ${dados[items[0].dataIndex].quantidade}`] } },
+      },
+      scales: {
+        x: { ticks: { color: "#8ca0a3" }, grid: { display: false } },
+        y: { position: "left", beginAtZero: true, ticks: { color: "#8ca0a3", callback: (v) => formatarMoeda(v) }, grid: { color: "#2e3a40" } },
+        y1: { position: "right", min: 0, max: 100, ticks: { color: "#f9a825" }, grid: { display: false }, title: { display: true, text: "% resolvida", color: "#f9a825", font: { size: 10 } } },
+      },
+    },
+  });
+  ctx.onclick = (ev) => {
+    const pontos = chartMpEvolucaoMensal.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
+    if (!pontos.length) return;
+    const d = dadosMpEvolucaoMensal[pontos[0].index];
+    abrirModalPassivosItens({ mes: d.mes }, `Baixas aplicadas em ${d.mes}`);
+  };
+}
+
+function renderMpTabelaTop(idTabela, lista) {
+  document.querySelector(`#${idTabela} tbody`).innerHTML = lista
+    .map((i) => `<tr data-sku="${i.sku}" style="cursor:pointer"><td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.quantidade}</td><td>${formatarMoeda(i.valor)}</td></tr>`)
+    .join("") || `<tr><td colspan="4" style="color:var(--muted)">Nenhuma baixa aprovada ainda.</td></tr>`;
+
+  document.querySelectorAll(`#${idTabela} tbody tr[data-sku]`).forEach((tr) =>
+    tr.addEventListener("click", () => abrirModalPassivosItens({ sku: tr.dataset.sku }, `Baixas do SKU ${tr.dataset.sku}`))
+  );
+}
+
+async function abrirModalPassivosItens(filtros, titulo) {
+  const params = new URLSearchParams(filtros);
+  const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/itens?${params.toString()}`).then((r) => r.json());
+
+  document.getElementById("modal-passivos-itens-titulo").textContent = `${titulo} (${dados.total})`;
+  document.getElementById("modal-passivos-itens-resumo").textContent = `Valor total: ${formatarMoeda(dados.valor_total)}`;
+  document.querySelector("#tabela-modal-passivos-itens tbody").innerHTML = dados.itens
+    .map(
+      (i) => `<tr>
+        <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
+        <td>${i.motivo || "—"}</td><td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total)}</td>
+        <td>${badgeStatusBaixa(i.status_fluxo)}</td><td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
+        <td>${i.divergencia_vinculada_id ? "#" + i.divergencia_vinculada_id : "—"}</td>
+        <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma baixa encontrada nessa categoria.</td></tr>`;
+
+  document.querySelectorAll(".btn-ver-divergencia-passivo").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
+      mostrarView("lista");
+      abrirDetalhe(parseInt(btn.dataset.id));
+    })
+  );
+
+  document.getElementById("modal-passivos-itens-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-passivos-itens").addEventListener("click", () => {
+  document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
+});
+document.getElementById("modal-passivos-itens-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-passivos-itens-overlay") document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
 });
 
 // ---------- mapa de demandas de gestão (painel fixo da tela Início) ----------
