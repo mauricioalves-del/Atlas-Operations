@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=53">
+<link rel="stylesheet" href="style.css?v=54">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -104,6 +104,25 @@
       <p class="hint" style="text-align:center; margin-top:4px">
         Clique num módulo pra abrir, ou diga em qualquer tela "Atlas, [nome do módulo]" — ex: "Atlas, cobertura de conferência". O microfone já escuta sozinho; clique nele só se quiser desligar.
       </p>
+
+      <div class="panel" id="painel-mapa-demandas" style="max-width:1100px; margin:28px auto 0">
+        <div class="panel-title-row">
+          <h2>Mapa de Demandas de Gestão</h2>
+          <span class="hint" style="margin:0">Atualizado agora, ao entrar nesta tela</span>
+        </div>
+        <div class="kpi-row" id="md-kpi-row"></div>
+        <div class="grid-2" style="margin-top:18px; gap:24px">
+          <div>
+            <h3 style="font-family:var(--display); font-size:14px; margin-bottom:10px">Baixas operacionais pendentes (passivo em aberto)</h3>
+            <div id="md-baixas-por-motivo"></div>
+          </div>
+          <div>
+            <h3 style="font-family:var(--display); font-size:14px; margin-bottom:10px">Risco de obsolescência (baixo giro de estoque)</h3>
+            <div id="md-obsolescencia-farol"></div>
+          </div>
+        </div>
+        <div id="md-shelf-life" class="hint" style="margin-top:16px"></div>
+      </div>
     </section>
 
     <section id="view-dashboard" class="view hidden">
@@ -1043,6 +1062,22 @@
   </div>
 </div>
 
-<script src="app.js?v=53"></script>
+<div id="modal-painel-periodo-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(920px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-painel-periodo-titulo">Itens divergentes</h2>
+      <button id="btn-fechar-modal-painel-periodo" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" style="margin-bottom:14px">Linhas com "Ver" abrem a investigação daquela divergência. Casos marcados "Histórico resolvido" já foram encerrados antes de existir uma divergência nova aqui - não têm mais investigação em aberto.</p>
+      <table class="tabela" id="tabela-modal-painel-periodo">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th><th>Valor</th><th>Hipótese</th><th>Status</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=54"></script>
 </body>
 </html>

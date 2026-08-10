@@ -490,7 +490,7 @@ function mostrarView(nome) {
   document.getElementById("view-" + nome).classList.remove("hidden");
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
   apresentarModuloSeNecessario(nome);
-  if (nome === "hub") renderizarHub();
+  if (nome === "hub") { renderizarHub(); carregarMapaDemandas(); }
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
   if (nome === "cobertura-conferencia") carregarCoberturaConferencia();
@@ -511,6 +511,7 @@ function mostrarView(nome) {
 
 // ---------- dashboard ----------
 let chartAcuraciaDia, chartCausas, chartTendencia, chartMom;
+let ultimoAcuraciaDiaDados = [], ultimoAcuraciaMensalDados = [];
 
 async function carregarDashboard() {
   const almox = document.getElementById("filtro-almoxarifado").value;
@@ -569,6 +570,7 @@ function renderKpis(k) {
 
 function renderAcuraciaDia(dados) {
   const ctx = document.getElementById("chart-acuracia-dia");
+  ultimoAcuraciaDiaDados = dados;
   if (chartAcuraciaDia) chartAcuraciaDia.destroy();
   chartAcuraciaDia = new Chart(ctx, {
     data: {
@@ -715,6 +717,7 @@ function round2(v) { return v == null ? null : Math.round(v * 100) / 100; }
 
 function renderMom(dados) {
   const ctx = document.getElementById("chart-mom");
+  ultimoAcuraciaMensalDados = dados;
   if (chartMom) chartMom.destroy();
   chartMom = new Chart(ctx, {
     data: {
@@ -855,6 +858,83 @@ function preencherFiltroAlmoxarifado(heatmapDados) {
 }
 document.getElementById("filtro-almoxarifado").addEventListener("change", carregarDashboard);
 document.getElementById("filtro-periodo").addEventListener("change", carregarDashboard);
+
+// ---------- duplo clique nas barras do Painel: itens divergentes do período ----------
+// Mesmo padrão já usado no calendário de Cobertura de Conferência
+// (dblclick num elemento do gráfico abre um modal com a lista de itens,
+// com ação "Ver" pra abrir a investigação por linha).
+document.getElementById("chart-acuracia-dia").addEventListener("dblclick", (ev) => {
+  if (!chartAcuraciaDia) return;
+  // modo "index" (não "nearest"+intersect) - encontra a barra pela
+  // posição no eixo X sem exigir acerto pixel-perfeito na área exata do
+  // elemento, bem mais robusto quando o gráfico acabou de ser redesenhado
+  // (ex: depois de abrir/fechar um modal)
+  const pontos = chartAcuraciaDia.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
+  if (!pontos.length) return;
+  const dia = ultimoAcuraciaDiaDados[pontos[0].index];
+  if (!dia) return;
+  abrirModalItensPeriodo(dia.data, dia.data, `Itens divergentes — ${formatarDataCurta(dia.data)}`);
+});
+
+document.getElementById("chart-mom").addEventListener("dblclick", (ev) => {
+  if (!chartMom) return;
+  const pontos = chartMom.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
+  if (!pontos.length) return;
+  const mesInfo = ultimoAcuraciaMensalDados[pontos[0].index];
+  if (!mesInfo) return;
+  const [inicio, fim] = _primeiroUltimoDiaDoMes(mesInfo.mes);
+  abrirModalItensPeriodo(inicio, fim, `Itens divergentes — ${mesInfo.mes}`);
+});
+
+function _primeiroUltimoDiaDoMes(mesStr) {
+  // mesStr no formato "YYYY-MM"
+  const [ano, mes] = mesStr.split("-").map(Number);
+  const inicio = `${mesStr}-01`;
+  const ultimoDia = new Date(ano, mes, 0).getDate(); // dia 0 do mês seguinte = último dia deste mês
+  const fim = `${mesStr}-${String(ultimoDia).padStart(2, "0")}`;
+  return [inicio, fim];
+}
+
+async function abrirModalItensPeriodo(dataInicio, dataFim, titulo) {
+  const almox = document.getElementById("filtro-almoxarifado").value;
+  const params = new URLSearchParams({ data_inicio: dataInicio, data_fim: dataFim });
+  if (almox) params.set("almoxarifado", almox);
+  const res = await apiFetch(`${API}/dashboard/itens-periodo?${params.toString()}`);
+  if (!res.ok) {
+    alert("Não foi possível carregar os itens desse período.");
+    return;
+  }
+  const dados = await res.json();
+  document.getElementById("modal-painel-periodo-titulo").textContent = `${titulo} (${dados.total})`;
+  document.querySelector("#tabela-modal-painel-periodo tbody").innerHTML = dados.itens
+    .map(
+      (i) => `<tr>
+        <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
+        <td>${formatarDataCurta(i.data)}</td><td>${formatarMoeda(i.valor_estimado)}</td>
+        <td>${rotulo(i.hipotese)}</td>
+        <td>${i.tipo === "divergencia" ? badge(i.status) : `<span class="hint">Histórico resolvido</span>`}</td>
+        <td>${i.tipo === "divergencia" ? `<button class="btn-secundario btn-ver-item-periodo" data-id="${i.id}">Ver</button>` : ""}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="8" style="color:var(--muted)">Nenhum item divergente nesse período.</td></tr>`;
+
+  document.querySelectorAll(".btn-ver-item-periodo").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      document.getElementById("modal-painel-periodo-overlay").classList.add("hidden");
+      mostrarView("lista");
+      abrirDetalhe(parseInt(btn.dataset.id));
+    })
+  );
+
+  document.getElementById("modal-painel-periodo-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-painel-periodo").addEventListener("click", () => {
+  document.getElementById("modal-painel-periodo-overlay").classList.add("hidden");
+});
+document.getElementById("modal-painel-periodo-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-painel-periodo-overlay") document.getElementById("modal-painel-periodo-overlay").classList.add("hidden");
+});
 
 function badge(status) {
   const cls = "badge-" + status.toLowerCase();
@@ -3543,6 +3623,52 @@ document.getElementById("btn-sincronizar-lovable").addEventListener("click", asy
     btn.textContent = "🔄 Sincronizar agora";
   }
 });
+
+// ---------- mapa de demandas de gestão (painel fixo da tela Início) ----------
+async function carregarMapaDemandas() {
+  const painel = document.getElementById("painel-mapa-demandas");
+  if (!painel) return;
+  let dados;
+  try {
+    const res = await apiFetch(`${API}/dashboard/mapa-demandas`);
+    if (!res.ok) throw new Error("resposta não-ok");
+    dados = await res.json();
+  } catch (erro) {
+    console.error("Falha ao carregar o mapa de demandas:", erro);
+    document.getElementById("md-kpi-row").innerHTML = `<p class="hint">Não foi possível carregar o mapa de demandas agora.</p>`;
+    return;
+  }
+
+  const baixas = dados.baixas_pendentes || { total: 0, valor_total: 0, por_motivo: [] };
+  const obsol = dados.obsolescencia || { resumo: { "30": { quantidade: 0, valor: 0 }, "60": { quantidade: 0, valor: 0 }, "90": { quantidade: 0, valor: 0 } } };
+  const r = obsol.resumo;
+
+  document.getElementById("md-kpi-row").innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Baixas pendentes (passivo)</div><div class="kpi-value accent">${baixas.total}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Valor em baixas pendentes</div><div class="kpi-value">${formatarMoeda(baixas.valor_total)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">SKUs em risco de obsolescência</div><div class="kpi-value">${(r["30"].quantidade + r["60"].quantidade + r["90"].quantidade)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Valor total em risco de obsolescência</div><div class="kpi-value" style="color:var(--alto)">${formatarMoeda(r["30"].valor + r["60"].valor + r["90"].valor)}</div></div>
+  `;
+
+  document.getElementById("md-baixas-por-motivo").innerHTML = baixas.total
+    ? baixas.por_motivo
+        .map(
+          (m) => `<div class="evidencia-item sim"><span>${m.motivo}</span><span>${m.quantidade} · ${formatarMoeda(m.valor)}</span></div>`
+        )
+        .join("")
+    : `<p class="hint">Nenhuma baixa pendente no momento — tudo que foi solicitado já foi aprovado ou reprovado.</p>`;
+
+  const linhaFarol = (cor, label, faixa) =>
+    `<div class="evidencia-item sim"><span><span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${cor}; margin-right:8px"></span>${label}</span><span>${faixa.quantidade} SKU(s) · ${formatarMoeda(faixa.valor)}</span></div>`;
+  document.getElementById("md-obsolescencia-farol").innerHTML =
+    linhaFarol("var(--medio)", "30-59 dias sem giro", r["30"]) +
+    linhaFarol("var(--alto)", "60-89 dias sem giro", r["60"]) +
+    linhaFarol("var(--critico)", "90+ dias sem giro", r["90"]);
+
+  document.getElementById("md-shelf-life").innerHTML = dados.shelf_life
+    ? `Risco de validade (Shelf Life): ${dados.shelf_life.total_lotes_em_risco} lote(s) em risco, ${formatarMoeda(dados.shelf_life.valor_total)} em jogo.`
+    : `📋 Risco de validade (Shelf Life): ainda não conectado ao módulo do Lovable — aguardando a exportação/acesso pra trazer esses dados aqui.`;
+}
 
 // ---------- hub orbital (tela inicial) ----------
 function renderizarHub() {

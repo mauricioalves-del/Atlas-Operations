@@ -234,3 +234,216 @@ def top_divergencias(limite: int = 10, periodo: str | None = None, usuario: mode
         item["descricao_produto"] = descricoes.get(item["sku"])
     todos.sort(key=lambda x: abs(x["divergencia_qtd"] or 0), reverse=True)
     return todos[:limite]
+
+
+@router.get("/itens-periodo")
+def itens_periodo(
+    data_inicio: date,
+    data_fim: date,
+    almoxarifado: str | None = None,
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Lista os itens divergentes de um intervalo de datas (um dia só,
+    quando data_inicio == data_fim, ou um mês inteiro) - alimenta o popup
+    de duplo clique nas barras do Painel (gráfico diário e o MoM),
+    reaproveitando as MESMAS duas fontes que compõem esses gráficos (ver
+    acuracia_por_dia acima): divergências novas (tabela `divergencias`) e
+    casos históricos já resolvidos que tiveram divergência real
+    (`movimentacoes_historico`). Itens da tabela `divergencias` têm `id`
+    (dá pra abrir a investigação); itens históricos não (já foram
+    resolvidos e não têm mais uma investigação "aberta" pra ver)."""
+    q_div = db.query(models.Divergencia).filter(
+        models.Divergencia.origem != "fechamento_inventario",
+        models.Divergencia.data_deteccao >= data_inicio,
+        models.Divergencia.data_deteccao <= data_fim,
+    )
+    if almoxarifado:
+        q_div = q_div.filter(models.Divergencia.almoxarifado == almoxarifado)
+    divergencias = q_div.all()
+
+    q_hist = db.query(models.MovimentacaoHistorico).filter(
+        models.MovimentacaoHistorico.origem != "fechamento_inventario",
+        models.MovimentacaoHistorico.divergencia != 0,
+        models.MovimentacaoHistorico.data_movimento >= data_inicio,
+        models.MovimentacaoHistorico.data_movimento <= data_fim,
+    )
+    if almoxarifado:
+        q_hist = q_hist.filter(models.MovimentacaoHistorico.almoxarifado == almoxarifado)
+    historicos = q_hist.all()
+
+    skus = {d.sku for d in divergencias} | {h.sku for h in historicos}
+    descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus)).all()}
+
+    itens = []
+    for d in divergencias:
+        itens.append({
+            "tipo": "divergencia",
+            "id": d.id,
+            "sku": d.sku,
+            "descricao_produto": descricoes.get(d.sku),
+            "almoxarifado": d.almoxarifado,
+            "data": str(d.data_deteccao),
+            "valor_estimado": d.valor_estimado,
+            "divergencia_qtd": d.divergencia_qtd,
+            "hipotese": d.hipotese_ia or d.hipotese_confirmada,
+            "confianca": d.confianca_ia,
+            "status": d.status,
+        })
+    for h in historicos:
+        itens.append({
+            "tipo": "historico",
+            "id": None,
+            "sku": h.sku,
+            "descricao_produto": descricoes.get(h.sku),
+            "almoxarifado": h.almoxarifado,
+            "data": str(h.data_movimento),
+            "valor_estimado": h.valor_divergencia,
+            "divergencia_qtd": h.divergencia,
+            "hipotese": h.hipotese_confirmada,
+            "confianca": None,
+            "status": "Historico_Resolvido",
+        })
+    itens.sort(key=lambda x: (x["data"], abs(x["divergencia_qtd"] or 0)), reverse=True)
+    return {"itens": itens, "total": len(itens)}
+
+
+# ---------------------------------------------------------------------------
+# Mapa de Demandas de Gestão (painel fixo na tela Início) - agrega, num só
+# lugar, os passivos e riscos que hoje exigem uma decisão de gestão:
+#   1) baixas operacionais PENDENTES no Lovable (passivo em aberto - ainda
+#      não foi aprovada nem reprovada, o valor ainda não saiu do estoque
+#      contabilmente mas já foi solicitado);
+#   2) risco de obsolescência por baixo giro (produto com saldo em estoque
+#      mas sem nenhuma saída/venda recente - farol 30/60/90 dias);
+#   3) risco de validade (Shelf Life) - AINDA NÃO IMPLEMENTADO: esse dado
+#      vive só no módulo Shelf Life do Lovable, que o Atlas ainda não lê.
+#      Fica null até essa integração existir - ver DECISOES.md.
+# ---------------------------------------------------------------------------
+
+DIAS_MINIMO_RISCO_OBSOLESCENCIA = 30
+
+
+def _calcular_baixas_pendentes(db: Session) -> dict:
+    pendentes = db.query(models.BaixaOperacional).filter(models.BaixaOperacional.status_fluxo == "PENDENTE").all()
+    descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_({b.sku for b in pendentes})).all()}
+
+    por_motivo = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
+    for b in pendentes:
+        motivo = b.motivo_baixa_bruto or "Não informado"
+        por_motivo[motivo]["quantidade"] += 1
+        por_motivo[motivo]["valor"] += b.valor_total or 0
+
+    itens = sorted(
+        [
+            {
+                "id": b.id, "sku": b.sku, "descricao_produto": descricoes.get(b.sku),
+                "almoxarifado": b.almoxarifado, "motivo": b.motivo_baixa_bruto,
+                "quantidade": b.quantidade, "valor_total": b.valor_total,
+                "solicitante_nome": b.solicitante_nome, "data_baixa": str(b.data_baixa) if b.data_baixa else None,
+            }
+            for b in pendentes
+        ],
+        key=lambda x: x["valor_total"] or 0,
+        reverse=True,
+    )
+
+    return {
+        "total": len(pendentes),
+        "valor_total": round(sum(b.valor_total or 0 for b in pendentes), 2),
+        "por_motivo": [{"motivo": k, **v} for k, v in sorted(por_motivo.items(), key=lambda x: -x[1]["valor"])],
+        "itens": itens[:100],
+    }
+
+
+def _calcular_risco_obsolescencia(db: Session, dias_minimo: int = DIAS_MINIMO_RISCO_OBSOLESCENCIA) -> dict:
+    """Farol de baixo giro: produto com saldo em estoque (> 0) mas sem
+    nenhuma saída de movimentação bruta NEM venda faturada nos últimos N
+    dias. "Última atividade" é a mais recente entre: última saída
+    (qtd_sai > 0) no livro-caixa bruto do sistema, e a última venda
+    faturada (Faturamento) - o que vier depois, porque uma transferência
+    de entrada não conta como "o produto girou", só saída/venda real
+    conta."""
+    hoje = date.today()
+
+    linha_num = func.row_number().over(
+        partition_by=(models.MovimentacaoBruta.sku, models.MovimentacaoBruta.almoxarifado),
+        order_by=(models.MovimentacaoBruta.data.desc(), models.MovimentacaoBruta.id.desc()),
+    ).label("rn")
+    subq_saldo = db.query(
+        models.MovimentacaoBruta.sku,
+        models.MovimentacaoBruta.almoxarifado,
+        models.MovimentacaoBruta.saldo,
+        models.MovimentacaoBruta.data,
+        linha_num,
+    ).subquery()
+    saldo_atual = db.query(subq_saldo).filter(subq_saldo.c.rn == 1, subq_saldo.c.saldo > 0).all()
+
+    ultima_saida = {
+        (r.sku, r.almoxarifado): r.ultima_saida
+        for r in (
+            db.query(
+                models.MovimentacaoBruta.sku, models.MovimentacaoBruta.almoxarifado,
+                func.max(models.MovimentacaoBruta.data).label("ultima_saida"),
+            )
+            .filter(models.MovimentacaoBruta.qtd_sai > 0)
+            .group_by(models.MovimentacaoBruta.sku, models.MovimentacaoBruta.almoxarifado)
+            .all()
+        )
+    }
+    ultima_venda = {
+        r.sku: r.ultima_venda
+        for r in (
+            db.query(models.Faturamento.sku, func.max(models.Faturamento.data_faturamento).label("ultima_venda"))
+            .group_by(models.Faturamento.sku)
+            .all()
+        )
+    }
+    custos = {p.sku: p.custo_unitario for p in db.query(models.Produto.sku, models.Produto.custo_unitario).all()}
+    descricoes = {p.sku: p.descricao for p in db.query(models.Produto.sku, models.Produto.descricao).all()}
+
+    itens = []
+    for sku, almox, saldo, data_ult_mov, _rn in saldo_atual:
+        candidatos = [d for d in (ultima_saida.get((sku, almox)), ultima_venda.get(sku), data_ult_mov) if d]
+        ultima_atividade = max(candidatos) if candidatos else None
+        if not ultima_atividade:
+            continue
+        dias = (hoje - ultima_atividade).days
+        if dias < dias_minimo:
+            continue
+        faixa = "90" if dias >= 90 else ("60" if dias >= 60 else "30")
+        custo = custos.get(sku) or 0
+        itens.append({
+            "sku": sku,
+            "descricao_produto": descricoes.get(sku),
+            "almoxarifado": almox,
+            "saldo_atual": saldo,
+            "dias_sem_movimento": dias,
+            "ultima_atividade": str(ultima_atividade),
+            "valor_estimado": round(saldo * custo, 2),
+            "faixa": faixa,
+        })
+    itens.sort(key=lambda x: x["valor_estimado"], reverse=True)
+
+    resumo = {"30": {"quantidade": 0, "valor": 0.0}, "60": {"quantidade": 0, "valor": 0.0}, "90": {"quantidade": 0, "valor": 0.0}}
+    for it in itens:
+        resumo[it["faixa"]]["quantidade"] += 1
+        resumo[it["faixa"]]["valor"] += it["valor_estimado"]
+    for faixa in resumo:
+        resumo[faixa]["valor"] = round(resumo[faixa]["valor"], 2)
+
+    return {"resumo": resumo, "itens": itens[:100], "total_itens": len(itens)}
+
+
+@router.get("/mapa-demandas")
+def mapa_demandas(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Painel fixo da tela Início - baixas operacionais pendentes
+    (passivo em aberto) + risco de obsolescência por baixo giro (farol
+    30/60/90 dias). Risco de validade (Shelf Life) ainda não entra aqui -
+    esse dado vive só no Lovable e a integração de leitura ainda não
+    existe (ver DECISOES.md)."""
+    return {
+        "baixas_pendentes": _calcular_baixas_pendentes(db),
+        "obsolescencia": _calcular_risco_obsolescencia(db),
+        "shelf_life": None,
+    }
