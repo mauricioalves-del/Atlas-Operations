@@ -2718,6 +2718,9 @@ document.getElementById("mp-btn-importar-ajustes").addEventListener("click", asy
       `Ignoradas (coluna "Não" - já mapeada em Baixas): ${data.ignoradas_flag_nao}`,
       `Ignoradas (legado pré-separação Sim/Não): ${data.ignoradas_legado_pre_separacao}`,
     ];
+    if (data.duplicadas_no_arquivo) {
+      linhas.push(`🔁 ${data.duplicadas_no_arquivo} linha(s) 100% duplicada(s) dentro do próprio arquivo foram ignoradas automaticamente (não contam nem entram no banco).`);
+    }
     if (data.ids_invent_repetidos.length) {
       linhas.push(`⚠️ ${data.ids_invent_repetidos.length} Id_Invent já existiam de uma importação anterior - confira se não é upload duplicado.`);
     }
@@ -3752,15 +3755,15 @@ let dadosMpMotivosMensal = null, dadosMpFluxoInventario = [], dadosMpEvolucaoMen
 const CORES_FLUXO_INVENTARIO = { entrada: "#4caf50", saida: "#e5534b", resultado: "#5b75ac" };
 
 async function carregarMapeamentoPassivos() {
-  const [kpis, motivosMensal, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais, classificacaoOficial] = await Promise.all([
+  const [kpis, motivosMensal, motivosResumo, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais] = await Promise.all([
     apiFetch(`${API}/baixas-operacionais/dashboard/kpis`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/motivos-mensal`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/motivos-resumo`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/evolucao-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-recorrentes`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-impacto-financeiro`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-totais`).then((r) => r.json()),
-    apiFetch(`${API}/baixas-operacionais/dashboard/classificacao-oficial-inventario`).then((r) => r.json()),
   ]);
 
   const m = kpis.mapeamento;
@@ -3782,21 +3785,35 @@ async function carregarMapeamentoPassivos() {
     .join("");
 
   renderMpMotivosMensal(motivosMensal);
+  renderMpMotivosResumo(motivosResumo);
   renderMpFluxoInventario(fluxoInventarioMensal);
   renderMpEvolucaoMensal(evolucaoMensal);
   renderMpTabelaTop("mp-tabela-recorrentes", topRecorrentes);
   renderMpTabelaTop("mp-tabela-impacto-financeiro", topImpacto);
-  renderMpClassificacaoOficial(classificacaoOficial);
+  carregarJustificativasAjusteInventario();
 }
 
-function renderMpClassificacaoOficial(classificacao) {
-  // "Mapeada de passivos" da tabela oficial (Ace4/Estoque): de tudo que passou pela conciliação de
-  // inventário, quanto é ajuste de fato x quanto é baixa de passivo (já contada em Baixas, não soma
-  // de novo no Fluxo de Inventário acima) x quanto é legado desconsiderado (pré-separação Sim/Não).
-  const CORES_CLASSIFICACAO = { ajuste_inventario: CORES_FLUXO_INVENTARIO.entrada, passivo_ja_mapeado: "#f9a825", legado_desconsiderado: "#8ca0a3" };
-  document.getElementById("mp-kpi-row-classificacao").innerHTML = Object.entries(classificacao)
-    .map(([chave, c]) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="color:${CORES_CLASSIFICACAO[chave] || "#c9d4d6"}">${c.quantidade} · ${formatarMoeda(c.valor)}</div></div>`)
-    .join("");
+function renderMpMotivosResumo(dados) {
+  // Substitui o indicador genérico "Classificação Oficial (Ace4)" (3 cards
+  // abstratos: ajuste x passivo x legado) por algo acionável - quanto cada
+  // motivo de baixa (Avaria, Vencimento, Descarte...) realmente custou, em
+  // quantidade e R$. Mesmo filtro do gráfico de motivos acima (sem
+  // Inventário Mensal), mas SEM o top-N/"Outros" - aqui é tabela, mostra
+  // todo mundo.
+  document.querySelector("#mp-tabela-motivos-resumo tbody").innerHTML = dados
+    .map(
+      (d) => `<tr data-motivo="${d.motivo}" style="cursor:pointer"><td>${d.motivo}</td><td>${d.quantidade}</td><td>${formatarMoeda(d.valor)}</td></tr>`
+    )
+    .join("") || `<tr><td colspan="3" style="color:var(--muted)">Nenhuma baixa aprovada ainda.</td></tr>`;
+
+  document.querySelectorAll("#mp-tabela-motivos-resumo tbody tr[data-motivo]").forEach((tr) =>
+    tr.addEventListener("click", () =>
+      abrirModalPassivosItens(
+        { motivo: tr.dataset.motivo, excluir_categoria_mapeamento: "inventario_mensal", status_fluxo: "APROVADA" },
+        `${tr.dataset.motivo}`
+      )
+    )
+  );
 }
 
 const CORES_MOTIVOS_BAIXA = ["#5b75ac", "#4caf50", "#e5534b", "#f9a825", "#8e5b9e", "#3fb6c9"];
@@ -4104,7 +4121,7 @@ async function abrirModalFluxoInventarioItens(filtros, titulo) {
     `Resultado: ${formatarMoeda(dados.entradas_valor - dados.saidas_valor)}`;
   document.querySelector("#tabela-modal-fluxo-inventario-itens tbody").innerHTML = dados.itens
     .map(
-      (i) => `<tr>
+      (i) => `<tr data-id="${i.id}" class="linha-clicavel">
         <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
         <td>${i.id_lote || "—"}</td>
         <td>${i.qtd_sistema ?? "—"}</td><td>${i.qtd_contagem ?? "—"}</td><td>${i.divergencia_qtd ?? "—"}</td>
@@ -4113,6 +4130,13 @@ async function abrirModalFluxoInventarioItens(filtros, titulo) {
       </tr>`
     )
     .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhum ajuste de inventário encontrado.</td></tr>`;
+
+  document.querySelectorAll("#tabela-modal-fluxo-inventario-itens tbody tr[data-id]").forEach((tr) =>
+    tr.addEventListener("click", () => {
+      const item = dados.itens.find((i) => String(i.id) === tr.dataset.id);
+      if (item) abrirModalJustificativaPorAjuste(item);
+    })
+  );
 
   document.getElementById("modal-fluxo-inventario-itens-overlay").classList.remove("hidden");
 }
@@ -4123,6 +4147,257 @@ document.getElementById("btn-fechar-modal-fluxo-inventario-itens").addEventListe
 document.getElementById("modal-fluxo-inventario-itens-overlay").addEventListener("click", (ev) => {
   if (ev.target.id === "modal-fluxo-inventario-itens-overlay") document.getElementById("modal-fluxo-inventario-itens-overlay").classList.add("hidden");
 });
+
+// ---------- modal de justificativa de ajuste de inventário ----------
+// Espelha o modal de Ação Pós-Inventário (abrirModalComAcao etc.) - mesma ideia de
+// responsável/prazo/status/checklist, mas aplicada a um ajuste já conciliado na tabela
+// oficial (Ace4), aberto a partir do modal "Itens do fluxo de inventário". Mantém o painel
+// "Acompanhamento do item" igual ao da Ação Pós-Inventário e adiciona, embaixo, um
+// mini-gráfico Qtd. Sistema x Qtd. Contagem x Diferença específico daquele ajuste.
+let justificativaModalAtual = null;
+let justificativaModalAoSalvar = null;
+let checklistJustificativaModalAtual = [];
+let chartJustificativaModalHistorico;
+let chartJustificativaModalComparativo;
+
+async function abrirModalJustificativaPorAjuste(item) {
+  let existente = null;
+  try {
+    const lista = await apiFetch(`${API}/ajustes-inventario/justificativas?ajuste_id=${item.id}`).then((r) => r.json());
+    existente = lista[0] || null;
+  } catch (erro) {
+    console.error("Falha ao buscar justificativa existente:", erro);
+  }
+  if (existente) {
+    abrirModalComJustificativa(existente, () => carregarJustificativasAjusteInventario());
+  } else {
+    abrirModalComJustificativa(
+      {
+        ajuste_id: item.id, sku: item.sku, descricao_produto: item.descricao_produto, almoxarifado: item.almoxarifado,
+        id_lote: item.id_lote, qtd_sistema: item.qtd_sistema, qtd_contagem: item.qtd_contagem,
+        divergencia_qtd: item.divergencia_qtd, valor_estimado: item.valor_estimado,
+        justificativa: "", solucao_aplicada: null, responsavel: null, prazo: null, status: "Pendente", checklist: [],
+      },
+      () => carregarJustificativasAjusteInventario()
+    );
+  }
+}
+
+function abrirModalComJustificativa(justificativa, aoSalvar) {
+  justificativaModalAtual = justificativa; // se não tiver .id, o modal está em modo "criar nova"
+  justificativaModalAoSalvar = aoSalvar;
+  checklistJustificativaModalAtual = Array.isArray(justificativa.checklist) ? [...justificativa.checklist] : [];
+
+  document.getElementById("modal-justificativa-titulo").textContent =
+    `${justificativa.sku} — ${justificativa.descricao_produto || "sem descrição"}${justificativa.id ? "" : " (nova justificativa)"}`;
+  document.getElementById("modal-justificativa-texto").value = justificativa.justificativa || "";
+  document.getElementById("modal-justificativa-solucao").value = justificativa.solucao_aplicada || "";
+  document.getElementById("modal-justificativa-responsavel").value = justificativa.responsavel || "";
+  document.getElementById("modal-justificativa-prazo").value = justificativa.prazo || "";
+  document.getElementById("modal-justificativa-status").value = justificativa.status || "Pendente";
+  renderChecklistModalJustificativa();
+  renderComparativoModalJustificativa(justificativa);
+
+  document.getElementById("modal-justificativa-overlay").classList.remove("hidden");
+
+  document.getElementById("modal-justificativa-acompanhamento-kpis").innerHTML = `<p class="hint" style="grid-column:1/-1">Carregando...</p>`;
+  document.getElementById("modal-justificativa-linha-do-tempo").innerHTML = "";
+  (async () => {
+    try {
+      const params = justificativa.almoxarifado ? `?almoxarifado=${encodeURIComponent(justificativa.almoxarifado)}` : "";
+      const historico = await apiFetch(`${API}/fechamentos/historico-sku/${encodeURIComponent(justificativa.sku)}${params}`).then((r) => r.json());
+      renderAcompanhamentoModalJustificativa(historico);
+    } catch (erro) {
+      document.getElementById("modal-justificativa-acompanhamento-kpis").innerHTML = `<p class="hint" style="grid-column:1/-1">Não foi possível carregar o histórico.</p>`;
+    }
+  })();
+}
+
+function renderChecklistModalJustificativa() {
+  document.getElementById("modal-justificativa-checklist-itens").innerHTML = checklistJustificativaModalAtual
+    .map(
+      (item, idx) => `<div class="checklist-item ${item.concluido ? "concluido" : ""}">
+        <input type="checkbox" data-idx="${idx}" class="checklist-toggle-justificativa" ${item.concluido ? "checked" : ""}>
+        <span>${item.descricao}</span>
+        <button data-idx="${idx}" class="checklist-remover-justificativa">remover</button>
+      </div>`
+    )
+    .join("") || "<p class='hint'>Nenhum item no checklist ainda.</p>";
+
+  document.querySelectorAll(".checklist-toggle-justificativa").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      checklistJustificativaModalAtual[parseInt(chk.dataset.idx)].concluido = chk.checked;
+      renderChecklistModalJustificativa();
+    })
+  );
+  document.querySelectorAll(".checklist-remover-justificativa").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      checklistJustificativaModalAtual.splice(parseInt(btn.dataset.idx), 1);
+      renderChecklistModalJustificativa();
+    })
+  );
+}
+
+document.getElementById("btn-add-checklist-justificativa").addEventListener("click", () => {
+  const input = document.getElementById("modal-justificativa-checklist-novo");
+  const texto = input.value.trim();
+  if (!texto) return;
+  checklistJustificativaModalAtual.push({ descricao: texto, concluido: false });
+  input.value = "";
+  renderChecklistModalJustificativa();
+});
+
+function renderAcompanhamentoModalJustificativa(historico) {
+  const kpis = [
+    { rotulo: "Dias movimentados", valor: historico.dias_movimentados },
+    { rotulo: "Dias pendente", valor: historico.dias_pendente, cor: "var(--critico)" },
+    { rotulo: "Dias resolvido", valor: historico.dias_resolvido, cor: "var(--ok)" },
+  ];
+  document.getElementById("modal-justificativa-acompanhamento-kpis").innerHTML = kpis
+    .map((k) => `<div class="kpi-mini"><div class="valor" style="${k.cor ? "color:" + k.cor : ""}">${k.valor}</div><div class="rotulo">${k.rotulo}</div></div>`)
+    .join("");
+
+  const linha = historico.linha_do_tempo || [];
+  const ctx = document.getElementById("modal-justificativa-chart-historico");
+  if (chartJustificativaModalHistorico) chartJustificativaModalHistorico.destroy();
+  if (linha.length) {
+    chartJustificativaModalHistorico = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: linha.map((p) => formatarDataCurta(p.data)),
+        datasets: [{
+          label: "Divergente",
+          data: linha.map((p) => (p.divergente ? 1 : 0)),
+          borderColor: "#e5534b",
+          backgroundColor: "#e5534b",
+          pointBackgroundColor: linha.map((p) => (p.divergente ? "#e5534b" : "#4caf50")),
+          pointRadius: 5,
+          stepped: true,
+        }],
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 1, ticks: { stepSize: 1, color: "#8ca0a3", callback: (v) => (v === 1 ? "Divergente" : "OK") }, grid: { color: "#2e3a40" } },
+          x: { ticks: { color: "#8ca0a3", font: { size: 9 } }, grid: { display: false } },
+        },
+      },
+    });
+  }
+
+  document.getElementById("modal-justificativa-linha-do-tempo").innerHTML = linha
+    .slice()
+    .reverse()
+    .map((p) => `<div class="linha-tempo-item"><span>${formatarDataCurta(p.data)} · ${p.almoxarifado}</span><span style="color:${p.divergente ? "var(--critico)" : "var(--ok)"}">${p.divergente ? "Divergente" : "OK"}</span></div>`)
+    .join("");
+}
+
+function renderComparativoModalJustificativa(item) {
+  const ctx = document.getElementById("modal-justificativa-chart-comparativo");
+  if (chartJustificativaModalComparativo) chartJustificativaModalComparativo.destroy();
+  const qtdSistema = item.qtd_sistema ?? 0;
+  const qtdContagem = item.qtd_contagem ?? 0;
+  const diferenca = item.divergencia_qtd ?? qtdContagem - qtdSistema;
+  chartJustificativaModalComparativo = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: ["Qtd. Sistema", "Qtd. Contagem", "Diferença"],
+      datasets: [{
+        data: [qtdSistema, qtdContagem, diferenca],
+        backgroundColor: ["#5b75ac", "#4caf50", diferenca < 0 ? "#e5534b" : "#4caf50"],
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: "#8ca0a3" }, grid: { color: "#2e3a40" } },
+        x: { ticks: { color: "#8ca0a3" }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+document.getElementById("btn-fechar-modal-justificativa").addEventListener("click", () => {
+  document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+});
+document.getElementById("modal-justificativa-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-justificativa-overlay") document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+});
+
+document.getElementById("btn-salvar-modal-justificativa").addEventListener("click", async () => {
+  if (!justificativaModalAtual) return;
+  const textoJustificativa = document.getElementById("modal-justificativa-texto").value.trim();
+  if (!textoJustificativa) {
+    alert("Descreva a justificativa antes de salvar.");
+    return;
+  }
+  const camposComuns = {
+    justificativa: textoJustificativa,
+    solucao_aplicada: document.getElementById("modal-justificativa-solucao").value.trim() || null,
+    responsavel: document.getElementById("modal-justificativa-responsavel").value.trim() || null,
+    prazo: document.getElementById("modal-justificativa-prazo").value || null,
+    status: document.getElementById("modal-justificativa-status").value,
+    checklist: checklistJustificativaModalAtual,
+  };
+  let res;
+  if (justificativaModalAtual.id) {
+    res = await apiFetch(`${API}/ajustes-inventario/justificativas/${justificativaModalAtual.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(camposComuns),
+    });
+  } else {
+    res = await apiFetch(`${API}/ajustes-inventario/justificativas`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ajuste_id: justificativaModalAtual.ajuste_id, sku: justificativaModalAtual.sku,
+        descricao_produto: justificativaModalAtual.descricao_produto, almoxarifado: justificativaModalAtual.almoxarifado,
+        id_lote: justificativaModalAtual.id_lote, qtd_sistema: justificativaModalAtual.qtd_sistema,
+        qtd_contagem: justificativaModalAtual.qtd_contagem, divergencia_qtd: justificativaModalAtual.divergencia_qtd,
+        valor_estimado: justificativaModalAtual.valor_estimado, ...camposComuns,
+      }),
+    });
+    // a criação (POST) já aceita status/checklist direto no payload (diferente da Ação
+    // Pós-Inventário, que só aceita os campos básicos) - não precisa de um PATCH complementar.
+  }
+  if (res.ok) {
+    document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+    if (justificativaModalAoSalvar) justificativaModalAoSalvar();
+  } else {
+    alert("Não foi possível salvar a justificativa.");
+  }
+});
+
+async function carregarJustificativasAjusteInventario() {
+  const tbody = document.querySelector("#mp-tabela-justificativas tbody");
+  if (!tbody) return;
+  let lista = [];
+  try {
+    lista = await apiFetch(`${API}/ajustes-inventario/justificativas`).then((r) => r.json());
+  } catch (erro) {
+    console.error("Falha ao carregar justificativas de ajuste de inventário:", erro);
+    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">Não foi possível carregar as justificativas agora.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = lista
+    .map(
+      (j) => `<tr data-id="${j.id}" class="linha-clicavel">
+        <td>${j.sku}</td><td class="col-descricao">${j.descricao_produto || "—"}</td><td>${j.id_lote || "—"}</td>
+        <td>${j.qtd_sistema ?? "—"}</td><td>${j.qtd_contagem ?? "—"}</td><td>${j.divergencia_qtd ?? "—"}</td>
+        <td class="col-descricao">${j.justificativa || "—"}</td><td class="col-descricao">${j.solucao_aplicada || "—"}</td>
+        <td><span class="badge-status ${j.status}">${j.status.replace("_", " ")}</span></td>
+        <td>${j.responsavel || "—"}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma justificativa registrada ainda.</td></tr>`;
+
+  document.querySelectorAll("#mp-tabela-justificativas tbody tr[data-id]").forEach((tr) =>
+    tr.addEventListener("click", () => {
+      const justificativa = lista.find((j) => String(j.id) === tr.dataset.id);
+      if (!justificativa) return;
+      abrirModalComJustificativa(justificativa, () => carregarJustificativasAjusteInventario());
+    })
+  );
+}
 
 // ---------- mapa de demandas de gestão (painel fixo da tela Início) ----------
 async function carregarMapaDemandas() {

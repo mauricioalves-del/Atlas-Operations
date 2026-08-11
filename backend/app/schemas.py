@@ -148,6 +148,56 @@ class AcoesLoteAtualizar(BaseModel):
     observacao_conclusao: Optional[str] = None
 
 
+class JustificativaAjusteInventarioOut(BaseModel):
+    id: int
+    ajuste_id: Optional[int] = None
+    sku: str
+    descricao_produto: Optional[str] = None
+    almoxarifado: Optional[str] = None
+    id_lote: Optional[str] = None
+    qtd_sistema: Optional[float] = None
+    qtd_contagem: Optional[float] = None
+    divergencia_qtd: Optional[float] = None
+    valor_estimado: Optional[float] = None
+    justificativa: str
+    solucao_aplicada: Optional[str] = None
+    responsavel: Optional[str] = None
+    prazo: Optional[date] = None
+    status: str
+    checklist: Optional[list] = None
+    criado_por: Optional[str] = None
+    criado_em: datetime
+    concluido_em: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class JustificativaAjusteInventarioCreate(BaseModel):
+    ajuste_id: Optional[int] = None
+    sku: str
+    descricao_produto: Optional[str] = None
+    almoxarifado: Optional[str] = None
+    id_lote: Optional[str] = None
+    qtd_sistema: Optional[float] = None
+    qtd_contagem: Optional[float] = None
+    divergencia_qtd: Optional[float] = None
+    valor_estimado: Optional[float] = None
+    justificativa: str
+    solucao_aplicada: Optional[str] = None
+    responsavel: Optional[str] = None
+    prazo: Optional[date] = None
+
+
+class JustificativaAjusteInventarioAtualizar(BaseModel):
+    justificativa: Optional[str] = None
+    solucao_aplicada: Optional[str] = None
+    responsavel: Optional[str] = None
+    prazo: Optional[date] = None
+    status: Optional[str] = None
+    checklist: Optional[list] = None
+
+
 class ConciliacaoCienciaCreate(BaseModel):
     observacao: Optional[str] = None
     papel_assinatura: str  # "Diretor_Operacoes" ou "Coordenador_Financeiro"

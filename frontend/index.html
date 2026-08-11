@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=59">
+<link rel="stylesheet" href="style.css?v=61">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -345,10 +345,13 @@
         <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
       </div>
 
-      <div class="panel" id="mp-panel-classificacao-oficial">
-        <h2>Mapeada de Passivos — Classificação Oficial (Ace4)</h2>
-        <p class="panel-sub">De tudo que passou pela conciliação de inventário, quanto é ajuste de inventário de fato x quanto é baixa de passivo (já contada em Baixas) x quanto é legado desconsiderado.</p>
-        <div class="kpi-row" id="mp-kpi-row-classificacao"></div>
+      <div class="panel">
+        <h2>Resumo por Motivo — Quantidade e Custo Total</h2>
+        <p class="panel-sub">Sem contar Inventário Mensal (esse fluxo já tem o painel dedicado acima) · Clique numa linha pra ver as baixas daquele motivo</p>
+        <table class="tabela" id="mp-tabela-motivos-resumo">
+          <thead><tr><th>Motivo</th><th>Quantidade</th><th>Custo Total</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
 
       <div class="panel">
@@ -371,6 +374,17 @@
           <p class="panel-sub">Por valor total baixado — clique numa linha</p>
           <table class="tabela" id="mp-tabela-impacto-financeiro">
             <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Justificativas de Ajustes de Inventário</h2>
+        <p class="panel-sub">Justificativas registradas a partir do fluxo de inventário (aba "Fluxo de Inventário" acima) — clique numa linha para reabrir e editar</p>
+        <div class="tabela-scroll">
+          <table class="tabela" id="mp-tabela-justificativas">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -1234,17 +1248,66 @@
 </div>
 
 <div id="modal-fluxo-inventario-itens-overlay" class="modal-overlay hidden">
-  <div class="modal-card" style="width:min(1000px, 94vw)">
+  <div class="modal-card" style="width:min(1180px, 96vw)">
     <div class="modal-header">
       <h2 id="modal-fluxo-inventario-itens-titulo">Itens do fluxo de inventário</h2>
       <button id="btn-fechar-modal-fluxo-inventario-itens" class="btn-secundario">Fechar ✕</button>
     </div>
     <div style="padding:24px">
       <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
-      <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
-        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <p class="hint" style="margin-bottom:14px">Clique numa linha para justificar o ajuste e registrar a solução aplicada.</p>
+      <div class="tabela-scroll">
+        <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-justificativa-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2 id="modal-justificativa-titulo">Justificativa do ajuste</h2>
+      <button id="btn-fechar-modal-justificativa" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-coluna">
+        <label>Justificativa (por que esse ajuste aconteceu)</label>
+        <textarea id="modal-justificativa-texto" rows="3"></textarea>
+        <label>Solução aplicada</label>
+        <textarea id="modal-justificativa-solucao" rows="2"></textarea>
+        <div class="form-cadastro" style="grid-template-columns:1fr 1fr; gap:12px">
+          <div><label>Responsável</label><input id="modal-justificativa-responsavel" type="text"></div>
+          <div><label>Prazo</label><input id="modal-justificativa-prazo" type="date"></div>
+        </div>
+        <label>Status</label>
+        <select id="modal-justificativa-status">
+          <option value="Pendente">Pendente</option>
+          <option value="Em_Andamento">Em andamento</option>
+          <option value="Concluida">Concluída</option>
+          <option value="Cancelada">Cancelada</option>
+        </select>
+
+        <label style="margin-top:16px">Checklist</label>
+        <div id="modal-justificativa-checklist-itens"></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <input id="modal-justificativa-checklist-novo" type="text" placeholder="Adicionar item ao checklist...">
+          <button id="btn-add-checklist-justificativa" class="btn-secundario">Adicionar</button>
+        </div>
+
+        <button id="btn-salvar-modal-justificativa" class="btn-primario" style="margin-top:18px">Salvar</button>
+      </div>
+      <div class="modal-coluna modal-coluna-lateral">
+        <h3>Acompanhamento do item</h3>
+        <div id="modal-justificativa-acompanhamento-kpis" class="kpi-row-modal"></div>
+        <canvas id="modal-justificativa-chart-historico" height="140"></canvas>
+        <div id="modal-justificativa-linha-do-tempo"></div>
+
+        <h3 style="margin-top:20px">Qtd. Sistema × Qtd. Contagem × Diferença</h3>
+        <canvas id="modal-justificativa-chart-comparativo" height="140"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -1265,6 +1328,6 @@
   </div>
 </div>
 
-<script src="app.js?v=59"></script>
+<script src="app.js?v=61"></script>
 </body>
 </html>

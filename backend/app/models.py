@@ -521,6 +521,38 @@ class AjusteInventarioOficial(Base):
     criado_em = Column(DateTime, default=datetime.utcnow)
 
 
+class JustificativaAjusteInventario(Base):
+    """Justificativa de um ajuste de inventário específico (ver
+    AjusteInventarioOficial) - por que aquele ajuste aconteceu e qual
+    solução foi aplicada. Espelha AcaoPosInventario (mesma ideia de
+    responsável/prazo/status/checklist), mas focada num ajuste individual
+    já conciliado na tabela oficial (Ace4), não num item de fechamento
+    bruto. Guarda os dados do ajuste "congelados" no momento da criação
+    (sku, qtd_sistema, qtd_contagem etc.) pra continuar fazendo sentido
+    mesmo se o lote de origem for excluído depois - é registro de uma
+    decisão já tomada, não deveria desaparecer junto com o dado bruto."""
+    __tablename__ = "justificativas_ajuste_inventario"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ajuste_id = Column(Integer, ForeignKey("ajustes_inventario_oficial.id"), nullable=True, index=True)
+    sku = Column(String, index=True)
+    descricao_produto = Column(String, nullable=True)
+    almoxarifado = Column(String, nullable=True)
+    id_lote = Column(String, nullable=True)
+    qtd_sistema = Column(Float, nullable=True)
+    qtd_contagem = Column(Float, nullable=True)
+    divergencia_qtd = Column(Float, nullable=True)
+    valor_estimado = Column(Float, nullable=True)
+    justificativa = Column(String)  # por que esse ajuste aconteceu
+    solucao_aplicada = Column(String, nullable=True)  # o que foi feito pra resolver/evitar de novo
+    responsavel = Column(String, nullable=True)
+    prazo = Column(Date, nullable=True)
+    status = Column(String, default="Pendente", index=True)  # Pendente | Em_Andamento | Concluida | Cancelada
+    checklist = Column(JSON, nullable=True)  # [{"descricao": str, "concluido": bool}, ...]
+    criado_por = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+    concluido_em = Column(DateTime, nullable=True)
+
+
 class LoteShelfLife(Base):
     """Lote físico (com validade) para controle de risco de shelf life -
     alimenta a tela dedicada 'Shelf Life' e o bloco de Shelf Life do Mapa

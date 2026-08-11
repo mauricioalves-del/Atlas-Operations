@@ -284,6 +284,32 @@ def dashboard_passivos_motivos_mensal(usuario: models.Usuario = Depends(obter_us
     }
 
 
+@router.get("/dashboard/motivos-resumo")
+def dashboard_passivos_motivos_resumo(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Resumo por motivo de baixa (Avaria, Vencimento, Descarte...) com
+    quantidade e custo total - TODOS os motivos individualmente, sem o
+    top-N/"Outros" do gráfico de motivos-mensal (aqui é uma tabela, não tem
+    o limite de espaço de uma legenda). Mesmo filtro do gráfico: só
+    aprovadas, sem contar o que já é ajuste de inventário mensal (esse
+    fluxo já tem painel dedicado - Fluxo de Inventário)."""
+    aprovadas = db.query(models.BaixaOperacional).filter(models.BaixaOperacional.status_fluxo == "APROVADA").all()
+    divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id) != "inventario_mensal"]
+
+    por_motivo = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
+    for b in aprovadas:
+        motivo = b.motivo_baixa_bruto or "Não informado"
+        por_motivo[motivo]["quantidade"] += 1
+        por_motivo[motivo]["valor"] += b.valor_total or 0
+
+    resumo = [
+        {"motivo": motivo, "quantidade": v["quantidade"], "valor": round(v["valor"], 2)}
+        for motivo, v in por_motivo.items()
+    ]
+    resumo.sort(key=lambda x: abs(x["valor"]), reverse=True)
+    return resumo
+
+
 @router.get("/dashboard/mapeamento-origem")
 def dashboard_passivos_mapeamento_origem(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """De onde vem o mapeamento de cada baixa - Inventário Mensal vs

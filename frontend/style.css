@@ -344,6 +344,16 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
   .modal-body{grid-template-columns:1fr}
 }
 
+.tabela-scroll{overflow-x:auto}
+.tabela-scroll .tabela{min-width:760px}
+.linha-clicavel{cursor:pointer}
+.linha-clicavel:hover{background:var(--panel-2)}
+.badge-status{display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-family:var(--sans)}
+.badge-status.Pendente{background:color-mix(in srgb, var(--medio) 20%, transparent); color:var(--medio)}
+.badge-status.Em_Andamento{background:color-mix(in srgb, var(--accent) 20%, transparent); color:var(--accent)}
+.badge-status.Concluida{background:color-mix(in srgb, var(--ok) 20%, transparent); color:var(--ok)}
+.badge-status.Cancelada{background:color-mix(in srgb, var(--muted) 25%, transparent); color:var(--muted)}
+
 
 .shell{display:flex; min-height:100vh; position:relative; overflow:hidden}
 .shell::before{

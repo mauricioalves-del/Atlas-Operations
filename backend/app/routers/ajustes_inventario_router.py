@@ -26,11 +26,11 @@ automaticamente, mesmo sem a coluna "Inventário" preenchida ou marcada
 "Não" (Maurício confirmou: entrada e saída contam igual)."""
 import io
 from datetime import date, datetime
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 import openpyxl
 
-from .. import models
+from .. import models, schemas
 from ..database import get_db
 from ..csv_utils import parse_sku, parse_data, parse_decimal, limpar_texto
 from ..hipoteses_config import normalizar_almoxarifado
@@ -137,6 +137,16 @@ async def importar_ajustes_inventario(
 
     total, importadas, contadas_ajuste, ignoradas_nao, ignoradas_legado, erros = 0, 0, 0, 0, 0, []
     valor_total_ajuste = 0.0
+    # Alguns exports do sistema de origem repetem a MESMA linha inteira (visto
+    # em planilhas reais: dezenas de linhas 100% idênticas, não é "mesma
+    # chave com ajuste diferente" - é a linha inteira duplicada por engano
+    # do export). Sem isso, cada duplicata dobra a quantidade/valor daquele
+    # ajuste. Só pula duplicata EXATA (todas as colunas físicas iguais)
+    # dentro do MESMO arquivo - não afeta o caso legítimo de duas linhas com
+    # a mesma chave natural mas valores diferentes, nem reimportações
+    # intencionais em arquivos/lotes diferentes.
+    linhas_vistas_no_arquivo = set()
+    duplicadas_no_arquivo = 0
 
     for i, linha in enumerate(linhas[1:], start=2):
         sku_bruto = val(linha, "sku")
@@ -151,20 +161,37 @@ async def importar_ajustes_inventario(
             almoxarifado = normalizar_almoxarifado(almoxarifado_origem)
             id_invent_bruto = val(linha, "id_invent")
             id_invent = int(id_invent_bruto) if id_invent_bruto is not None and str(id_invent_bruto).strip() != "" else None
+
+            status_bruto = limpar_texto(val(linha, "status"))
+            id_lote_bruto = limpar_texto(val(linha, "id_lote"))
+            qtd_sistema = parse_decimal(val(linha, "qtd_sistema"))
+            qtd_contagem = parse_decimal(val(linha, "qtd_contagem"))
+            ajuste_qtd = parse_decimal(val(linha, "ajuste"))
+            custo_unitario = parse_decimal(val(linha, "custo"))
+            valor_total_linha = parse_decimal(val(linha, "valor_total"))
+
+            chave_linha = (
+                sku, status_bruto, id_invent, dt_invent, limpar_texto(almoxarifado_origem), id_lote_bruto,
+                qtd_sistema, qtd_contagem, ajuste_qtd, custo_unitario, valor_total_linha,
+            )
+            if chave_linha in linhas_vistas_no_arquivo:
+                duplicadas_no_arquivo += 1
+                continue
+            linhas_vistas_no_arquivo.add(chave_linha)
+
             if id_invent is not None and id_invent in ids_invent_ja_existentes:
                 ids_invent_repetidos.add(id_invent)
 
             inventario_flag_bruto = val(linha, "inventario_flag")
             conta = conta_como_ajuste_inventario(dt_invent, inventario_flag_bruto)
 
-            valor_total_linha = parse_decimal(val(linha, "valor_total"))
             registro = models.AjusteInventarioOficial(
                 lote_id=lote.id,
-                sku=sku, status=limpar_texto(val(linha, "status")), id_invent=id_invent, dt_invent=dt_invent,
+                sku=sku, status=status_bruto, id_invent=id_invent, dt_invent=dt_invent,
                 almoxarifado=almoxarifado, almoxarifado_origem=limpar_texto(almoxarifado_origem),
-                descricao_produto=limpar_texto(val(linha, "descricao")), id_lote=limpar_texto(val(linha, "id_lote")),
-                qtd_sistema=parse_decimal(val(linha, "qtd_sistema")), qtd_contagem=parse_decimal(val(linha, "qtd_contagem")),
-                ajuste_qtd=parse_decimal(val(linha, "ajuste")), custo_unitario=parse_decimal(val(linha, "custo")),
+                descricao_produto=limpar_texto(val(linha, "descricao")), id_lote=id_lote_bruto,
+                qtd_sistema=qtd_sistema, qtd_contagem=qtd_contagem,
+                ajuste_qtd=ajuste_qtd, custo_unitario=custo_unitario,
                 valor_total=valor_total_linha, categoria_produto=limpar_texto(val(linha, "grupo")),
                 observacao=limpar_texto(val(linha, "obs")),
                 inventario_flag_bruto=limpar_texto(str(inventario_flag_bruto)) if inventario_flag_bruto is not None else None,
@@ -200,6 +227,7 @@ async def importar_ajustes_inventario(
         "ignoradas_legado_pre_separacao": ignoradas_legado,
         "valor_total_ajustes_contados": round(valor_total_ajuste, 2),
         "ids_invent_repetidos": sorted(ids_invent_repetidos),
+        "duplicadas_no_arquivo": duplicadas_no_arquivo,
         "erros": erros,
     }
 
@@ -245,3 +273,84 @@ def excluir_lote_ajuste_inventario(
     db.delete(lote)
     db.commit()
     return {"lote_id": lote_id, "linhas_removidas": linhas_removidas}
+
+
+# ---------------------------------------------------------------------------
+# Justificativas de ajuste de inventário - por que um ajuste específico
+# aconteceu e qual solução foi aplicada. Espelha o padrão de
+# AcaoPosInventario (fechamento_router.py: listar/detalhar/criar/atualizar/
+# excluir), aberto a partir de uma linha do painel "Fluxo de Inventário" do
+# Mapeamento de Passivos (ver baixas_operacionais_router.py e app.js).
+# ---------------------------------------------------------------------------
+
+@router.get("/justificativas", response_model=list[schemas.JustificativaAjusteInventarioOut])
+def listar_justificativas(
+    status: str | None = None,
+    ajuste_id: int | None = None,
+    sku: str | None = None,
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Lista justificativas de ajuste de inventário - alimenta a tabela
+    "Justificativas de Ajustes de Inventário" no Mapeamento de Passivos, e
+    também é usada pelo pop de justificativa pra achar se já existe uma
+    justificativa em aberto pra aquele ajuste (filtro por ajuste_id)."""
+    q = db.query(models.JustificativaAjusteInventario)
+    if status:
+        q = q.filter(models.JustificativaAjusteInventario.status == status)
+    if ajuste_id:
+        q = q.filter(models.JustificativaAjusteInventario.ajuste_id == ajuste_id)
+    if sku:
+        q = q.filter(models.JustificativaAjusteInventario.sku == sku)
+    return q.order_by(models.JustificativaAjusteInventario.criado_em.desc()).all()
+
+
+@router.get("/justificativas/{justificativa_id}", response_model=schemas.JustificativaAjusteInventarioOut)
+def detalhar_justificativa(justificativa_id: int, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    justificativa = db.query(models.JustificativaAjusteInventario).get(justificativa_id)
+    if not justificativa:
+        raise HTTPException(404, "Justificativa não encontrada.")
+    return justificativa
+
+
+@router.post("/justificativas", response_model=schemas.JustificativaAjusteInventarioOut)
+def criar_justificativa(
+    payload: schemas.JustificativaAjusteInventarioCreate,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    nova = models.JustificativaAjusteInventario(**payload.model_dump(), status="Pendente", criado_por=usuario.username)
+    db.add(nova)
+    db.commit()
+    db.refresh(nova)
+    return nova
+
+
+@router.patch("/justificativas/{justificativa_id}", response_model=schemas.JustificativaAjusteInventarioOut)
+def atualizar_justificativa(
+    justificativa_id: int,
+    payload: schemas.JustificativaAjusteInventarioAtualizar,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    justificativa = db.query(models.JustificativaAjusteInventario).get(justificativa_id)
+    if not justificativa:
+        raise HTTPException(404, "Justificativa não encontrada.")
+    dados = payload.model_dump(exclude_unset=True)
+    for campo, valor in dados.items():
+        setattr(justificativa, campo, valor)
+    if dados.get("status") == "Concluida" and not justificativa.concluido_em:
+        justificativa.concluido_em = datetime.utcnow()
+    db.commit()
+    db.refresh(justificativa)
+    return justificativa
+
+
+@router.delete("/justificativas/{justificativa_id}")
+def excluir_justificativa(justificativa_id: int, usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
+    justificativa = db.query(models.JustificativaAjusteInventario).get(justificativa_id)
+    if not justificativa:
+        raise HTTPException(404, "Justificativa não encontrada.")
+    db.delete(justificativa)
+    db.commit()
+    return {"ok": True}
