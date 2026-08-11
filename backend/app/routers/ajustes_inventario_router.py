@@ -90,11 +90,16 @@ async def importar_ajustes_inventario(
     Cada linha é um ajuste já conciliado - não faz upsert por chave (a
     mesma combinação Id_Produto+Id_Invent+Id_Lote pode legitimamente
     aparecer mais de uma vez na planilha, com ajustes diferentes - são
-    lançamentos distintos, não duplicata), então re-importar o mesmo
-    arquivo duas vezes cria linhas repetidas. Se um Id_Invent já importado
-    antes aparecer de novo no arquivo, isso é avisado na resposta (não
-    bloqueia), pra dar visibilidade sem travar uma reconciliação legítima
-    que reprocessa um inventário antigo."""
+    lançamentos distintos, não duplicata). Mas uma linha 100% idêntica
+    (todas as colunas físicas iguais) a uma já importada antes - no mesmo
+    arquivo OU num lote anterior, ex: reenvio de uma planilha corrigida que
+    ainda traz de volta linhas de um período já conciliado - é pulada
+    automaticamente (ver duplicadas_no_arquivo/duplicadas_de_importacao_anterior
+    na resposta), pra não dobrar quantidade/valor daquele ajuste. Se um
+    Id_Invent já importado antes aparecer de novo no arquivo mas com algum
+    valor diferente (não é duplicata exata), isso só é avisado na resposta
+    (não bloqueia), pra dar visibilidade sem travar uma reconciliação
+    legítima que reprocessa um inventário antigo."""
     conteudo = await arquivo.read()
     try:
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
@@ -141,12 +146,26 @@ async def importar_ajustes_inventario(
     # em planilhas reais: dezenas de linhas 100% idênticas, não é "mesma
     # chave com ajuste diferente" - é a linha inteira duplicada por engano
     # do export). Sem isso, cada duplicata dobra a quantidade/valor daquele
-    # ajuste. Só pula duplicata EXATA (todas as colunas físicas iguais)
-    # dentro do MESMO arquivo - não afeta o caso legítimo de duas linhas com
-    # a mesma chave natural mas valores diferentes, nem reimportações
-    # intencionais em arquivos/lotes diferentes.
+    # ajuste. Só pula duplicata EXATA (todas as colunas físicas iguais) -
+    # tanto dentro do MESMO arquivo quanto contra o que já está no banco de
+    # uma importação ANTERIOR (ex: reenvio de uma planilha corrigida que
+    # ainda traz de volta linhas de um período já conciliado antes). Não
+    # afeta o caso legítimo de duas linhas com a mesma chave NATURAL
+    # (Id_Produto+Id_Invent+Id_Lote) mas valores diferentes - essas
+    # continuam entrando, só a duplicata 100% idêntica é que é pulada.
     linhas_vistas_no_arquivo = set()
     duplicadas_no_arquivo = 0
+    duplicadas_de_importacao_anterior = 0
+    chaves_existentes_no_banco = set(
+        db.query(
+            models.AjusteInventarioOficial.sku, models.AjusteInventarioOficial.status,
+            models.AjusteInventarioOficial.id_invent, models.AjusteInventarioOficial.dt_invent,
+            models.AjusteInventarioOficial.almoxarifado_origem, models.AjusteInventarioOficial.id_lote,
+            models.AjusteInventarioOficial.qtd_sistema, models.AjusteInventarioOficial.qtd_contagem,
+            models.AjusteInventarioOficial.ajuste_qtd, models.AjusteInventarioOficial.custo_unitario,
+            models.AjusteInventarioOficial.valor_total,
+        ).all()
+    )
 
     for i, linha in enumerate(linhas[1:], start=2):
         sku_bruto = val(linha, "sku")
@@ -176,6 +195,9 @@ async def importar_ajustes_inventario(
             )
             if chave_linha in linhas_vistas_no_arquivo:
                 duplicadas_no_arquivo += 1
+                continue
+            if chave_linha in chaves_existentes_no_banco:
+                duplicadas_de_importacao_anterior += 1
                 continue
             linhas_vistas_no_arquivo.add(chave_linha)
 
@@ -228,6 +250,7 @@ async def importar_ajustes_inventario(
         "valor_total_ajustes_contados": round(valor_total_ajuste, 2),
         "ids_invent_repetidos": sorted(ids_invent_repetidos),
         "duplicadas_no_arquivo": duplicadas_no_arquivo,
+        "duplicadas_de_importacao_anterior": duplicadas_de_importacao_anterior,
         "erros": erros,
     }
 

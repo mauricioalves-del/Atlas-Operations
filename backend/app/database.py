@@ -184,6 +184,7 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE ajustes_inventario_oficial ADD COLUMN lote_id INTEGER"))
                 conn.commit()
         _backfill_lotes_ajuste_inventario_legado()
+        _remover_duplicatas_cruzadas_ajuste_inventario()
 
 
 def _backfill_lotes_ajuste_inventario_legado():
@@ -230,6 +231,66 @@ def _backfill_lotes_ajuste_inventario_legado():
             for l in linhas:
                 l.lote_id = lote.id
         db.commit()
+    finally:
+        db.close()
+
+
+def _remover_duplicatas_cruzadas_ajuste_inventario():
+    """O dedup feito no momento da importação (ver
+    ajustes_inventario_router.py) só compara linhas DENTRO do mesmo
+    arquivo - uma planilha corrigida reenviada depois, que ainda traga de
+    volta linhas 100% idênticas a um período já conciliado num lote
+    anterior, passava batido (reportado pelo Maurício: "duplicando os
+    dados novos" na segunda importação). Aqui a limpeza é retroativa: olha
+    TODAS as linhas já no banco, agrupa pela mesma assinatura de colunas
+    físicas usada no importador (não é a chave natural
+    Id_Produto+Id_Invent+Id_Lote - duas linhas com essa chave mas valores
+    diferentes são lançamentos distintos, ficam intactas), mantém a
+    ocorrência mais antiga (menor id) de cada grupo e remove as demais.
+    Também recalcula os contadores do(s) lote(s) que perderam linha, pra
+    "Importações anteriores" continuar batendo com o que sobrou no banco.
+    Roda em todo startup; barato quando não há duplicata pra remover."""
+    from . import models  # import local: evita ciclo (models importa Base deste módulo)
+    db = SessionLocal()
+    try:
+        linhas = db.query(models.AjusteInventarioOficial).order_by(models.AjusteInventarioOficial.id.asc()).all()
+        vistas = set()
+        lotes_afetados = set()
+        removidos = 0
+        for registro in linhas:
+            chave = (
+                registro.sku, registro.status, registro.id_invent, registro.dt_invent,
+                registro.almoxarifado_origem, registro.id_lote, registro.qtd_sistema,
+                registro.qtd_contagem, registro.ajuste_qtd, registro.custo_unitario, registro.valor_total,
+            )
+            if chave in vistas:
+                if registro.lote_id:
+                    lotes_afetados.add(registro.lote_id)
+                db.delete(registro)
+                removidos += 1
+            else:
+                vistas.add(chave)
+        if not removidos:
+            return
+        db.flush()
+        for lote_id in lotes_afetados:
+            lote = db.query(models.LoteAjusteInventario).get(lote_id)
+            if not lote:
+                continue
+            restantes = db.query(models.AjusteInventarioOficial).filter_by(lote_id=lote_id).all()
+            lote.importadas = len(restantes)
+            lote.contadas_como_ajuste_inventario = sum(1 for r in restantes if r.conta_como_ajuste_inventario)
+            lote.ignoradas_flag_nao = sum(
+                1 for r in restantes
+                if not r.conta_como_ajuste_inventario and str(r.inventario_flag_bruto or "").strip().lower() == "não"
+            )
+            lote.ignoradas_legado_pre_separacao = sum(
+                1 for r in restantes
+                if not r.conta_como_ajuste_inventario and str(r.inventario_flag_bruto or "").strip().lower() != "não"
+            )
+            lote.valor_total_ajustes_contados = round(sum(r.valor_total or 0 for r in restantes if r.conta_como_ajuste_inventario), 2)
+        db.commit()
+        print(f"Atlas: removidas {removidos} linha(s) duplicada(s) entre importações de ajuste de inventário (ajustado(s) {len(lotes_afetados)} lote(s)).")
     finally:
         db.close()
 

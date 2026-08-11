@@ -2721,6 +2721,9 @@ document.getElementById("mp-btn-importar-ajustes").addEventListener("click", asy
     if (data.duplicadas_no_arquivo) {
       linhas.push(`🔁 ${data.duplicadas_no_arquivo} linha(s) 100% duplicada(s) dentro do próprio arquivo foram ignoradas automaticamente (não contam nem entram no banco).`);
     }
+    if (data.duplicadas_de_importacao_anterior) {
+      linhas.push(`🔁 ${data.duplicadas_de_importacao_anterior} linha(s) 100% idêntica(s) a uma importação anterior foram ignoradas automaticamente (não contam nem entram no banco de novo).`);
+    }
     if (data.ids_invent_repetidos.length) {
       linhas.push(`⚠️ ${data.ids_invent_repetidos.length} Id_Invent já existiam de uma importação anterior - confira se não é upload duplicado.`);
     }
