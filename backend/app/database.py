@@ -8,6 +8,7 @@ que o SQLAlchemy troca de banco sem precisar mudar nenhuma linha de código
 do resto do projeto.
 """
 import os
+from collections import defaultdict
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -165,15 +166,72 @@ def garantir_colunas_novas():
     # ajustes_inventario_router.py) antes do conceito de "lote"
     # (LoteAjusteInventario) existir - create_all não altera tabela já
     # existente, então sem isso a coluna lote_id nunca apareceria em produção
-    # e toda query no modelo quebraria com "no such column". Linhas antigas
-    # (de antes do lote existir) ficam com lote_id NULL - continuam contando
-    # normalmente nos painéis, só não aparecem na lista/exclusão por lote.
+    # e toda query no modelo quebraria com "no such column". Além de
+    # adicionar a coluna, agrupa linhas legadas (lote_id NULL) por
+    # arquivo_origem em lotes retroativos (ver
+    # _backfill_lotes_ajuste_inventario_legado) - sem isso, a importação
+    # original fica "invisível" na tela Importar > Importações anteriores,
+    # mesmo contando certinho nos painéis (foi reportado assim: "não tem o
+    # primeiro arquivo na tabela"). O backfill roda em TODO startup, não só
+    # quando a coluna é criada agora - se um deploy anterior já rodou o ALTER
+    # sem o backfill (ele foi adicionado depois), a próxima subida ainda
+    # precisa agrupar as linhas órfãs; a função em si é barata/idempotente
+    # quando não sobra nenhuma linha com lote_id NULL.
     if inspecao.has_table("ajustes_inventario_oficial"):
         colunas_ajustes = {c["name"] for c in inspecao.get_columns("ajustes_inventario_oficial")}
         if "lote_id" not in colunas_ajustes:
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE ajustes_inventario_oficial ADD COLUMN lote_id INTEGER"))
                 conn.commit()
+        _backfill_lotes_ajuste_inventario_legado()
+
+
+def _backfill_lotes_ajuste_inventario_legado():
+    """Roda uma única vez, imediatamente depois da migração que criou a
+    coluna lote_id: agrupa as linhas de AjusteInventarioOficial importadas
+    ANTES do conceito de "lote" existir (lote_id NULL) por arquivo_origem, e
+    cria um LoteAjusteInventario retroativo pra cada grupo, linkando as
+    linhas a ele. Sem isso, a importação real que o Maurício já tinha feito
+    em produção some da lista "Importações anteriores" (não tem lote), mesmo
+    continuando a contar certinho nos painéis - ele reportou isso como "dado
+    inconsistente" ao testar, e de fato é uma lacuna, não só um detalhe
+    cosmético: sem aparecer na lista, não tem como excluir/substituir aquela
+    importação específica pela tela."""
+    from . import models  # import local: evita ciclo (models importa Base deste módulo)
+    db = SessionLocal()
+    try:
+        orfaos = db.query(models.AjusteInventarioOficial).filter(models.AjusteInventarioOficial.lote_id.is_(None)).all()
+        if not orfaos:
+            return
+        grupos = defaultdict(list)
+        for r in orfaos:
+            grupos[r.arquivo_origem or "Importação legada (arquivo não registrado)"].append(r)
+        for arquivo, linhas in grupos.items():
+            contadas = sum(1 for l in linhas if l.conta_como_ajuste_inventario)
+            ignoradas_nao = sum(
+                1 for l in linhas
+                if not l.conta_como_ajuste_inventario and str(l.inventario_flag_bruto or "").strip().lower() == "não"
+            )
+            ignoradas_legado = len(linhas) - contadas - ignoradas_nao
+            valor_contadas = round(sum(l.valor_total or 0 for l in linhas if l.conta_como_ajuste_inventario), 2)
+            datas_criacao = [l.criado_em for l in linhas if l.criado_em]
+            criado_por = next((l.criado_por for l in linhas if l.criado_por), None)
+            lote_kwargs = dict(
+                arquivo_origem=arquivo, aba_usada="Estoque", criado_por=criado_por,
+                total_linhas=len(linhas), importadas=len(linhas),
+                contadas_como_ajuste_inventario=contadas, ignoradas_flag_nao=ignoradas_nao,
+                ignoradas_legado_pre_separacao=ignoradas_legado, valor_total_ajustes_contados=valor_contadas,
+            )
+            if datas_criacao:
+                lote_kwargs["criado_em"] = min(datas_criacao)  # senão usa o default (agora) do próprio modelo
+            lote = models.LoteAjusteInventario(**lote_kwargs)
+            db.add(lote)
+            db.flush()
+            for l in linhas:
+                l.lote_id = lote.id
+        db.commit()
+    finally:
+        db.close()
 
 
 def get_db():
