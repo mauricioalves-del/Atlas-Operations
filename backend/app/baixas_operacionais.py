@@ -47,7 +47,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import datetime, date
 from typing import Optional
 
@@ -123,6 +123,15 @@ ALMOXARIFADO_LOVABLE_PARA_ATLAS = {
     "Alm_Para": "Almox_PA_Para",
     # "Alm_Paulista": ainda sem correspondência confirmada no Atlas.
 }
+
+
+# Inverso de MOTIVO_ID_PARA_DESCRICAO - usado só pela reconciliação por
+# planilha (ver importar_planilha_historico_lovable), que recebe o rótulo
+# legível ("Descarte/Qualidade") em vez do uuid de motivo_baixa_id (o
+# export "Baixar relatório completo" da tela Baixas Operacionais não traz
+# o uuid). Reconstrói o mesmo motivo_baixa_id pra reusar exatamente a
+# mesma regra de MOTIVO_ID_PARA_HIPOTESE, sem duplicar o de-para.
+DESCRICAO_PARA_MOTIVO_ID = {descricao: uuid for uuid, descricao in MOTIVO_ID_PARA_DESCRICAO.items()}
 
 
 class BaixaInvalida(Exception):
@@ -479,3 +488,152 @@ def sincronizar_com_lovable(db: Session) -> dict:
     resultado = importar_lote(db, registros)
     resultado["total_na_origem"] = len(registros)
     return resultado
+
+
+def _normalizar_data_planilha(valor) -> Optional[date]:
+    """Aceita tanto o formato DD/MM/AAAA usado no export "Baixar relatório
+    completo" da tela Baixas Operacionais quanto uma data/datetime já
+    processada pelo openpyxl (algumas planilhas trazem a coluna Data como
+    tipo data real, não como texto)."""
+    if valor is None or valor == "":
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    s = str(valor).strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%d/%m/%Y").date()
+    except ValueError:
+        return date.fromisoformat(s[:10])
+
+
+def importar_planilha_historico_lovable(db: Session, linhas: list[dict]) -> dict:
+    """Reconcilia o export "Baixar relatório completo" da tela Baixas
+    Operacionais (Lovable) contra o que já está no Atlas - usado quando a
+    sincronização automática (webhook e/ou botão "Sincronizar agora") não
+    trouxe tudo (ex: LOVABLE_SUPABASE_URL/KEY nunca configuradas no
+    servidor, então o pull ao vivo nunca funcionou de fato).
+
+    Diferente de importar_lote/processar_baixa_recebida, essa planilha NÃO
+    tem o `id` (uuid) nem o `motivo_baixa_id` (uuid) reais da linha no
+    Supabase - só o rótulo legível do motivo e os demais campos já
+    "traduzidos" pra exibição. Sem uuid não tem como fazer upsert por
+    origem_id, então cada linha da planilha é comparada por uma
+    ASSINATURA (SKU + Almoxarifado já mapeado + Hipótese + Quantidade +
+    Valor + Status + Data) contra o que já existe no Atlas.
+
+    Importante: a comparação é por CONTAGEM (multiset), não por presença
+    simples - testado contra os dados reais do Maurício e confirmado que
+    baixas genuinamente distintas podem ter assinatura idêntica por
+    coincidência (mesmo produto, motivo, quantidade e valor lançados mais
+    de uma vez no mesmo dia - achamos 22 grupos assim, 79 linhas, num
+    lote real de 750). Se uma assinatura aparece N vezes na planilha e só
+    M<N vezes já existem no Atlas, as (N-M) faltantes são inseridas -
+    nunca colapsa repetições legítimas em uma só linha, e nunca duplica
+    o que já existe.
+
+    Caveat residual (documentado pro usuário na tela): sem o id único do
+    Lovable, isso reconcilia por QUANTIDADE de cada assinatura, não pela
+    identidade exata de qual linha é qual - então, no caso (raro) de duas
+    linhas com a mesma assinatura em que só UMA já foi sincronizada via
+    webhook, a nova inserida pode "logicamente" ser a outra ocorrência,
+    mas não há garantia de qual delas era qual (não faz diferença prática,
+    já que são indistinguíveis em todos os campos que o Atlas guarda). A
+    sincronização ao vivo (botão "Sincronizar agora", quando
+    LOVABLE_SUPABASE_URL/KEY estiverem configuradas) usa o id real do
+    Supabase e não tem nem essa limitação residual - é a fonte de verdade
+    definitiva; esta reconciliação por planilha é um paliativo pra fechar
+    a lacuna enquanto isso não está configurado (ou pra qualquer backfill
+    pontual)."""
+    existentes = db.query(models.BaixaOperacional).all()
+    contagem_existente = Counter(
+        (b.sku, b.almoxarifado, b.hipotese_aplicada, b.quantidade, b.valor_total, b.status_fluxo, b.data_baixa)
+        for b in existentes
+    )
+
+    total = 0
+    erros = []
+    processadas = []  # [(assinatura, dados_prontos_pra_criar_a_linha), ...] na ordem da planilha
+
+    for i, linha in enumerate(linhas, start=2):
+        sku_bruto = linha.get("Código")
+        if sku_bruto is None or str(sku_bruto).strip() == "":
+            continue
+        total += 1
+        sku = str(sku_bruto).strip()
+        try:
+            motivo_texto = str(linha.get("Motivo") or "").strip()
+            motivo_id = DESCRICAO_PARA_MOTIVO_ID.get(motivo_texto)
+            hipotese_codigo = MOTIVO_ID_PARA_HIPOTESE.get(motivo_id) if motivo_id else None
+            if not hipotese_codigo:
+                erros.append(f"Linha {i} (Código {sku}): motivo '{motivo_texto}' não reconhecido - adicione em MOTIVO_ID_PARA_DESCRICAO/MOTIVO_ID_PARA_HIPOTESE se for um motivo novo.")
+                continue
+
+            id_local_bruto = str(linha.get("Almoxarifado") or "").strip()
+            almoxarifado = ALMOXARIFADO_LOVABLE_PARA_ATLAS.get(id_local_bruto) or f"NAO_MAPEADO__{id_local_bruto or '(vazio)'}"
+
+            data_baixa = _normalizar_data_planilha(linha.get("Data"))
+
+            quantidade_bruta = linha.get("Quantidade")
+            quantidade = float(quantidade_bruta) if quantidade_bruta not in (None, "") else None
+            valor_total_bruto = linha.get("Valor Total")
+            valor_total = float(valor_total_bruto) if valor_total_bruto not in (None, "") else None
+
+            status_fluxo = str(linha.get("Status") or "").strip().upper()
+
+            assinatura = (sku, almoxarifado, hipotese_codigo, quantidade, valor_total, status_fluxo, data_baixa)
+            dados = dict(
+                sku=sku, almoxarifado_origem=id_local_bruto or None, almoxarifado=almoxarifado,
+                motivo_baixa_bruto=MOTIVO_ID_PARA_DESCRICAO.get(motivo_id, motivo_texto), hipotese_aplicada=hipotese_codigo,
+                quantidade=quantidade, valor_total=valor_total, status_fluxo=status_fluxo,
+                solicitante_nome=(str(linha.get("Solicitante")).strip() or None) if linha.get("Solicitante") else None,
+                data_baixa=data_baixa,
+                payload_bruto={k: (str(v) if v is not None else None) for k, v in linha.items()} | {"_fonte": "backfill_planilha_historico"},
+            )
+            processadas.append((assinatura, dados))
+        except Exception as e:
+            erros.append(f"Linha {i} (Código {sku}): {e}")
+
+    contagem_planilha = Counter(assinatura for assinatura, _ in processadas)
+    faltam = {sig: max(0, contagem_planilha[sig] - contagem_existente.get(sig, 0)) for sig in contagem_planilha}
+
+    ja_existentes = 0
+    novas_importadas = 0
+    resolvidas_automaticamente = 0
+    aguardando_divergencia = 0
+    aguardando_de_para_almoxarifado = 0
+
+    for assinatura, dados in processadas:
+        if faltam.get(assinatura, 0) <= 0:
+            ja_existentes += 1
+            continue
+        faltam[assinatura] -= 1
+
+        baixa = models.BaixaOperacional(origem_id=None, **dados)
+        db.add(baixa)
+        db.flush()
+        novas_importadas += 1
+
+        status_fluxo = dados["status_fluxo"]
+        almoxarifado = dados["almoxarifado"]
+        if status_fluxo != STATUS_FLUXO_APROVADO:
+            continue
+        if almoxarifado.startswith("NAO_MAPEADO__"):
+            aguardando_de_para_almoxarifado += 1
+            continue
+        data_baixa = dados["data_baixa"]
+        div = buscar_divergencia_compativel(db, dados["sku"], almoxarifado, data_baixa) if data_baixa else None
+        if div:
+            resolver_divergencia_automaticamente(db, div, baixa)
+            resolvidas_automaticamente += 1
+        else:
+            aguardando_divergencia += 1
+
+    return {
+        "total_planilha": total, "ja_existentes": ja_existentes, "novas_importadas": novas_importadas,
+        "resolvidas_automaticamente": resolvidas_automaticamente, "aguardando_divergencia": aguardando_divergencia,
+        "aguardando_de_para_almoxarifado": aguardando_de_para_almoxarifado, "erros": erros,
+    }

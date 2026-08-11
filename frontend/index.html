@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=63">
+<link rel="stylesheet" href="style.css?v=64">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -300,6 +300,16 @@
       </header>
       <p class="hint" id="rb-sync-msg" style="min-height:16px"></p>
       <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable.</p>
+
+      <div class="panel panel-importar" id="rb-panel-reconciliar">
+        <h2>Reconciliar planilha (fecha lacunas do Lovable)</h2>
+        <p class="hint">
+          Se "Sincronizar agora" der erro (ex: credenciais do Supabase do Lovable não configuradas no servidor) ou a lista aqui estiver menor que a tela "Baixas Operacionais" do Lovable, suba aqui o export <strong>"Baixar relatório completo"</strong> daquela tela (aba "Histórico"). Cada linha da planilha é comparada com o que já existe aqui — só entra o que estiver faltando, nada é duplicado, e pode subir a mesma planilha de novo quantas vezes quiser.
+        </p>
+        <input type="file" id="rb-input-arquivo-reconciliar" accept=".xlsx,.xlsm">
+        <button id="rb-btn-reconciliar" class="btn-primario">Reconciliar planilha</button>
+        <pre id="rb-resultado-reconciliar" class="resultado-importacao"></pre>
+      </div>
 
       <div class="kpi-row" id="rb-kpi-row"></div>
 
@@ -1328,6 +1338,6 @@
   </div>
 </div>
 
-<script src="app.js?v=63"></script>
+<script src="app.js?v=64"></script>
 </body>
 </html>

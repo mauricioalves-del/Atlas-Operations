@@ -3751,6 +3751,55 @@ document.getElementById("btn-sincronizar-lovable").addEventListener("click", asy
   }
 });
 
+document.getElementById("rb-btn-reconciliar").addEventListener("click", async () => {
+  const input = document.getElementById("rb-input-arquivo-reconciliar");
+  const resultado = document.getElementById("rb-resultado-reconciliar");
+  const btn = document.getElementById("rb-btn-reconciliar");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione a planilha primeiro (export \"Baixar relatório completo\" da tela Baixas Operacionais).";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", input.files[0]);
+  btn.disabled = true;
+  btn.textContent = "Reconciliando...";
+  resultado.textContent = "Comparando a planilha com o que já está no Atlas...";
+  try {
+    const res = await apiFetch(`${API}/baixas-operacionais/reconciliar-planilha`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro (${res.status}): ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const linhas = [
+      `Linhas na planilha: ${data.total_planilha}`,
+      `Já existiam no Atlas: ${data.ja_existentes}`,
+      `Novas importadas agora: ${data.novas_importadas}`,
+      `Resolveram divergência automaticamente: ${data.resolvidas_automaticamente}`,
+      `Aguardando divergência compatível: ${data.aguardando_divergencia}`,
+    ];
+    if (data.aguardando_de_para_almoxarifado) {
+      linhas.push(`Aguardando de-para de almoxarifado (código não mapeado): ${data.aguardando_de_para_almoxarifado}`);
+    }
+    if (data.erros && data.erros.length) {
+      linhas.push(`\n${data.erros.length} erro(s):`);
+      data.erros.slice(0, 20).forEach((e) => linhas.push("  - " + e));
+      if (data.erros.length > 20) linhas.push(`  ... e mais ${data.erros.length - 20}.`);
+    }
+    resultado.textContent = linhas.join("\n");
+    input.value = "";
+    document.getElementById("rb-filtro-status").value = "";
+    document.getElementById("rb-filtro-almoxarifado").value = "";
+    document.getElementById("rb-filtro-hipotese").value = "";
+    await carregarRelatorioBaixa();
+  } catch (erro) {
+    resultado.textContent = "Falha ao reconciliar a planilha: " + erro.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Reconciliar planilha";
+  }
+});
+
 // ---------- dashboard "Mapeamento de Passivos" ----------
 let chartMpMotivosMensal = null, chartMpFluxoInventario = null, chartMpEvolucaoMensal = null;
 let dadosMpMotivosMensal = null, dadosMpFluxoInventario = [], dadosMpEvolucaoMensal = [];

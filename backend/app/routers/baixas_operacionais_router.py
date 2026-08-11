@@ -5,15 +5,17 @@ do sistema Lovable, de qualquer status (Pendente, Aprovada, Reprovada).
 Diferente de baixas_operacionais.py (a lógica de importação/casamento),
 este router só lê o que já foi importado - é pra tela de relatório, não
 pra receber webhook."""
+import io
 from collections import defaultdict
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, Body, Query, UploadFile, File
 from sqlalchemy.orm import Session
+import openpyxl
 
 from .. import models
 from ..database import get_db
 from ..deps import obter_usuario_atual
-from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote
+from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote, importar_planilha_historico_lovable
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
 
@@ -55,6 +57,43 @@ def sincronizar(
         resultado = sincronizar_com_lovable(db)
     except SincronizacaoIndisponivel as e:
         raise HTTPException(500, str(e))
+    db.commit()
+    return resultado
+
+
+@router.post("/reconciliar-planilha")
+async def reconciliar_planilha_historico(
+    arquivo: UploadFile = File(...),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Fecha a lacuna entre o que já está no Atlas e o export "Baixar
+    relatório completo" da tela Baixas Operacionais (Lovable) - pra usar
+    quando a sincronização automática (webhook e/ou "Sincronizar agora")
+    não trouxe tudo, ex: LOVABLE_SUPABASE_URL/KEY nunca configuradas no
+    Render. Ver importar_planilha_historico_lovable (baixas_operacionais.py)
+    pro porquê disso ser reconciliação por assinatura, não upsert por id -
+    a planilha não carrega o uuid único da linha no Lovable."""
+    conteudo = await arquivo.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"Não consegui abrir o arquivo Excel: {e}")
+
+    aba = "Histórico" if "Histórico" in wb.sheetnames else wb.sheetnames[0]
+    ws = wb[aba]
+    linhas_brutas = list(ws.iter_rows(values_only=True))
+    if not linhas_brutas:
+        raise HTTPException(400, "Planilha vazia.")
+
+    cabecalho = [str(c).strip() if c else "" for c in linhas_brutas[0]]
+    esperado = ["Data", "Código", "Almoxarifado", "Quantidade", "Valor Total", "Motivo", "Status"]
+    faltando = [c for c in esperado if c not in cabecalho]
+    if faltando:
+        raise HTTPException(400, f"Colunas esperadas não encontradas: {faltando}. Cabeçalho: {cabecalho}")
+
+    linhas = [dict(zip(cabecalho, linha)) for linha in linhas_brutas[1:]]
+    resultado = importar_planilha_historico_lovable(db, linhas)
     db.commit()
     return resultado
 
