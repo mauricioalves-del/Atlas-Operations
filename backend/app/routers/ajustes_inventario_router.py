@@ -156,16 +156,33 @@ async def importar_ajustes_inventario(
     linhas_vistas_no_arquivo = set()
     duplicadas_no_arquivo = 0
     duplicadas_de_importacao_anterior = 0
-    chaves_existentes_no_banco = set(
-        db.query(
-            models.AjusteInventarioOficial.sku, models.AjusteInventarioOficial.status,
-            models.AjusteInventarioOficial.id_invent, models.AjusteInventarioOficial.dt_invent,
-            models.AjusteInventarioOficial.almoxarifado_origem, models.AjusteInventarioOficial.id_lote,
-            models.AjusteInventarioOficial.qtd_sistema, models.AjusteInventarioOficial.qtd_contagem,
-            models.AjusteInventarioOficial.ajuste_qtd, models.AjusteInventarioOficial.custo_unitario,
-            models.AjusteInventarioOficial.valor_total,
-        ).all()
-    )
+
+    # Além da duplicata 100% idêntica, existe um segundo caso real (achado ao
+    # investigar uma queixa do Maurício de que julho ficava inflado mesmo já
+    # sem duplicata exata): o MESMO lançamento (SKU+Status+Id_Invent+Data+
+    # Almoxarifado+Lote+Qtd_Sistema+Qtd_Contagem+Ajuste todos iguais) sendo
+    # reimportado com Custo/Valor DIFERENTE - não é um evento novo, é o custo
+    # daquele mesmo movimento tendo sido recalculado depois (custo médio do
+    # sistema de origem mudando retroativamente). Confirmado com o Maurício:
+    # nesse caso, a importação mais recente vale - atualiza o registro já
+    # existente com o custo/valor novo em vez de somar as duas versões (o que
+    # dobrava o valor do ajuste). Só entra como linha NOVA de fato quando
+    # nenhuma linha existente bate nem na chave completa nem nessa "chave sem
+    # custo".
+    custos_corrigidos = 0
+    valor_correcao_custo = 0.0
+    registros_existentes = db.query(models.AjusteInventarioOficial).all()
+    chaves_existentes_no_banco = set()
+    mapa_movimento_existente = {}
+    for r in registros_existentes:
+        chave_completa = (
+            r.sku, r.status, r.id_invent, r.dt_invent, r.almoxarifado_origem, r.id_lote,
+            r.qtd_sistema, r.qtd_contagem, r.ajuste_qtd, r.custo_unitario, r.valor_total,
+        )
+        chave_sem_custo = (r.sku, r.status, r.id_invent, r.dt_invent, r.almoxarifado_origem, r.id_lote, r.qtd_sistema, r.qtd_contagem, r.ajuste_qtd)
+        chaves_existentes_no_banco.add(chave_completa)
+        mapa_movimento_existente[chave_sem_custo] = r
+    lotes_afetados_por_correcao = set()
 
     for i, linha in enumerate(linhas[1:], start=2):
         sku_bruto = val(linha, "sku")
@@ -201,6 +218,24 @@ async def importar_ajustes_inventario(
                 continue
             linhas_vistas_no_arquivo.add(chave_linha)
 
+            chave_sem_custo = (sku, status_bruto, id_invent, dt_invent, limpar_texto(almoxarifado_origem), id_lote_bruto, qtd_sistema, qtd_contagem, ajuste_qtd)
+            registro_existente = mapa_movimento_existente.get(chave_sem_custo)
+            if registro_existente is not None:
+                # Mesmo lançamento (SKU+Id_Invent+Lote+Qtd/Contagem/Ajuste
+                # iguais) já existe no banco - só o Custo/Valor mudou (custo
+                # recalculado depois no sistema de origem). Confirmado com o
+                # Maurício: a importação mais recente vale, então atualiza o
+                # registro existente em vez de somar as duas versões.
+                valor_correcao_custo += (valor_total_linha or 0) - (registro_existente.valor_total or 0)
+                registro_existente.custo_unitario = custo_unitario
+                registro_existente.valor_total = valor_total_linha
+                registro_existente.arquivo_origem = arquivo.filename
+                custos_corrigidos += 1
+                if registro_existente.lote_id:
+                    lotes_afetados_por_correcao.add(registro_existente.lote_id)
+                mapa_movimento_existente[chave_sem_custo] = registro_existente
+                continue
+
             if id_invent is not None and id_invent in ids_invent_ja_existentes:
                 ids_invent_repetidos.add(id_invent)
 
@@ -221,6 +256,7 @@ async def importar_ajustes_inventario(
                 arquivo_origem=arquivo.filename, criado_por=usuario.username,
             )
             db.add(registro)
+            mapa_movimento_existente[chave_sem_custo] = registro  # cobre o caso raro de correção de custo repetida DENTRO do mesmo arquivo
             importadas += 1
             flag_lower = str(inventario_flag_bruto).strip().lower() if inventario_flag_bruto is not None else ""
             if conta:
@@ -240,6 +276,24 @@ async def importar_ajustes_inventario(
     lote.ignoradas_legado_pre_separacao = ignoradas_legado
     lote.valor_total_ajustes_contados = round(valor_total_ajuste, 2)
     db.commit()
+
+    # Correção de custo (ver bloco acima) atualiza linha(s) que pertencem a
+    # OUTRO lote (o caso normal - reenvio de arquivo corrigido) ou, no caso
+    # raro de o próprio arquivo repetir o mesmo lançamento com custo
+    # diferente, do lote atual. Recalcula valor_total_ajustes_contados
+    # desse(s) lote(s) a partir do que está de fato no banco agora, pra
+    # "Importações anteriores" continuar batendo com a correção. Não afeta
+    # importadas/contadas/ignoradas desses lotes - nenhuma linha foi
+    # removida ou adicionada a eles, só o custo/valor de uma linha existente.
+    if lotes_afetados_por_correcao:
+        for lote_id_afetado in lotes_afetados_por_correcao:
+            lote_afetado = db.query(models.LoteAjusteInventario).get(lote_id_afetado)
+            if not lote_afetado:
+                continue
+            linhas_do_lote = db.query(models.AjusteInventarioOficial).filter_by(lote_id=lote_id_afetado).all()
+            lote_afetado.valor_total_ajustes_contados = round(sum(r.valor_total or 0 for r in linhas_do_lote if r.conta_como_ajuste_inventario), 2)
+        db.commit()
+
     return {
         "lote_id": lote.id,
         "arquivo": arquivo.filename, "aba_usada": aba,
@@ -251,6 +305,8 @@ async def importar_ajustes_inventario(
         "ids_invent_repetidos": sorted(ids_invent_repetidos),
         "duplicadas_no_arquivo": duplicadas_no_arquivo,
         "duplicadas_de_importacao_anterior": duplicadas_de_importacao_anterior,
+        "custos_corrigidos": custos_corrigidos,
+        "valor_correcao_custo": round(valor_correcao_custo, 2),
         "erros": erros,
     }
 

@@ -2724,6 +2724,9 @@ document.getElementById("mp-btn-importar-ajustes").addEventListener("click", asy
     if (data.duplicadas_de_importacao_anterior) {
       linhas.push(`🔁 ${data.duplicadas_de_importacao_anterior} linha(s) 100% idêntica(s) a uma importação anterior foram ignoradas automaticamente (não contam nem entram no banco de novo).`);
     }
+    if (data.custos_corrigidos) {
+      linhas.push(`💲 ${data.custos_corrigidos} lançamento(s) já existente(s) tiveram só o Custo/Valor atualizado por essa importação (mesmo movimento, custo recalculado) - variação líquida de ${formatarMoeda(data.valor_correcao_custo)}.`);
+    }
     if (data.ids_invent_repetidos.length) {
       linhas.push(`⚠️ ${data.ids_invent_repetidos.length} Id_Invent já existiam de uma importação anterior - confira se não é upload duplicado.`);
     }

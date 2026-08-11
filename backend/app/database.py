@@ -239,24 +239,46 @@ def _remover_duplicatas_cruzadas_ajuste_inventario():
     """O dedup feito no momento da importação (ver
     ajustes_inventario_router.py) só compara linhas DENTRO do mesmo
     arquivo - uma planilha corrigida reenviada depois, que ainda traga de
-    volta linhas 100% idênticas a um período já conciliado num lote
-    anterior, passava batido (reportado pelo Maurício: "duplicando os
-    dados novos" na segunda importação). Aqui a limpeza é retroativa: olha
-    TODAS as linhas já no banco, agrupa pela mesma assinatura de colunas
-    físicas usada no importador (não é a chave natural
-    Id_Produto+Id_Invent+Id_Lote - duas linhas com essa chave mas valores
-    diferentes são lançamentos distintos, ficam intactas), mantém a
-    ocorrência mais antiga (menor id) de cada grupo e remove as demais.
-    Também recalcula os contadores do(s) lote(s) que perderam linha, pra
-    "Importações anteriores" continuar batendo com o que sobrou no banco.
-    Roda em todo startup; barato quando não há duplicata pra remover."""
+    volta linhas de um período já conciliado num lote anterior, passava
+    batido (reportado pelo Maurício: "duplicando os dados novos" na segunda
+    importação). Aqui a limpeza é retroativa, em duas passadas sobre TODAS
+    as linhas já no banco:
+
+    1) Duplicata 100% idêntica (todas as colunas físicas iguais, custo
+       incluso) - mantém a ocorrência mais antiga (menor id), remove as
+       demais.
+
+    2) Mesmo lançamento (SKU+Status+Id_Invent+Data+Almoxarifado+Lote+
+       Qtd_Sistema+Qtd_Contagem+Ajuste iguais) com Custo/Valor DIFERENTE -
+       não é um evento novo, é o custo daquele movimento tendo sido
+       recalculado depois no sistema de origem (achado ao investigar por
+       que julho/2026 ainda ficava ~R$930 maior que o arquivo mais recente,
+       mesmo já sem duplicata exata). Confirmado com o Maurício: a
+       importação mais recente vale - mantém a ocorrência mais antiga (pra
+       preservar eventuais Justificativas já linkadas a ela via ajuste_id),
+       mas atualiza seu Custo/Valor pro da ocorrência mais recente (maior
+       id), e remove a mais recente.
+
+    Em nenhum dos dois casos a chave NATURAL (Id_Produto+Id_Invent+Id_Lote)
+    isolada é usada pra decidir duplicata - ela pode legitimamente repetir
+    com valores diferentes por ser um lançamento distinto (verificado com
+    dados reais); só entra aqui quando Qtd_Sistema/Qtd_Contagem/Ajuste TAMBÉM
+    batem, sobrando só custo pra explicar a diferença.
+
+    Recalcula os contadores do(s) lote(s) afetados, pra "Importações
+    anteriores" continuar batendo com o que está de fato no banco. Roda em
+    todo startup; barato quando não há nada pra corrigir."""
     from . import models  # import local: evita ciclo (models importa Base deste módulo)
     db = SessionLocal()
     try:
         linhas = db.query(models.AjusteInventarioOficial).order_by(models.AjusteInventarioOficial.id.asc()).all()
-        vistas = set()
         lotes_afetados = set()
         removidos = 0
+        custos_corrigidos = 0
+
+        # Passada 1: duplicata exata
+        vistas = set()
+        sobreviventes = []
         for registro in linhas:
             chave = (
                 registro.sku, registro.status, registro.id_invent, registro.dt_invent,
@@ -270,7 +292,38 @@ def _remover_duplicatas_cruzadas_ajuste_inventario():
                 removidos += 1
             else:
                 vistas.add(chave)
-        if not removidos:
+                sobreviventes.append(registro)
+
+        # Passada 2: mesmo movimento, custo diferente - agrupa os
+        # sobreviventes da passada 1 pela assinatura SEM custo/valor.
+        por_movimento = defaultdict(list)
+        for registro in sobreviventes:
+            chave_sem_custo = (
+                registro.sku, registro.status, registro.id_invent, registro.dt_invent,
+                registro.almoxarifado_origem, registro.id_lote, registro.qtd_sistema,
+                registro.qtd_contagem, registro.ajuste_qtd,
+            )
+            por_movimento[chave_sem_custo].append(registro)
+        for grupo in por_movimento.values():
+            if len(grupo) <= 1:
+                continue
+            grupo.sort(key=lambda r: r.id)
+            mantido = grupo[0]  # mais antigo - preserva id (e Justificativas já linkadas a ele)
+            mais_recente = grupo[-1]
+            if mantido.custo_unitario != mais_recente.custo_unitario or mantido.valor_total != mais_recente.valor_total:
+                mantido.custo_unitario = mais_recente.custo_unitario
+                mantido.valor_total = mais_recente.valor_total
+                mantido.arquivo_origem = mais_recente.arquivo_origem
+                custos_corrigidos += 1
+            if mantido.lote_id:
+                lotes_afetados.add(mantido.lote_id)
+            for extra in grupo[1:]:
+                if extra.lote_id:
+                    lotes_afetados.add(extra.lote_id)
+                db.delete(extra)
+                removidos += 1
+
+        if not removidos and not custos_corrigidos:
             return
         db.flush()
         for lote_id in lotes_afetados:
@@ -290,7 +343,10 @@ def _remover_duplicatas_cruzadas_ajuste_inventario():
             )
             lote.valor_total_ajustes_contados = round(sum(r.valor_total or 0 for r in restantes if r.conta_como_ajuste_inventario), 2)
         db.commit()
-        print(f"Atlas: removidas {removidos} linha(s) duplicada(s) entre importações de ajuste de inventário (ajustado(s) {len(lotes_afetados)} lote(s)).")
+        print(
+            f"Atlas: removidas {removidos} linha(s) duplicada(s) e corrigido custo de {custos_corrigidos} "
+            f"lançamento(s) entre importações de ajuste de inventário (ajustado(s) {len(lotes_afetados)} lote(s))."
+        )
     finally:
         db.close()
 
