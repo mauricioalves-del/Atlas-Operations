@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=58">
+<link rel="stylesheet" href="style.css?v=59">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -326,25 +326,10 @@
       <div class="panel" id="mp-panel-principal" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 10%, var(--panel)) 0%, var(--panel) 100%)">
         <div class="panel-title-row">
           <h2>Evolução Mensal (MoM) — Análise Principal</h2>
-          <span class="hint" style="margin:0">Colunas: quantidade de baixas aplicadas por mês · Linha em destaque: curva de evolução (valor acumulado do processo)</span>
+          <span class="hint" style="margin:0">Colunas empilhadas por mês: resultado do fluxo de inventário (valor absoluto) + passivos do período · Linha em destaque: curva de evolução (valor acumulado das duas fontes)</span>
         </div>
-        <p class="panel-sub">Clique numa coluna ou num ponto da linha pra ver os produtos daquele mês</p>
+        <p class="panel-sub">Clique num segmento da coluna pra ver os produtos daquela fonte naquele mês</p>
         <div style="height:340px"><canvas id="mp-chart-evolucao-mensal"></canvas></div>
-      </div>
-
-      <div class="panel panel-importar" id="mp-panel-importar-ajustes">
-        <h2>Importar Conciliação Oficial de Inventário (Ace4)</h2>
-        <p class="hint">
-          Planilha oficial de ajustes já conciliados (aba <code>Estoque</code> de "Inventários.xlsx") — a fonte do painel de
-          Fluxo de Inventário abaixo. Suba aqui o arquivo mais recente a cada conciliação nova. A coluna "Inventário" da
-          planilha decide o que conta: <strong>Sim</strong> = ajuste de inventário real; <strong>Não</strong> = baixa de
-          passivo que só passou por ali (já mapeada nas Baixas, não entra aqui de novo). A partir de jul/2026, todo
-          lançamento de inventário já conta como ajuste automaticamente, mesmo sem a coluna preenchida — baixa de
-          passivo agora vem só por nota fiscal.
-        </p>
-        <input type="file" id="mp-input-arquivo-ajustes" accept=".xlsx,.xlsm">
-        <button id="mp-btn-importar-ajustes" class="btn-primario">Importar conciliação</button>
-        <pre id="mp-resultado-importacao-ajustes" class="resultado-importacao"></pre>
       </div>
 
       <div class="panel" id="mp-panel-fluxo-inventario" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #4caf50 8%, var(--panel)) 0%, var(--panel) 100%)">
@@ -366,12 +351,13 @@
         <div class="kpi-row" id="mp-kpi-row-classificacao"></div>
       </div>
 
+      <div class="panel">
+        <h2>Principais Motivos de Baixa Mapeados — Mês a Mês</h2>
+        <p class="panel-sub">Sem contar Inventário Mensal (esse fluxo já tem o painel dedicado acima) · Clique num segmento pra ver as baixas daquele motivo no mês</p>
+        <div style="height:320px"><canvas id="mp-chart-motivos-mensal"></canvas></div>
+      </div>
+
       <div class="grid-2">
-        <div class="panel">
-          <h2>Status Operacionais Usados</h2>
-          <p class="panel-sub">Clique numa fatia pra ver as baixas daquele status</p>
-          <canvas id="mp-chart-status-pizza"></canvas>
-        </div>
         <div class="panel">
           <h2>Top 10 Passivos Mais Recorrentes</h2>
           <p class="panel-sub">Por quantidade de baixas aprovadas — clique numa linha</p>
@@ -380,15 +366,14 @@
             <tbody></tbody>
           </table>
         </div>
-      </div>
-
-      <div class="panel">
-        <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
-        <p class="panel-sub">Por valor total baixado — clique numa linha</p>
-        <table class="tabela" id="mp-tabela-impacto-financeiro">
-          <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <div class="panel">
+          <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
+          <p class="panel-sub">Por valor total baixado — clique numa linha</p>
+          <table class="tabela" id="mp-tabela-impacto-financeiro">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -518,6 +503,29 @@
         <p class="hint">Excluir uma importação remove todas as divergências e o histórico criados por ela.</p>
         <table class="tabela" id="tabela-lotes-importacao">
           <thead><tr><th>Data</th><th>Tipo</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Divergências</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel panel-importar" id="mp-panel-importar-ajustes">
+        <h2>Conciliação Oficial de Inventário (Ace4)</h2>
+        <p class="hint">
+          Planilha oficial de ajustes já conciliados (aba <code>Estoque</code> de "Inventários.xlsx") — a fonte do painel de
+          Fluxo de Inventário do Mapeamento de Passivos. Suba aqui o arquivo mais recente a cada conciliação nova. A coluna
+          "Inventário" da planilha decide o que conta: <strong>Sim</strong> = ajuste de inventário real; <strong>Não</strong>
+          = baixa de passivo que só passou por ali (já mapeada nas Baixas, não entra aqui de novo). A partir de jul/2026,
+          todo lançamento de inventário já conta como ajuste automaticamente, mesmo sem a coluna preenchida — baixa de
+          passivo agora vem só por nota fiscal. As colunas Grupo/Ano/Obs/Inventário/Mês/Mês-Ano são opcionais: se a
+          planilha futura não trouxer alguma delas, a importação continua normalmente, sem perder informação.
+        </p>
+        <input type="file" id="mp-input-arquivo-ajustes" accept=".xlsx,.xlsm">
+        <button id="mp-btn-importar-ajustes" class="btn-primario">Importar conciliação</button>
+        <pre id="mp-resultado-importacao-ajustes" class="resultado-importacao"></pre>
+
+        <h2 style="margin-top:22px">Importações anteriores</h2>
+        <p class="hint">Cada conciliação enviada fica registrada como um lote separado. Excluir um lote remove só as linhas dele, sem afetar as demais importações.</p>
+        <table class="tabela" id="tabela-lotes-ajuste-inventario">
+          <thead><tr><th>Data</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Ajuste de inventário</th><th>Valor</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1257,6 +1265,6 @@
   </div>
 </div>
 
-<script src="app.js?v=58"></script>
+<script src="app.js?v=59"></script>
 </body>
 </html>

@@ -159,18 +159,27 @@ def _categoria_mapeamento(baixa, divergencias_por_id: dict) -> str:
 
 def _filtrar_baixas_dashboard(
     db: Session, status_fluxo: str | None, categoria_mapeamento: str | None, mes: str | None, sku: str | None,
+    motivo: str | None = None, excluir_categoria_mapeamento: str | None = None,
 ) -> list:
     q = db.query(models.BaixaOperacional)
     if status_fluxo:
         q = q.filter(models.BaixaOperacional.status_fluxo == status_fluxo.upper())
     if sku:
         q = q.filter(models.BaixaOperacional.sku == sku)
+    if motivo:
+        # aceita uma lista separada por vírgula (clique no segmento "Outros" do
+        # gráfico de motivos, que agrupa vários motivos de menor valor)
+        motivos_lista = [m.strip() for m in motivo.split(",") if m.strip()]
+        q = q.filter(models.BaixaOperacional.motivo_baixa_bruto.in_(motivos_lista))
     baixas = q.all()
     if mes:
         baixas = [b for b in baixas if b.data_baixa and str(b.data_baixa)[:7] == mes]
-    if categoria_mapeamento:
+    if categoria_mapeamento or excluir_categoria_mapeamento:
         divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
-        baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id) == categoria_mapeamento]
+        if categoria_mapeamento:
+            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id) == categoria_mapeamento]
+        if excluir_categoria_mapeamento:
+            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id) != excluir_categoria_mapeamento]
     return baixas
 
 
@@ -217,6 +226,62 @@ def dashboard_passivos_status_pizza(usuario: models.Usuario = Depends(obter_usua
         {"status_fluxo": k, "label": rotulos.get(k, k), "quantidade": v["quantidade"], "valor": round(v["valor"], 2)}
         for k, v in por_status.items()
     ]
+
+
+TOP_N_MOTIVOS = 6  # motivos individuais mostrados no gráfico; o resto agrupa em "Outros"
+
+
+@router.get("/dashboard/motivos-mensal")
+def dashboard_passivos_motivos_mensal(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Principais motivos de baixa (Avaria, Vencimento, Descarte,
+    Degustação, Perda/Furto etc.) mês a mês, por valor - substitui a pizza
+    de "Status Operacionais Usados". Só baixas APROVADAS (as que de fato
+    foram aplicadas) e SEM contar o que já é ajuste de inventário mensal
+    (categoria_mapeamento == "inventario_mensal" - esse fluxo já tem seu
+    próprio painel dedicado, "Fluxo de Inventário", não faz sentido
+    duplicar aqui). Os TOP_N_MOTIVOS de maior valor total aparecem
+    individualmente; o resto entra agrupado em "Outros" pra não estourar a
+    legenda do gráfico."""
+    aprovadas = db.query(models.BaixaOperacional).filter(models.BaixaOperacional.status_fluxo == "APROVADA").all()
+    divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id) != "inventario_mensal"]
+
+    valor_por_motivo_total = defaultdict(float)
+    por_mes_motivo = defaultdict(lambda: defaultdict(float))
+    meses = set()
+    for b in aprovadas:
+        if not b.data_baixa:
+            continue
+        motivo = b.motivo_baixa_bruto or "Não informado"
+        mes = str(b.data_baixa)[:7]
+        meses.add(mes)
+        valor_por_motivo_total[motivo] += b.valor_total or 0
+        por_mes_motivo[mes][motivo] += b.valor_total or 0
+
+    motivos_ordenados = sorted(valor_por_motivo_total.keys(), key=lambda m: valor_por_motivo_total[m], reverse=True)
+    motivos_top = motivos_ordenados[:TOP_N_MOTIVOS]
+    tem_outros = len(motivos_ordenados) > TOP_N_MOTIVOS
+    motivos_finais = motivos_top + (["Outros"] if tem_outros else [])
+
+    meses_ordenados = sorted(meses)
+    valores = {motivo: [] for motivo in motivos_finais}
+    for mes in meses_ordenados:
+        valores_mes_outros = 0.0
+        for motivo in motivos_ordenados:
+            v = round(por_mes_motivo[mes].get(motivo, 0.0), 2)
+            if motivo in motivos_top:
+                valores[motivo].append(v)
+            else:
+                valores_mes_outros += v
+        if tem_outros:
+            valores["Outros"].append(round(valores_mes_outros, 2))
+
+    return {
+        "meses": meses_ordenados,
+        "motivos": motivos_finais,
+        "valores": valores,
+        "motivos_agrupados_em_outros": motivos_ordenados[TOP_N_MOTIVOS:] if tem_outros else [],
+    }
 
 
 @router.get("/dashboard/mapeamento-origem")
@@ -465,14 +530,17 @@ def dashboard_passivos_itens(
     categoria_mapeamento: str | None = Query(None, description="inventario_mensal | movimentacao_diaria | aguardando_divergencia | nao_decidida"),
     mes: str | None = Query(None, description="YYYY-MM"),
     sku: str | None = None,
+    motivo: str | None = Query(None, description="motivo_baixa_bruto exato, ou lista separada por vírgula (usado pelo segmento 'Outros' de dashboard/motivos-mensal)"),
+    excluir_categoria_mapeamento: str | None = Query(None, description="usado pelo gráfico de motivos, que já exclui inventario_mensal"),
     usuario: models.Usuario = Depends(obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Drill-down usado por TODOS os gráficos/tabelas do dashboard
     Mapeamento de Passivos - clicar numa fatia da pizza, numa coluna do
-    mapeamento por origem, num mês do MoM ou numa linha de um Top 10 cai
-    aqui, com o filtro correspondente."""
-    baixas = _filtrar_baixas_dashboard(db, status_fluxo, categoria_mapeamento, mes, sku)
+    mapeamento por origem, num mês do MoM, numa linha de um Top 10 ou num
+    segmento do gráfico de motivos de baixa cai aqui, com o filtro
+    correspondente."""
+    baixas = _filtrar_baixas_dashboard(db, status_fluxo, categoria_mapeamento, mes, sku, motivo, excluir_categoria_mapeamento)
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_({b.sku for b in baixas if b.sku})).all()}
 

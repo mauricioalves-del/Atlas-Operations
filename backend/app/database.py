@@ -161,6 +161,20 @@ def garantir_colunas_novas():
             conn.execute(text("ALTER TABLE movimentacoes_historico ADD COLUMN lote_importacao_id INTEGER"))
             conn.commit()
 
+    # ajustes_inventario_oficial já existia (com dados reais importados, ver
+    # ajustes_inventario_router.py) antes do conceito de "lote"
+    # (LoteAjusteInventario) existir - create_all não altera tabela já
+    # existente, então sem isso a coluna lote_id nunca apareceria em produção
+    # e toda query no modelo quebraria com "no such column". Linhas antigas
+    # (de antes do lote existir) ficam com lote_id NULL - continuam contando
+    # normalmente nos painéis, só não aparecem na lista/exclusão por lote.
+    if inspecao.has_table("ajustes_inventario_oficial"):
+        colunas_ajustes = {c["name"] for c in inspecao.get_columns("ajustes_inventario_oficial")}
+        if "lote_id" not in colunas_ajustes:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE ajustes_inventario_oficial ADD COLUMN lote_id INTEGER"))
+                conn.commit()
+
 
 def get_db():
     db = SessionLocal()

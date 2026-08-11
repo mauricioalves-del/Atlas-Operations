@@ -452,6 +452,28 @@ class BaixaOperacional(Base):
     recebido_em = Column(DateTime, default=datetime.utcnow)
 
 
+class LoteAjusteInventario(Base):
+    """Um "lote" = uma importação da planilha oficial de ajustes de
+    inventário ("Ace4"/aba "Estoque"). Cada upload cria um lote novo com
+    seu próprio resumo (linhas importadas, contadas, ignoradas) - "cada
+    importação é uma coisa", separada, com histórico visível na tela
+    Importar e opção de excluir (e as linhas dela junto - ver
+    AjusteInventarioOficial.lote_id) se algum upload foi feito errado ou
+    duplicado."""
+    __tablename__ = "lotes_ajuste_inventario"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    arquivo_origem = Column(String, nullable=True)
+    aba_usada = Column(String, nullable=True)
+    criado_por = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+    total_linhas = Column(Integer, default=0)
+    importadas = Column(Integer, default=0)
+    contadas_como_ajuste_inventario = Column(Integer, default=0)
+    ignoradas_flag_nao = Column(Integer, default=0)
+    ignoradas_legado_pre_separacao = Column(Integer, default=0)
+    valor_total_ajustes_contados = Column(Float, default=0)
+
+
 class AjusteInventarioOficial(Base):
     """Linha da tabela OFICIAL de ajustes de inventário ("Ace4") - a
     conciliação real feita pela operação, importada da planilha
@@ -468,9 +490,15 @@ class AjusteInventarioOficial(Base):
     partir de PADRONIZACAO_NOTA_FISCAL_DESDE (jul/2026), toda baixa de
     passivo passou a vir só por nota fiscal, então qualquer lançamento de
     inventário a partir daí já é ajuste de inventário automaticamente,
-    mesmo sem a coluna preenchida - ver conta_como_ajuste_inventario."""
+    mesmo sem a coluna preenchida - ver conta_como_ajuste_inventario.
+    Colunas como Grupo/Ano/Obs/Inventário são OPCIONAIS na planilha de
+    origem (a partir de jul/2026 a própria coluna "Inventário" deixa de
+    existir, já que não tem mais baixa de passivo se misturando no
+    módulo) - por isso todas são nullable e o importador não quebra se
+    alguma faltar (ver ajustes_inventario_router.py)."""
     __tablename__ = "ajustes_inventario_oficial"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    lote_id = Column(Integer, ForeignKey("lotes_ajuste_inventario.id"), nullable=True, index=True)
     sku = Column(String, index=True)
     status = Column(String, nullable=True)
     id_invent = Column(Integer, index=True, nullable=True)  # número do evento de inventário na planilha de origem

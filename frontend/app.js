@@ -151,7 +151,12 @@ Chart.register({
         ctx.font = "600 11px Inter, sans-serif";
         ctx.fillStyle = dataset.corRotulo || getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#888";
         if (chart.options.indexAxis === "y") {
-          ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(texto, pos.x + 6, pos.y);
+          if (dataset.stack) {
+            const centro = ((el.x ?? pos.x) + (el.base ?? pos.x)) / 2;
+            ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(texto, centro, pos.y);
+          } else {
+            ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(texto, pos.x + 6, pos.y);
+          }
         } else if (meta.type === "doughnut" || meta.type === "pie") {
           ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(texto, pos.x, pos.y);
         } else {
@@ -447,9 +452,20 @@ if (window.Chart) {
           ctx.font = "600 11px Inter, sans-serif";
           ctx.fillStyle = dataset.corRotulo || getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#888";
           if (chart.options.indexAxis === "y") {
-            ctx.textAlign = "left";
-            ctx.textBaseline = "middle";
-            ctx.fillText(texto, pos.x + 6, pos.y);
+            if (dataset.stack) {
+              // barra horizontal EMPILHADA: centraliza o rótulo dentro do próprio
+              // segmento (base..x) - se ancorar no fim do segmento (como faz a
+              // barra horizontal simples abaixo), o texto invade visualmente o
+              // próximo segmento da pilha, parecendo rótulo do vizinho errado.
+              const centro = ((el.x ?? pos.x) + (el.base ?? pos.x)) / 2;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(texto, centro, pos.y);
+            } else {
+              ctx.textAlign = "left";
+              ctx.textBaseline = "middle";
+              ctx.fillText(texto, pos.x + 6, pos.y);
+            }
           } else if (meta.type === "doughnut" || meta.type === "pie") {
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -507,6 +523,7 @@ function mostrarView(nome) {
   if (nome === "auditoria") carregarAuditoria();
   if (nome === "importar") {
     carregarLotesImportacao();
+    carregarLotesAjusteInventario();
     carregarOpcoesAlmoxarifadoImportadorBruto();
   }
   if (nome === "fechamentos") carregarFechamentos();
@@ -2708,11 +2725,45 @@ document.getElementById("mp-btn-importar-ajustes").addEventListener("click", asy
       linhas.push("", `Erros (${data.erros.length}):`, ...data.erros.slice(0, 20));
     }
     resultado.textContent = linhas.join("\n");
+    input.value = "";
+    carregarLotesAjusteInventario();
     carregarMapeamentoPassivos();
   } catch (erro) {
     resultado.textContent = "Falha ao importar: " + erro.message;
   }
 });
+
+// ---------- lotes de ajuste de inventário oficial (Ace4) - histórico/excluir ----------
+async function carregarLotesAjusteInventario() {
+  const tbody = document.querySelector("#tabela-lotes-ajuste-inventario tbody");
+  if (!tbody) return;
+  const lotes = await apiFetch(`${API}/ajustes-inventario/lotes`).then((r) => r.json());
+  tbody.innerHTML = lotes
+    .map(
+      (l) => `<tr>
+        <td>${l.criado_em ? new Date(l.criado_em).toLocaleString("pt-BR") : "—"}</td>
+        <td class="col-descricao">${l.arquivo_origem || "—"}</td>
+        <td>${l.criado_por || "—"}</td>
+        <td>${l.importadas}</td>
+        <td>${l.contadas_como_ajuste_inventario}</td>
+        <td>${formatarMoeda(l.valor_total_ajustes_contados)}</td>
+        <td><button class="btn-secundario btn-excluir-lote-ajuste-inventario" data-id="${l.id}">Excluir</button></td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="7" style="color:var(--muted)">Nenhuma conciliação importada ainda.</td></tr>`;
+
+  document.querySelectorAll(".btn-excluir-lote-ajuste-inventario").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm("Excluir esta importação? Todas as linhas de ajuste de inventário criadas por ela serão removidas.")) return;
+      const res = await apiFetch(`${API}/ajustes-inventario/lotes/${btn.dataset.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) { alert(data.detail || "Não foi possível excluir."); return; }
+      alert(`Removida(s) ${data.linhas_removidas} linha(s) desta conciliação.`);
+      carregarLotesAjusteInventario();
+      carregarMapeamentoPassivos();
+    })
+  );
+}
 
 async function abrirFechamentoDetalhe(id) {
   fechamentoDetalheAtualId = id;
@@ -3692,19 +3743,18 @@ document.getElementById("btn-sincronizar-lovable").addEventListener("click", asy
 });
 
 // ---------- dashboard "Mapeamento de Passivos" ----------
-let chartMpStatusPizza = null, chartMpFluxoInventario = null, chartMpEvolucaoMensal = null;
-let dadosMpStatusPizza = [], dadosMpFluxoInventario = [], dadosMpEvolucaoMensal = [];
+let chartMpMotivosMensal = null, chartMpFluxoInventario = null, chartMpEvolucaoMensal = null;
+let dadosMpMotivosMensal = null, dadosMpFluxoInventario = [], dadosMpEvolucaoMensal = [];
 
-const CORES_STATUS_BAIXA = { PENDENTE: "#f9a825", APROVADA: "#4caf50", REPROVADA: "#e5534b", NAO_INFORMADO: "#8ca0a3" };
 // Fluxo de Inventário = "Mapeamento de grana de todos os inventários": Total de Entradas (sobra
 // encontrada no fechamento, contagem física > sistema) - Total de Saídas (falta, contagem < sistema)
 // = Resultado do mês. Ver _fluxo_inventario_por_mes no backend.
 const CORES_FLUXO_INVENTARIO = { entrada: "#4caf50", saida: "#e5534b", resultado: "#5b75ac" };
 
 async function carregarMapeamentoPassivos() {
-  const [kpis, statusPizza, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais, classificacaoOficial] = await Promise.all([
+  const [kpis, motivosMensal, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais, classificacaoOficial] = await Promise.all([
     apiFetch(`${API}/baixas-operacionais/dashboard/kpis`).then((r) => r.json()),
-    apiFetch(`${API}/baixas-operacionais/dashboard/status-pizza`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/motivos-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/evolucao-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-recorrentes`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-impacto-financeiro`).then((r) => r.json()),
@@ -3731,7 +3781,7 @@ async function carregarMapeamentoPassivos() {
     .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
     .join("");
 
-  renderMpStatusPizza(statusPizza);
+  renderMpMotivosMensal(motivosMensal);
   renderMpFluxoInventario(fluxoInventarioMensal);
   renderMpEvolucaoMensal(evolucaoMensal);
   renderMpTabelaTop("mp-tabela-recorrentes", topRecorrentes);
@@ -3749,38 +3799,77 @@ function renderMpClassificacaoOficial(classificacao) {
     .join("");
 }
 
-function renderMpStatusPizza(dados) {
-  dadosMpStatusPizza = dados;
-  const total = dados.reduce((s, d) => s + d.quantidade, 0) || 1;
-  const ctx = document.getElementById("mp-chart-status-pizza");
-  if (chartMpStatusPizza) chartMpStatusPizza.destroy();
-  chartMpStatusPizza = new Chart(ctx, {
-    type: "doughnut",
+const CORES_MOTIVOS_BAIXA = ["#5b75ac", "#4caf50", "#e5534b", "#f9a825", "#8e5b9e", "#3fb6c9"];
+const COR_MOTIVO_OUTROS = "#8ca0a3";
+
+function renderMpMotivosMensal(dados) {
+  // Principais motivos de baixa mapeados, mês a mês, SEM contar o que já é inventário mensal
+  // (esse fluxo tem seu próprio painel dedicado acima) - horizontal empilhado, um segmento por
+  // motivo (top N + "Outros" agrupando o resto, pra não estourar a legenda).
+  dadosMpMotivosMensal = dados;
+  const INDICE_OUTROS = dados.motivos.indexOf("Outros");
+  const totalPorMes = dados.meses.map((_, i) => dados.motivos.reduce((s, motivo) => s + (dados.valores[motivo][i] || 0), 0));
+  const maiorTotalMes = Math.max(1, ...totalPorMes);
+
+  const ctx = document.getElementById("mp-chart-motivos-mensal");
+  if (chartMpMotivosMensal) chartMpMotivosMensal.destroy();
+  chartMpMotivosMensal = new Chart(ctx, {
+    type: "bar",
     data: {
-      labels: dados.map((d) => d.label),
-      datasets: [{
-        data: dados.map((d) => d.quantidade), backgroundColor: dados.map((d) => CORES_STATUS_BAIXA[d.status_fluxo] || "#8ca0a3"), borderWidth: 0,
-        // rótulo direto na fatia: quantidade + % do total - sem isso, fatias pequenas (Pendente/Reprovada)
-        // ficam ilegíveis quando uma categoria domina quase tudo (ex: 98% Aprovada). Fatias abaixo de 4% não
-        // recebem rótulo NA fatia (o arco fica curto demais e o texto de fatias vizinhas se sobrepõe) -
-        // continuam visíveis pela legenda e pelo tooltip ao passar o mouse, só não tentam desenhar em cima
-        // de um espaço menor que o próprio texto.
-        formatarRotulo: (v) => (v / total < 0.04 ? "" : `${v} (${Math.round((v / total) * 100)}%)`), corRotulo: "#12181b",
-      }],
+      labels: dados.meses,
+      datasets: dados.motivos.map((motivo, i) => ({
+        label: motivo, data: dados.valores[motivo],
+        backgroundColor: i === INDICE_OUTROS ? COR_MOTIVO_OUTROS : CORES_MOTIVOS_BAIXA[i % CORES_MOTIVOS_BAIXA.length],
+        stack: "total", borderRadius: 2,
+        formatarRotulo: (v) => (v && v / maiorTotalMes >= 0.08 ? formatarMoeda(v) : ""), corRotulo: "#12181b",
+      })),
     },
     options: {
+      indexAxis: "y",
       onHover: (evt, elementos) => { evt.native.target.style.cursor = elementos.length ? "pointer" : "default"; },
       plugins: {
-        legend: { position: "right", labels: { color: "#8ca0a3", font: { size: 11 } } },
-        tooltip: { callbacks: { label: (ctx2) => `${ctx2.label}: ${ctx2.raw} (${Math.round((ctx2.raw / total) * 100)}%) · ${formatarMoeda(dados[ctx2.dataIndex].valor)}` } },
+        legend: { position: "bottom", labels: { color: "#8ca0a3" } },
+        tooltip: {
+          callbacks: {
+            footer: (items) => `Total do mês: ${formatarMoeda(items.reduce((s, it) => s + it.raw, 0))}`,
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, beginAtZero: true, ticks: { color: "#8ca0a3", callback: (v) => formatarMoeda(v) }, grid: { color: "#2e3a40" } },
+        y: { stacked: true, ticks: { color: "#8ca0a3" }, grid: { display: false } },
       },
     },
   });
+
   ctx.onclick = (ev) => {
-    const pontos = chartMpStatusPizza.getElementsAtEventForMode(ev, "nearest", { intersect: true }, true);
-    if (!pontos.length) return;
-    const d = dadosMpStatusPizza[pontos[0].index];
-    abrirModalPassivosItens({ status_fluxo: d.status_fluxo }, `Baixas com status "${d.label}"`);
+    // "index" acha o MÊS de forma confiável (categoria no eixo y, já que é horizontal). Pra saber
+    // qual SEGMENTO/motivo foi clicado, testamos se ev.offsetX cai dentro da faixa horizontal
+    // (base..x) daquele segmento - mesmo raciocínio do painel de Evolução Mensal, só que no eixo X
+    // em vez do Y, porque aqui a barra é invertida (indexAxis: "y").
+    const pontosIndex = chartMpMotivosMensal.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
+    if (!pontosIndex.length) return;
+    const mes = dados.meses[pontosIndex[0].index];
+    let segmentoClicado = pontosIndex.find((p) => {
+      const el = chartMpMotivosMensal.getDatasetMeta(p.datasetIndex).data[p.index];
+      const inicio = Math.min(el.x, el.base ?? el.x), fim = Math.max(el.x, el.base ?? el.x);
+      return ev.offsetX >= inicio && ev.offsetX <= fim;
+    });
+    if (!segmentoClicado) {
+      let menorDistancia = Infinity;
+      pontosIndex.forEach((p) => {
+        const el = chartMpMotivosMensal.getDatasetMeta(p.datasetIndex).data[p.index];
+        const distancia = Math.abs((el.x ?? el.base ?? 0) - ev.offsetX);
+        if (distancia < menorDistancia) { menorDistancia = distancia; segmentoClicado = p; }
+      });
+    }
+    if (!segmentoClicado) return;
+    const motivo = dados.motivos[segmentoClicado.datasetIndex];
+    const filtroMotivo = motivo === "Outros" ? dados.motivos_agrupados_em_outros.join(",") : motivo;
+    abrirModalPassivosItens(
+      { mes, motivo: filtroMotivo, excluir_categoria_mapeamento: "inventario_mensal", status_fluxo: "APROVADA" },
+      `${motivo} em ${mes}`
+    );
   };
 }
 
@@ -3863,18 +3952,21 @@ function renderMpFluxoInventario(dados) {
 
 function renderMpEvolucaoMensal(dados) {
   dadosMpEvolucaoMensal = dados;
-  // curva de evolução do processo = valor ACUMULADO mês a mês (sempre crescente,
-  // conta a história completa do processo) - separada da análise MoM em si
-  // (colunas = quantidade de baixas naquele mês), que é o que realmente varia
-  // pra cima e pra baixo mês a mês. Calculado aqui, não no backend, porque é
-  // só uma soma corrida sobre o que /evolucao-mensal já devolve por mês.
+  // Empilhado mês a mês, como pediu o Maurício: resultado do inventário (em valor
+  // POSITIVO/absoluto - aqui é sobre tamanho do movimento, não sobre sinal) +
+  // passivos do período, uma barra só por mês. A curva de evolução acompanha
+  // essa mesma soma empilhada (não só o valor de baixas como antes), acumulada
+  // mês a mês - é a "história completa" olhando as duas fontes juntas.
+  const resultadoInvAbs = dados.map((d) => Math.abs(d.resultado_inventario_mes || 0));
+  const passivosValor = dados.map((d) => d.valor || 0);
   let acumulado = 0;
-  const valorAcumulado = dados.map((d) => (acumulado += d.valor || 0));
+  const totalAcumulado = dados.map((d, i) => (acumulado += resultadoInvAbs[i] + passivosValor[i]));
 
-  // mesmo cuidado do painel de Fluxo de Inventário: só rotula direto na barra do resultado do mês
-  // quando o valor é grande o bastante (>= 10% do maior |resultado| do período) - evita colidir com
-  // a curva de evolução/quantidade de baixas em meses onde o resultado do inventário é pequeno.
-  const maiorResultadoInvAbs = Math.max(1, ...dados.map((d) => Math.abs(d.resultado_inventario_mes || 0)));
+  // mesmo cuidado de sempre: só rotula direto na barra quando o valor é grande o bastante
+  // (>= 8% do maior total empilhado do período) - evita colidir os dois rótulos numa
+  // barra empilhada estreita.
+  const maiorTotalEmpilhado = Math.max(1, ...dados.map((d, i) => resultadoInvAbs[i] + passivosValor[i]));
+  const INDICE_LINHA = 2;
 
   const ctx = document.getElementById("mp-chart-evolucao-mensal");
   if (chartMpEvolucaoMensal) chartMpEvolucaoMensal.destroy();
@@ -3883,22 +3975,18 @@ function renderMpEvolucaoMensal(dados) {
       labels: dados.map((d) => d.mes),
       datasets: [
         {
-          type: "bar", label: "Quantidade de baixas no mês", data: dados.map((d) => d.quantidade),
-          backgroundColor: "#5b75ac", borderRadius: 3, yAxisID: "y", order: 3,
-          formatarRotulo: (v) => v, corRotulo: "#c9d4d6",
+          type: "bar", label: "Resultado do Fluxo de Inventário no mês (valor absoluto)", data: resultadoInvAbs,
+          backgroundColor: CORES_FLUXO_INVENTARIO.resultado, borderRadius: 3, yAxisID: "y1", order: 2, stack: "total",
+          formatarRotulo: (v) => (v && v / maiorTotalEmpilhado >= 0.08 ? formatarMoeda(v) : ""), corRotulo: "#c9d4d6",
         },
         {
-          // Resultado do Fluxo de Inventário (Entradas - Saídas de todos os inventários) trazido
-          // pra dentro do MoM, ao lado do mapeamento de passivos, como pediu o Maurício - verde
-          // quando o mês teve mais entrada (sobra) que saída (falta), vermelho no contrário.
-          type: "bar", label: "Resultado do Fluxo de Inventário no mês (R$)", data: dados.map((d) => d.resultado_inventario_mes || 0),
-          backgroundColor: dados.map((d) => ((d.resultado_inventario_mes || 0) >= 0 ? "#4caf50" : "#e5534b")),
-          borderRadius: 3, yAxisID: "y1", order: 2,
-          formatarRotulo: (v) => (v && Math.abs(v) / maiorResultadoInvAbs >= 0.1 ? formatarMoeda(v) : ""), corRotulo: "#c9d4d6",
+          type: "bar", label: "Passivos do mês (R$)", data: passivosValor,
+          backgroundColor: "#e5534b", borderRadius: 3, yAxisID: "y1", order: 2, stack: "total",
+          formatarRotulo: (v) => (v && v / maiorTotalEmpilhado >= 0.08 ? formatarMoeda(v) : ""), corRotulo: "#c9d4d6",
         },
         {
-          type: "line", label: "Curva de evolução (valor acumulado)", data: valorAcumulado,
-          borderColor: "#f9a825", backgroundColor: "color-mix(in srgb, #f9a825 25%, transparent)", fill: true,
+          type: "line", label: "Curva de evolução (valor acumulado)", data: totalAcumulado,
+          borderColor: "#f9a825", backgroundColor: "color-mix(in srgb, #f9a825 25%, transparent)", fill: false,
           borderWidth: 3, pointRadius: 5, pointBackgroundColor: "#f9a825", tension: 0.25, yAxisID: "y1", order: 1,
           formatarRotulo: (v) => formatarMoeda(v), corRotulo: "#f9a825",
         },
@@ -3911,35 +3999,47 @@ function renderMpEvolucaoMensal(dados) {
         tooltip: {
           callbacks: {
             afterBody: (items) => [
-              `Valor baixado no mês: ${formatarMoeda(dados[items[0].dataIndex].valor)}`,
-              `Resultado do fluxo de inventário no mês: ${formatarMoeda(dados[items[0].dataIndex].resultado_inventario_mes || 0)}`,
+              `Resultado do fluxo de inventário no mês: ${formatarMoeda(dados[items[0].dataIndex].resultado_inventario_mes || 0)} (valor absoluto na barra)`,
+              `Passivos no mês: ${formatarMoeda(dados[items[0].dataIndex].valor)}`,
+              `Total empilhado no mês: ${formatarMoeda(resultadoInvAbs[items[0].dataIndex] + passivosValor[items[0].dataIndex])}`,
             ],
           },
         },
       },
       scales: {
-        x: { ticks: { color: "#8ca0a3" }, grid: { display: false } },
-        y: { position: "left", beginAtZero: true, ticks: { color: "#8ca0a3" }, grid: { color: "#2e3a40" }, title: { display: true, text: "qtd. de baixas", color: "#8ca0a3", font: { size: 10 } } },
-        y1: { position: "right", ticks: { color: "#f9a825", callback: (v) => formatarMoeda(v) }, grid: { display: false }, title: { display: true, text: "R$ (acumulado das baixas · resultado do inventário)", color: "#f9a825", font: { size: 10 } } },
+        x: { ticks: { color: "#8ca0a3" }, grid: { display: false }, stacked: true },
+        y1: {
+          position: "left", stacked: true, beginAtZero: true,
+          ticks: { color: "#8ca0a3", callback: (v) => formatarMoeda(v) }, grid: { color: "#2e3a40" },
+          title: { display: true, text: "R$ (resultado do inventário + passivos do mês)", color: "#8ca0a3", font: { size: 10 } },
+        },
       },
     },
   });
   ctx.onclick = (ev) => {
-    // mesmo cuidado do painel de Fluxo de Inventário: "index" acha o MÊS de forma confiável, mas pra
-    // saber se o clique foi especificamente na barra de "Resultado do Fluxo de Inventário" (dataset
-    // 1) - que abre uma modal totalmente diferente (itens de fechamento, não baixas) - comparamos a
-    // posição Y de cada elemento devolvido com a posição Y real do clique (ev.offsetY) e usamos o
-    // dataset mais próximo, em vez de depender da ordem em que o Chart.js devolve os elementos.
+    // "index" acha o MÊS de forma confiável. Pra saber qual SEGMENTO da barra empilhada foi
+    // clicado (fluxo de inventário x passivos - cada um abre uma modal diferente), testamos se
+    // ev.offsetY cai dentro da faixa vertical (base..y) daquele segmento específico; a linha
+    // (curva) é ignorada aqui, ela não abre modal própria.
     const pontosIndex = chartMpEvolucaoMensal.getElementsAtEventForMode(ev, "index", { intersect: false }, true);
     if (!pontosIndex.length) return;
     const d = dadosMpEvolucaoMensal[pontosIndex[0].index];
-    let maisProximo = null, menorDistancia = Infinity;
-    pontosIndex.forEach((p) => {
+    const candidatosBarras = pontosIndex.filter((p) => p.datasetIndex !== INDICE_LINHA);
+    if (!candidatosBarras.length) return;
+    let maisProximo = candidatosBarras.find((p) => {
       const el = chartMpEvolucaoMensal.getDatasetMeta(p.datasetIndex).data[p.index];
-      const distancia = Math.abs((el.y ?? el.base ?? 0) - ev.offsetY);
-      if (distancia < menorDistancia) { menorDistancia = distancia; maisProximo = p; }
+      const topo = Math.min(el.y, el.base ?? el.y), base = Math.max(el.y, el.base ?? el.y);
+      return ev.offsetY >= topo && ev.offsetY <= base;
     });
-    const clicouResultadoInventario = maisProximo && maisProximo.datasetIndex === 1;
+    if (!maisProximo) {
+      let menorDistancia = Infinity;
+      candidatosBarras.forEach((p) => {
+        const el = chartMpEvolucaoMensal.getDatasetMeta(p.datasetIndex).data[p.index];
+        const distancia = Math.abs((el.y ?? el.base ?? 0) - ev.offsetY);
+        if (distancia < menorDistancia) { menorDistancia = distancia; maisProximo = p; }
+      });
+    }
+    const clicouResultadoInventario = maisProximo && maisProximo.datasetIndex === 0;
     if (clicouResultadoInventario) {
       abrirModalFluxoInventarioItens({ mes: d.mes }, `Fluxo de Inventário em ${d.mes}`);
     } else {

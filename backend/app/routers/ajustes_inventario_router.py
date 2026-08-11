@@ -26,7 +26,6 @@ automaticamente, mesmo sem a coluna "Inventário" preenchida ou marcada
 "Não" (Maurício confirmou: entrada e saída contam igual)."""
 import io
 from datetime import date, datetime
-from collections import defaultdict
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 import openpyxl
@@ -132,6 +131,10 @@ async def importar_ajustes_inventario(
     ids_invent_ja_existentes = {r[0] for r in db.query(models.AjusteInventarioOficial.id_invent).distinct().all() if r[0] is not None}
     ids_invent_repetidos = set()
 
+    lote = models.LoteAjusteInventario(arquivo_origem=arquivo.filename, aba_usada=aba, criado_por=usuario.username)
+    db.add(lote)
+    db.flush()  # garante lote.id antes do loop, pra já linkar cada linha
+
     total, importadas, contadas_ajuste, ignoradas_nao, ignoradas_legado, erros = 0, 0, 0, 0, 0, []
     valor_total_ajuste = 0.0
 
@@ -156,6 +159,7 @@ async def importar_ajustes_inventario(
 
             valor_total_linha = parse_decimal(val(linha, "valor_total"))
             registro = models.AjusteInventarioOficial(
+                lote_id=lote.id,
                 sku=sku, status=limpar_texto(val(linha, "status")), id_invent=id_invent, dt_invent=dt_invent,
                 almoxarifado=almoxarifado, almoxarifado_origem=limpar_texto(almoxarifado_origem),
                 descricao_produto=limpar_texto(val(linha, "descricao")), id_lote=limpar_texto(val(linha, "id_lote")),
@@ -180,8 +184,15 @@ async def importar_ajustes_inventario(
         except Exception as e:
             erros.append(f"Linha {i} (SKU {sku_bruto}): {e}")
 
+    lote.total_linhas = total
+    lote.importadas = importadas
+    lote.contadas_como_ajuste_inventario = contadas_ajuste
+    lote.ignoradas_flag_nao = ignoradas_nao
+    lote.ignoradas_legado_pre_separacao = ignoradas_legado
+    lote.valor_total_ajustes_contados = round(valor_total_ajuste, 2)
     db.commit()
     return {
+        "lote_id": lote.id,
         "arquivo": arquivo.filename, "aba_usada": aba,
         "total_linhas": total, "importadas": importadas,
         "contadas_como_ajuste_inventario": contadas_ajuste,
@@ -193,19 +204,44 @@ async def importar_ajustes_inventario(
     }
 
 
-@router.get("/resumo")
-def resumo_ajustes_inventario(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    """Quantos lotes/linhas já foram importados, pra tela de Importar
-    mostrar o que já está carregado antes de subir um arquivo novo."""
-    linhas = db.query(models.AjusteInventarioOficial).all()
-    if not linhas:
-        return {"total_linhas": 0, "arquivos": [], "periodo": None}
-    arquivos = defaultdict(int)
-    for l in linhas:
-        arquivos[l.arquivo_origem or "desconhecido"] += 1
-    datas = [l.dt_invent for l in linhas if l.dt_invent]
-    return {
-        "total_linhas": len(linhas),
-        "arquivos": [{"arquivo": k, "linhas": v} for k, v in arquivos.items()],
-        "periodo": {"de": str(min(datas)), "ate": str(max(datas))} if datas else None,
-    }
+@router.get("/lotes")
+def listar_lotes_ajuste_inventario(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Histórico de importações (lotes) da planilha oficial de ajustes de
+    inventário, mais recente primeiro - alimenta a lista da tela Importar
+    (com opção de excluir um lote errado/duplicado)."""
+    lotes = db.query(models.LoteAjusteInventario).order_by(models.LoteAjusteInventario.id.desc()).all()
+    return [
+        {
+            "id": l.id,
+            "arquivo_origem": l.arquivo_origem,
+            "aba_usada": l.aba_usada,
+            "criado_por": l.criado_por,
+            "criado_em": l.criado_em.isoformat() if l.criado_em else None,
+            "total_linhas": l.total_linhas,
+            "importadas": l.importadas,
+            "contadas_como_ajuste_inventario": l.contadas_como_ajuste_inventario,
+            "ignoradas_flag_nao": l.ignoradas_flag_nao,
+            "ignoradas_legado_pre_separacao": l.ignoradas_legado_pre_separacao,
+            "valor_total_ajustes_contados": l.valor_total_ajustes_contados,
+        }
+        for l in lotes
+    ]
+
+
+@router.delete("/lotes/{lote_id}")
+def excluir_lote_ajuste_inventario(
+    lote_id: int,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Exclui um lote (importação) e todas as linhas de
+    AjusteInventarioOficial vinculadas a ele - pra corrigir upload
+    duplicado ou feito errado, "cada importação é uma coisa" que pode ser
+    desfeita sem afetar as outras."""
+    lote = db.query(models.LoteAjusteInventario).get(lote_id)
+    if lote is None:
+        raise HTTPException(404, "Lote não encontrado.")
+    linhas_removidas = db.query(models.AjusteInventarioOficial).filter(models.AjusteInventarioOficial.lote_id == lote_id).delete(synchronize_session=False)
+    db.delete(lote)
+    db.commit()
+    return {"lote_id": lote_id, "linhas_removidas": linhas_removidas}
