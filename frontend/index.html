@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=57">
+<link rel="stylesheet" href="style.css?v=58">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -332,13 +332,38 @@
         <div style="height:340px"><canvas id="mp-chart-evolucao-mensal"></canvas></div>
       </div>
 
+      <div class="panel panel-importar" id="mp-panel-importar-ajustes">
+        <h2>Importar Conciliação Oficial de Inventário (Ace4)</h2>
+        <p class="hint">
+          Planilha oficial de ajustes já conciliados (aba <code>Estoque</code> de "Inventários.xlsx") — a fonte do painel de
+          Fluxo de Inventário abaixo. Suba aqui o arquivo mais recente a cada conciliação nova. A coluna "Inventário" da
+          planilha decide o que conta: <strong>Sim</strong> = ajuste de inventário real; <strong>Não</strong> = baixa de
+          passivo que só passou por ali (já mapeada nas Baixas, não entra aqui de novo). A partir de jul/2026, todo
+          lançamento de inventário já conta como ajuste automaticamente, mesmo sem a coluna preenchida — baixa de
+          passivo agora vem só por nota fiscal.
+        </p>
+        <input type="file" id="mp-input-arquivo-ajustes" accept=".xlsx,.xlsm">
+        <button id="mp-btn-importar-ajustes" class="btn-primario">Importar conciliação</button>
+        <pre id="mp-resultado-importacao-ajustes" class="resultado-importacao"></pre>
+      </div>
+
       <div class="panel" id="mp-panel-fluxo-inventario" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #4caf50 8%, var(--panel)) 0%, var(--panel) 100%)">
         <div class="panel-title-row">
           <h2>Fluxo de Inventário — Entradas x Saídas x Resultado (Todos os Inventários)</h2>
           <span class="hint" style="margin:0">Total de Entradas − Total de Saídas do mês = Resultado Total do Mês, somando todos os almoxarifados/inventários</span>
         </div>
-        <p class="panel-sub">Barras: entradas (sobra no inventário) e saídas (falta no inventário) em R$ · Linha: resultado do mês. Clique numa barra ou num ponto pra ver os itens de fechamento daquele mês.</p>
+        <p class="panel-sub">
+          Fonte: tabela oficial de ajustes já conciliados (não o fechamento bruto — esse inclui item sinalizado como
+          divergente que nunca chegou a ser ajustado de fato). Barras: entradas (sobra) e saídas (falta) em R$ · Linha:
+          resultado do mês. Clique numa barra ou num ponto pra ver os itens daquele mês.
+        </p>
         <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
+      </div>
+
+      <div class="panel" id="mp-panel-classificacao-oficial">
+        <h2>Mapeada de Passivos — Classificação Oficial (Ace4)</h2>
+        <p class="panel-sub">De tudo que passou pela conciliação de inventário, quanto é ajuste de inventário de fato x quanto é baixa de passivo (já contada em Baixas) x quanto é legado desconsiderado.</p>
+        <div class="kpi-row" id="mp-kpi-row-classificacao"></div>
       </div>
 
       <div class="grid-2">
@@ -1209,7 +1234,7 @@
     <div style="padding:24px">
       <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
       <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
-        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Fechamento</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -1232,6 +1257,6 @@
   </div>
 </div>
 
-<script src="app.js?v=57"></script>
+<script src="app.js?v=58"></script>
 </body>
 </html>

@@ -2678,6 +2678,42 @@ document.getElementById("btn-importar-fechamento").addEventListener("click", asy
   }
 });
 
+document.getElementById("mp-btn-importar-ajustes").addEventListener("click", async () => {
+  const input = document.getElementById("mp-input-arquivo-ajustes");
+  const resultado = document.getElementById("mp-resultado-importacao-ajustes");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", input.files[0]);
+  resultado.textContent = "Importando conciliação oficial de inventário...";
+  try {
+    const res = await apiFetch(`${API}/ajustes-inventario/importar`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro (${res.status}): ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const linhas = [
+      `Importado: ${data.importadas} de ${data.total_linhas} linha(s) da aba "${data.aba_usada}".`,
+      `Contadas como ajuste de inventário: ${data.contadas_como_ajuste_inventario} (${formatarMoeda(data.valor_total_ajustes_contados)})`,
+      `Ignoradas (coluna "Não" - já mapeada em Baixas): ${data.ignoradas_flag_nao}`,
+      `Ignoradas (legado pré-separação Sim/Não): ${data.ignoradas_legado_pre_separacao}`,
+    ];
+    if (data.ids_invent_repetidos.length) {
+      linhas.push(`⚠️ ${data.ids_invent_repetidos.length} Id_Invent já existiam de uma importação anterior - confira se não é upload duplicado.`);
+    }
+    if (data.erros.length) {
+      linhas.push("", `Erros (${data.erros.length}):`, ...data.erros.slice(0, 20));
+    }
+    resultado.textContent = linhas.join("\n");
+    carregarMapeamentoPassivos();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  }
+});
+
 async function abrirFechamentoDetalhe(id) {
   fechamentoDetalheAtualId = id;
   const [f, divergentes, ok] = await Promise.all([
@@ -3666,7 +3702,7 @@ const CORES_STATUS_BAIXA = { PENDENTE: "#f9a825", APROVADA: "#4caf50", REPROVADA
 const CORES_FLUXO_INVENTARIO = { entrada: "#4caf50", saida: "#e5534b", resultado: "#5b75ac" };
 
 async function carregarMapeamentoPassivos() {
-  const [kpis, statusPizza, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais] = await Promise.all([
+  const [kpis, statusPizza, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais, classificacaoOficial] = await Promise.all([
     apiFetch(`${API}/baixas-operacionais/dashboard/kpis`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/status-pizza`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/evolucao-mensal`).then((r) => r.json()),
@@ -3674,6 +3710,7 @@ async function carregarMapeamentoPassivos() {
     apiFetch(`${API}/baixas-operacionais/dashboard/top-impacto-financeiro`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-totais`).then((r) => r.json()),
+    apiFetch(`${API}/baixas-operacionais/dashboard/classificacao-oficial-inventario`).then((r) => r.json()),
   ]);
 
   const m = kpis.mapeamento;
@@ -3699,6 +3736,17 @@ async function carregarMapeamentoPassivos() {
   renderMpEvolucaoMensal(evolucaoMensal);
   renderMpTabelaTop("mp-tabela-recorrentes", topRecorrentes);
   renderMpTabelaTop("mp-tabela-impacto-financeiro", topImpacto);
+  renderMpClassificacaoOficial(classificacaoOficial);
+}
+
+function renderMpClassificacaoOficial(classificacao) {
+  // "Mapeada de passivos" da tabela oficial (Ace4/Estoque): de tudo que passou pela conciliação de
+  // inventário, quanto é ajuste de fato x quanto é baixa de passivo (já contada em Baixas, não soma
+  // de novo no Fluxo de Inventário acima) x quanto é legado desconsiderado (pré-separação Sim/Não).
+  const CORES_CLASSIFICACAO = { ajuste_inventario: CORES_FLUXO_INVENTARIO.entrada, passivo_ja_mapeado: "#f9a825", legado_desconsiderado: "#8ca0a3" };
+  document.getElementById("mp-kpi-row-classificacao").innerHTML = Object.entries(classificacao)
+    .map(([chave, c]) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="color:${CORES_CLASSIFICACAO[chave] || "#c9d4d6"}">${c.quantidade} · ${formatarMoeda(c.valor)}</div></div>`)
+    .join("");
 }
 
 function renderMpStatusPizza(dados) {
@@ -3958,12 +4006,13 @@ async function abrirModalFluxoInventarioItens(filtros, titulo) {
     .map(
       (i) => `<tr>
         <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
+        <td>${i.id_lote || "—"}</td>
         <td>${i.qtd_sistema ?? "—"}</td><td>${i.qtd_contagem ?? "—"}</td><td>${i.divergencia_qtd ?? "—"}</td>
         <td style="color:${i.direcao === "entrada" ? "var(--ok)" : "var(--critico)"}">${i.direcao === "entrada" ? "Entrada" : "Saída"}</td>
         <td>${formatarMoeda(i.valor_estimado)}</td><td>${i.data_fechamento ? formatarDataCurta(i.data_fechamento) : "—"}</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="9" style="color:var(--muted)">Nenhum item de fechamento de inventário encontrado.</td></tr>`;
+    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhum ajuste de inventário encontrado.</td></tr>`;
 
   document.getElementById("modal-fluxo-inventario-itens-overlay").classList.remove("hidden");
 }

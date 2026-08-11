@@ -276,60 +276,58 @@ def dashboard_passivos_evolucao_mensal(usuario: models.Usuario = Depends(obter_u
 
 
 # ---------------------------------------------------------------------------
-# Fluxo de Inventário (Entradas x Saídas x Resultado) - "Mapeamento de
-# grana de TODOS os inventários": Total de Entradas - Total de Saídas do
-# mês = Resultado Total do Mês. Base: ItemFechamento (cada linha de cada
-# fechamento de inventário, de qualquer almoxarifado), comparando
-# qtd_contagem (físico) x qtd_sistema (esperado). Contagem > sistema =
-# sobra encontrada no inventário = Entrada. Contagem < sistema = falta =
-# Saída. valor_estimado de cada item já vem em R$ (ver fechamento_router).
+# Fluxo de Inventário (Entradas x Saídas x Resultado) - "Mapeamento de grana
+# de TODOS os inventários": Total de Entradas - Total de Saídas do mês =
+# Resultado Total do Mês. Base: AjusteInventarioOficial (a tabela OFICIAL de
+# ajustes já conciliados - "Ace4"/aba "Estoque" da planilha Inventários),
+# NÃO o fechamento bruto (ItemFechamento) - esse incluía item que a
+# operação sinalizou como divergente mas nunca ajustou de fato, por
+# problema de processo. Só entra no cálculo quem tem
+# conta_como_ajuste_inventario=True (ver ajustes_inventario_router.py: "Sim"
+# explícito na planilha, ou qualquer lançamento a partir de jul/2026,
+# quando baixa de passivo passou a vir só por nota fiscal). ajuste_qtd > 0
+# = sobra encontrada = Entrada; ajuste_qtd < 0 = falta = Saída.
 # ---------------------------------------------------------------------------
 
-def _direcao_item_fechamento(item) -> str | None:
-    if not item.divergencia_qtd:
+def _direcao_ajuste(registro) -> str | None:
+    if not registro.ajuste_qtd:
         return None
-    return "entrada" if item.divergencia_qtd > 0 else "saida"
+    return "entrada" if registro.ajuste_qtd > 0 else "saida"
 
 
-def _itens_fechamento_com_fechamento(db: Session, mes: str | None = None, direcao: str | None = None) -> list:
-    """[(ItemFechamento, FechamentoInventario), ...] só dos itens
-    divergentes (sem divergência não tem entrada/saída - contagem bateu
-    com o sistema), com o mês (YYYY-MM) do fechamento já resolvido."""
-    linhas = (
-        db.query(models.ItemFechamento, models.FechamentoInventario)
-        .join(models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id)
-        .filter(models.ItemFechamento.divergente.is_(True))
-        .all()
-    )
+def _ajustes_inventario_contados(db: Session, mes: str | None = None, direcao: str | None = None) -> list:
+    """[(AjusteInventarioOficial, mes, direcao), ...] só dos registros que
+    contam como ajuste de inventário (ver conta_como_ajuste_inventario)."""
+    q = db.query(models.AjusteInventarioOficial).filter(models.AjusteInventarioOficial.conta_como_ajuste_inventario.is_(True))
     resultado = []
-    for item, fechamento in linhas:
-        if not fechamento.data_fechamento or not item.divergencia_qtd:
+    for registro in q.all():
+        if not registro.dt_invent or not registro.ajuste_qtd:
             continue
-        mes_item = str(fechamento.data_fechamento)[:7]
-        if mes and mes_item != mes:
+        mes_registro = str(registro.dt_invent)[:7]
+        if mes and mes_registro != mes:
             continue
-        direcao_item = _direcao_item_fechamento(item)
-        if not direcao_item:
+        direcao_registro = _direcao_ajuste(registro)
+        if not direcao_registro:
             continue
-        if direcao and direcao_item != direcao:
+        if direcao and direcao_registro != direcao:
             continue
-        resultado.append((item, fechamento, mes_item, direcao_item))
+        resultado.append((registro, mes_registro, direcao_registro))
     return resultado
 
 
 def _fluxo_inventario_por_mes(db: Session) -> dict:
     """{mes: {entradas_valor, saidas_valor, resultado_valor, entradas_qtd, saidas_qtd}}
     somando TODOS os inventários (todos os almoxarifados juntos)."""
-    linhas = _itens_fechamento_com_fechamento(db)
+    linhas = _ajustes_inventario_contados(db)
     por_mes = defaultdict(lambda: {"entradas_valor": 0.0, "saidas_valor": 0.0, "entradas_qtd": 0, "saidas_qtd": 0})
-    for item, _fechamento, mes_item, direcao_item in linhas:
-        valor = abs(item.valor_estimado or 0)
-        if direcao_item == "entrada":
-            por_mes[mes_item]["entradas_valor"] += valor
-            por_mes[mes_item]["entradas_qtd"] += 1
+    for registro, mes_registro, direcao_registro in linhas:
+        valor = abs(registro.valor_total or 0)
+        if direcao_registro == "entrada":
+            por_mes[mes_registro]["entradas_valor"] += valor
+            por_mes[mes_registro]["entradas_qtd"] += 1
         else:
-            por_mes[mes_item]["saidas_valor"] += valor
-            por_mes[mes_item]["saidas_qtd"] += 1
+            por_mes[mes_registro]["saidas_valor"] += valor
+            por_mes[mes_registro]["saidas_qtd"] += 1
     for v in por_mes.values():
         v["resultado_valor"] = v["entradas_valor"] - v["saidas_valor"]
     return dict(por_mes)
@@ -375,22 +373,23 @@ def dashboard_itens_fluxo_inventario(
     db: Session = Depends(get_db),
 ):
     """Drill-down do painel de Fluxo de Inventário e da série 'Resultado do
-    Fluxo de Inventário' no MoM - lista os itens de fechamento (SKU x
-    almoxarifado) que geraram entrada/saída no mês/direção clicados."""
-    linhas = _itens_fechamento_com_fechamento(db, mes=mes, direcao=direcao)
-    skus = {item.sku for item, _f, _m, _d in linhas if item.sku}
+    Fluxo de Inventário' no MoM - lista os ajustes oficiais (SKU x
+    almoxarifado x lote) que geraram entrada/saída no mês/direção
+    clicados."""
+    linhas = _ajustes_inventario_contados(db, mes=mes, direcao=direcao)
+    skus = {registro.sku for registro, _m, _d in linhas if registro.sku}
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus)).all()}
 
     itens = [
         {
-            "id": item.id, "sku": item.sku, "descricao_produto": item.descricao_produto or descricoes.get(item.sku),
-            "almoxarifado": item.almoxarifado, "categoria_produto": item.categoria_produto,
-            "qtd_sistema": item.qtd_sistema, "qtd_contagem": item.qtd_contagem, "divergencia_qtd": item.divergencia_qtd,
-            "valor_estimado": abs(item.valor_estimado or 0), "direcao": direcao_item,
-            "data_fechamento": str(fechamento.data_fechamento) if fechamento.data_fechamento else None,
-            "fechamento_id": fechamento.id,
+            "id": registro.id, "sku": registro.sku, "descricao_produto": registro.descricao_produto or descricoes.get(registro.sku),
+            "almoxarifado": registro.almoxarifado, "categoria_produto": registro.categoria_produto,
+            "id_lote": registro.id_lote, "id_invent": registro.id_invent,
+            "qtd_sistema": registro.qtd_sistema, "qtd_contagem": registro.qtd_contagem, "divergencia_qtd": registro.ajuste_qtd,
+            "valor_estimado": abs(registro.valor_total or 0), "direcao": direcao_registro,
+            "data_fechamento": str(registro.dt_invent) if registro.dt_invent else None,
         }
-        for item, fechamento, _mes_item, direcao_item in linhas
+        for registro, _mes_registro, direcao_registro in linhas
     ]
     itens.sort(key=lambda x: abs(x["valor_estimado"] or 0), reverse=True)
     return {
@@ -398,6 +397,37 @@ def dashboard_itens_fluxo_inventario(
         "entradas_valor": round(sum(i["valor_estimado"] for i in itens if i["direcao"] == "entrada"), 2),
         "saidas_valor": round(sum(i["valor_estimado"] for i in itens if i["direcao"] == "saida"), 2),
     }
+
+
+@router.get("/dashboard/classificacao-oficial-inventario")
+def dashboard_classificacao_oficial_inventario(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """"Mapeada de passivos" da tabela oficial de ajustes ("Ace4"): de tudo
+    que passou pelo módulo de inventário, quanto é ajuste de inventário DE
+    FATO (conta_como_ajuste_inventario=True - coluna "Sim" ou lançamento
+    pós jul/2026) x quanto é baixa de passivo que só passou por ali e já
+    está mapeada em outro lugar (coluna "Não", antes de jul/2026) x quanto
+    é legado de antes da separação Sim/Não existir (desconsiderado dos
+    dois lados, por decisão do Maurício - não tem como saber se era
+    ajuste ou passivo)."""
+    todos = db.query(models.AjusteInventarioOficial).all()
+    grupos = {
+        "ajuste_inventario": {"label": "Ajuste de Inventário (Sim / pós-jul-2026)", "quantidade": 0, "valor": 0.0},
+        "passivo_ja_mapeado": {"label": "Baixa de Passivo (Não) - já mapeada em Baixas", "quantidade": 0, "valor": 0.0},
+        "legado_desconsiderado": {"label": "Legado pré-separação (desconsiderado)", "quantidade": 0, "valor": 0.0},
+    }
+    for r in todos:
+        flag_lower = str(r.inventario_flag_bruto).strip().lower() if r.inventario_flag_bruto is not None else ""
+        if r.conta_como_ajuste_inventario:
+            chave = "ajuste_inventario"
+        elif flag_lower == "não":
+            chave = "passivo_ja_mapeado"
+        else:
+            chave = "legado_desconsiderado"
+        grupos[chave]["quantidade"] += 1
+        grupos[chave]["valor"] += r.valor_total or 0
+    for g in grupos.values():
+        g["valor"] = round(g["valor"], 2)
+    return grupos
 
 
 def _top_10_por_sku(baixas: list, db: Session, chave_ordenacao) -> list:

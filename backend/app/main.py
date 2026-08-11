@@ -10,6 +10,7 @@ from .routers import (
     usuarios_router, auditoria_router, cadastros_router, fechamento_router,
     backup_router, ml_router, compras_router, voz_router,
     baixas_operacionais_router, integracoes_router, shelf_life_router,
+    ajustes_inventario_router,
 )
 from . import models
 from .auth import hash_senha
@@ -94,6 +95,7 @@ app.include_router(voz_router.router, prefix="/api")
 app.include_router(baixas_operacionais_router.router, prefix="/api")
 app.include_router(integracoes_router.router, prefix="/api")
 app.include_router(shelf_life_router.router, prefix="/api")
+app.include_router(ajustes_inventario_router.router, prefix="/api")
 
 
 @app.get("/api/health")

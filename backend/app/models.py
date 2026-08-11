@@ -452,6 +452,47 @@ class BaixaOperacional(Base):
     recebido_em = Column(DateTime, default=datetime.utcnow)
 
 
+class AjusteInventarioOficial(Base):
+    """Linha da tabela OFICIAL de ajustes de inventário ("Ace4") - a
+    conciliação real feita pela operação, importada da planilha
+    Inventários (aba "Estoque"). Diferente do ItemFechamento (que vem do
+    fechamento bruto e inclui itens que a operação sinalizou como
+    divergentes mas NUNCA chegou a ajustar de fato, por problema de
+    processo), esta tabela é a fonte de verdade de Entradas/Saídas de
+    inventário porque só tem o que foi de fato processado e conciliado.
+
+    A coluna "Inventário" da planilha de origem diz se aquela linha é um
+    ajuste de inventário (Sim) ou uma baixa de passivo que só passou por
+    ali mas já é contabilizada em outro lugar - BaixaOperacional (Não).
+    Até o meio de 2026 as duas coisas se misturavam no mesmo módulo; a
+    partir de PADRONIZACAO_NOTA_FISCAL_DESDE (jul/2026), toda baixa de
+    passivo passou a vir só por nota fiscal, então qualquer lançamento de
+    inventário a partir daí já é ajuste de inventário automaticamente,
+    mesmo sem a coluna preenchida - ver conta_como_ajuste_inventario."""
+    __tablename__ = "ajustes_inventario_oficial"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sku = Column(String, index=True)
+    status = Column(String, nullable=True)
+    id_invent = Column(Integer, index=True, nullable=True)  # número do evento de inventário na planilha de origem
+    dt_invent = Column(Date, index=True, nullable=True)
+    almoxarifado = Column(String, index=True, nullable=True)  # já traduzido pro código do Atlas (Almox_...)
+    almoxarifado_origem = Column(String, nullable=True)  # valor bruto da planilha ("Almox - SP Fabrica"), pra auditoria
+    descricao_produto = Column(String, nullable=True)
+    id_lote = Column(String, nullable=True)
+    qtd_sistema = Column(Float, default=0)  # coluna "Qtd" da planilha
+    qtd_contagem = Column(Float, default=0)  # coluna "Cont1" da planilha
+    ajuste_qtd = Column(Float, default=0)  # coluna "Ajuste" (Cont1 - Qtd) - positivo=sobra/entrada, negativo=falta/saída
+    custo_unitario = Column(Float, default=0)
+    valor_total = Column(Float, default=0)  # coluna "Vlr_Total" (Ajuste * Custo) - mesmo sinal do ajuste_qtd
+    categoria_produto = Column(String, nullable=True)  # coluna "Grupo"
+    observacao = Column(String, nullable=True)
+    inventario_flag_bruto = Column(String, nullable=True)  # valor bruto da coluna "Inventário": "Sim" | "Não" | ano legado (ex: "2025")
+    conta_como_ajuste_inventario = Column(Boolean, default=False, index=True)  # regra derivada - ver _conta_como_ajuste_inventario no router
+    arquivo_origem = Column(String, nullable=True)
+    criado_por = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+
 class LoteShelfLife(Base):
     """Lote físico (com validade) para controle de risco de shelf life -
     alimenta a tela dedicada 'Shelf Life' e o bloco de Shelf Life do Mapa
