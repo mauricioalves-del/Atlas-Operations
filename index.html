@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atlas — Controle Operacional de Estoques</title>
+<link rel="stylesheet" href="style.css?v=50">
+<script src="vendor/chart.umd.js"></script>
+</head>
+<body>
+
+<div id="tela-login" class="tela-login-jarvis">
+  <div class="jarvis-grid-bg"></div>
+  <div class="jarvis-scan-vertical"></div>
+  <div class="jarvis-particles">
+    <span></span><span></span><span></span><span></span><span></span><span></span>
+  </div>
+
+  <div class="jarvis-card-wrap">
+    <div class="jarvis-ring jarvis-ring-1"></div>
+    <div class="jarvis-ring jarvis-ring-2"></div>
+    <div class="jarvis-ring jarvis-ring-3"></div>
+
+    <form id="form-login" class="jarvis-card">
+      <span class="jarvis-corner jarvis-corner-tl"></span>
+      <span class="jarvis-corner jarvis-corner-tr"></span>
+      <span class="jarvis-corner jarvis-corner-bl"></span>
+      <span class="jarvis-corner jarvis-corner-br"></span>
+      <div class="jarvis-scanline"></div>
+
+      <div class="jarvis-logo-wrap">
+        <img src="assets/logo.png" alt="Atlas Operations" class="jarvis-logo">
+      </div>
+      <div class="jarvis-title">ATLAS <span>OPERATIONS</span></div>
+      <div class="jarvis-subtitle">// CONTROLE OPERACIONAL DE ESTOQUES</div>
+      <div class="jarvis-status"><span class="jarvis-dot"></span> SISTEMA ONLINE — AGUARDANDO AUTENTICAÇÃO</div>
+
+      <label for="login-username">USUÁRIO</label>
+      <input type="text" id="login-username" autocomplete="username" required>
+      <label for="login-senha">SENHA</label>
+      <input type="password" id="login-senha" autocomplete="current-password" required>
+      <button type="submit" class="jarvis-btn"><span>INICIAR SESSÃO</span></button>
+      <p id="login-erro" class="login-erro"></p>
+    </form>
+  </div>
+</div>
+
+<div class="shell hidden" id="shell-app">
+  <div class="shell-scan"></div>
+  <div class="shell-particles"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+  <aside class="rail" id="rail">
+    <div class="brand">
+      <img src="assets/logo.png" alt="Atlas" class="brand-logo">
+      <span class="brand-name">Atlas</span>
+    </div>
+    <nav class="rail-nav">
+      <button class="rail-item active" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
+      <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
+      <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
+      <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
+      <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
+      <button class="rail-item" data-view="fechamento-dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="rail-label">Painel Inventário</span></button>
+      <button class="rail-item" data-view="acuracia-ponderada"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0l-3-6zM18 8l-3 6a3 3 0 0 0 6 0l-3-6zM6 8h12"/></svg></span><span class="rail-label">Acurácia Ponderada</span></button>
+      <button class="rail-item" data-view="compras"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg></span><span class="rail-label">Controle de Compras</span></button>
+      <button class="rail-item" data-view="fechamentos"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span class="rail-label">Fechamento Inventário</span></button>
+      <button class="rail-item" data-view="pos-inventario"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14l2 2 4-4"/></svg></span><span class="rail-label">Pós-Inventário</span></button>
+      <button class="rail-item hidden" id="nav-cadastros" data-view="cadastros"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span><span class="rail-label">Cadastros</span></button>
+      <button class="rail-item hidden" id="nav-auditoria" data-view="auditoria"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="rail-label">Auditoria</span></button>
+      <button class="rail-item hidden" id="nav-usuarios" data-view="usuarios"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span class="rail-label">Usuários</span></button>
+    </nav>
+    <button class="rail-toggle" id="btn-toggle-rail" title="Recolher menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg></button>
+    <div class="rail-footer">
+      <button id="btn-tema" class="btn-tema" title="Alternar tema claro/escuro">
+        <svg class="icon-tema-sol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg class="icon-tema-lua" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span style="margin-left:6px">Tema</span>
+      </button>
+      <div id="usuario-logado-info" class="usuario-logado-info"></div>
+      controle operacional<br>de estoques
+      <button id="btn-logout" class="btn-logout">Sair</button>
+    </div>
+  </aside>
+
+  <main class="content">
+
+    <section id="view-dashboard" class="view">
+      <header class="view-header">
+        <h1>Painel de Divergências</h1>
+        <div class="filtros">
+          <select id="filtro-periodo" class="select-filtro">
+            <option value="tudo">Tudo</option>
+            <option value="mes_atual">Mês atual</option>
+            <option value="30d">Últimos 30 dias</option>
+            <option value="60d">Últimos 60 dias</option>
+            <option value="90d">Últimos 90 dias</option>
+          </select>
+          <select id="filtro-almoxarifado" class="select-filtro">
+            <option value="">Todos os almoxarifados</option>
+          </select>
+          <button id="btn-exportar-html-dashboard" class="btn-secundario">⭳ Exportar HTML</button>
+        </div>
+      </header>
+
+      <div class="kpi-row" id="kpi-row"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Itens Inventariados e Acurácia por Dia</h2>
+          <p class="panel-sub">Colunas: itens inventariados · Linha: % de acurácia (evolução do processo)</p>
+          <canvas id="chart-acuracia-dia"></canvas>
+        </div>
+        <div class="panel">
+          <h2>Distribuição de causas confirmadas</h2>
+          <canvas id="chart-causas"></canvas>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-title-row">
+            <h2>Tendência de Acurácia com Projeção</h2>
+            <span id="tendencia-badge" class="tendencia-badge">—</span>
+          </div>
+          <p class="panel-sub">Regressão estatística linear + projeção de 5 dias</p>
+          <canvas id="chart-tendencia"></canvas>
+          <p class="panel-footer" id="tendencia-footer"></p>
+        </div>
+        <div class="panel">
+          <h2>Evolução Mensal de Acurácia (MoM)</h2>
+          <p class="panel-sub">Variação em pontos percentuais (pp) de um mês para o outro</p>
+          <canvas id="chart-mom"></canvas>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Almoxarifado × Hipótese</h2>
+          <div id="heatmap" class="heatmap"></div>
+        </div>
+        <div class="panel">
+          <h2>Reincidência</h2>
+          <div class="rank-cols">
+            <div>
+              <h3>SKUs mais reincidentes</h3>
+              <ol id="rank-sku" class="rank-list"></ol>
+            </div>
+            <div>
+              <h3>Almoxarifados mais reincidentes</h3>
+              <ol id="rank-almox" class="rank-list"></ol>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <div class="panel">
+        <h2>Top 10 divergências por quantidade</h2>
+        <table class="tabela" id="tabela-top">
+          <thead>
+            <tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Saldo sistema</th><th>Saldo físico</th><th>Divergência</th><th>Status</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-cobertura-conferencia" class="view hidden">
+      <header class="view-header">
+        <h1>Cobertura de Conferência</h1>
+        <div class="filtros">
+          <select id="cc-filtro-dias" class="select-filtro">
+            <option value="30">Últimos 30 dias</option>
+            <option value="90" selected>Últimos 90 dias</option>
+            <option value="180">Últimos 180 dias</option>
+            <option value="365">Últimos 365 dias</option>
+          </select>
+        </div>
+      </header>
+      <p class="hint">
+        Dias conferidos × dias pendentes de conferência, por almoxarifado. Mede a saúde do <strong>processo de controle</strong>,
+        não do estoque em si — um almoxarifado sem furos pode ter divergências reais; um almoxarifado com furo grande pode estar
+        escondendo uma ruptura que simplesmente nunca foi contada, porque ninguém checou naquele período.
+      </p>
+
+      <div class="kpi-row" id="cc-kpi-row"></div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Calendário de conferência</h2>
+          <select id="cc-select-almoxarifado" class="select-filtro"></select>
+        </div>
+        <p class="panel-sub">Cada quadrado é um dia — verde: conferido · vermelho: pendente</p>
+        <div id="cc-calendario"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Cobertura por almoxarifado</h2>
+        <p class="panel-sub">Ordenado do pior pro melhor - quem precisa de atenção aparece primeiro</p>
+        <table class="tabela" id="tabela-cobertura-almoxarifado">
+          <thead><tr><th>Almoxarifado</th><th>Cobertura</th><th>Dias conferidos</th><th>Dias desde a última conferência</th><th>Maior furo</th><th>Período do maior furo</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-lista" class="view hidden">
+      <header class="view-header">
+        <h1>Divergências</h1>
+        <div class="filtros">
+          <button id="btn-recalcular-valores" class="btn-secundario">Recalcular valores</button>
+          <select id="lista-filtro-status" class="select-filtro">
+            <option value="">Todos os status</option>
+            <option value="Aberta">Aberta</option>
+            <option value="Em_Investigacao">Em investigação</option>
+            <option value="Resolvida">Resolvida</option>
+          </select>
+        </div>
+      </header>
+      <div class="lista-wrap">
+        <table class="tabela" id="tabela-lista">
+          <thead>
+            <tr><th>ID</th><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th><th>Valor</th><th>Hipótese (IA)</th><th>Confiança</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div id="paginacao-lista" class="paginacao"></div>
+      </div>
+    </section>
+
+    <section id="view-detalhe" class="view hidden">
+      <header class="view-header">
+        <button class="btn-voltar" id="btn-voltar-detalhe">&larr; voltar</button>
+        <h1 id="detalhe-titulo">Divergência</h1>
+      </header>
+      <div id="detalhe-conteudo" class="detalhe-conteudo"></div>
+    </section>
+
+    <section id="view-relatorio-baixa" class="view hidden">
+      <header class="view-header">
+        <h1>Relatório de Baixa</h1>
+        <div class="filtros">
+          <select id="rb-filtro-status" class="select-filtro">
+            <option value="">Todos os status</option>
+            <option value="PENDENTE">Pendente</option>
+            <option value="APROVADA">Aprovada</option>
+            <option value="REPROVADA">Reprovada</option>
+          </select>
+          <select id="rb-filtro-almoxarifado" class="select-filtro">
+            <option value="">Todos os almoxarifados</option>
+          </select>
+          <select id="rb-filtro-hipotese" class="select-filtro">
+            <option value="">Todos os motivos</option>
+          </select>
+          <button id="btn-sincronizar-lovable" class="btn-secundario">🔄 Sincronizar agora</button>
+        </div>
+      </header>
+      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable (por exemplo, depois de aprovar ou reprovar algo lá).</p>
+
+      <div class="kpi-row" id="rb-kpi-row"></div>
+
+      <div class="lista-wrap">
+        <table class="tabela" id="tabela-relatorio-baixa">
+          <thead>
+            <tr><th>SKU</th><th>Almoxarifado</th><th>Motivo</th><th>Hipótese</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Solicitante</th><th>Data</th><th>Divergência</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-importar" class="view hidden">
+      <header class="view-header"><h1>Importar movimentação</h1></header>
+      <div class="panel panel-importar">
+        <p class="hint">
+          <strong>CSV</strong>: colunas <code>sku, almoxarifado, data_movimento, entrada, saida, saldo_sistema, saldo_fisico, unidade</code>.<br>
+          <strong>Excel (.xlsx/.xlsm)</strong>: aba "Movimentação" com colunas <code>Grupo, Data, Id_Produto, Unid., Sistema, Entrada, Saídas, Contagem, Obs, Prejuízo</code> — igual ao arquivo que a operação já usa no dia a dia.
+        </p>
+        <input type="file" id="input-arquivo" accept=".csv,.xlsx,.xlsm">
+        <div id="wrap-almoxarifado" class="wrap-almoxarifado hidden">
+          <label for="input-almoxarifado">Almoxarifado deste arquivo</label>
+          <select id="input-almoxarifado"></select>
+        </div>
+        <button id="btn-importar" class="btn-primario">Importar</button>
+        <pre id="resultado-importacao" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel panel-importar">
+        <h2>Custos por SKU</h2>
+        <p class="hint">
+          Duas colunas: <code>sku, custo_unitario</code>. Aceita CSV ou Excel (.xlsx/.xlsm). Isso alimenta o valor estimado (R$) de cada divergência — sem isso cadastrado, o valor fica em 0. SKUs que ainda não existem no cadastro de produtos são ignorados (relatados no resultado).
+        </p>
+        <input type="file" id="input-arquivo-custos" accept=".csv,.xlsx,.xlsm">
+        <div class="wrap-almoxarifado" id="wrap-aba-custos" style="display:inline-block; margin-left:10px">
+          <label for="input-aba-custos">Aba (só se for Excel)</label>
+          <input type="text" id="input-aba-custos" placeholder="deixe em branco = primeira aba" style="min-width:220px">
+        </div>
+        <button id="btn-importar-custos" class="btn-primario">Importar custos</button>
+        <pre id="resultado-importacao-custos" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel panel-importar">
+        <h2>Custos via planilha de preço (Excel)</h2>
+        <p class="hint">
+          Para quem já tem a explosão de ficha técnica com custo (ex: aba <code>tabela de preço</code> do arquivo de conciliação) — alimenta o mesmo custo unitário do cadastro de produtos, sem precisar montar um CSV à mão. Só atualiza SKUs cujo custo é consistente em todas as ocorrências da planilha (evita gravar um valor ambíguo).
+        </p>
+        <input type="file" id="input-arquivo-custos-preco" accept=".xlsx,.xlsm">
+        <div class="wrap-almoxarifado">
+          <label for="input-aba-custos-preco">Nome da aba</label>
+          <input type="text" id="input-aba-custos-preco" value="tabela de preço" style="min-width:220px">
+        </div>
+        <button id="btn-importar-custos-preco" class="btn-primario">Importar custos da planilha</button>
+        <pre id="resultado-importacao-custos-preco" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel panel-importar">
+        <div class="panel-title-row">
+          <h2>Livro-caixa bruto do sistema (transferências e conferências automáticas)</h2>
+        </div>
+        <p class="hint">
+          Exportação direta do sistema (Id_Lanc, Id_Produto, Data, Operação, Qtd_Sai, Qtd_Ent...) - não é uma planilha de
+          reconciliação, é o histórico real de transações. Duas coisas são extraídas automaticamente daqui:
+          <strong>transferências entre almoxarifados</strong> (casadas pelo número do documento - se a mesma transferência
+          aparecer no arquivo de outro almoxarifado, o sistema sabe que ela já chegou) e <strong>conferências reais</strong>
+          (operações "Inventário (+)/(-)" alimentam a tela Cobertura de Conferência). Um arquivo por almoxarifado.
+        </p>
+        <table class="tabela" id="tabela-importador-bruto">
+          <thead><tr><th>Almoxarifado</th><th>Arquivo</th><th>Aba (opcional)</th><th></th><th>Resultado</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><select class="cb-almoxarifado" style="width:170px"><option value="">Carregando...</option></select></td>
+              <td><input type="file" class="cb-arquivo" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="cb-aba" placeholder="1ª aba do arquivo" style="width:130px"></td>
+              <td><button class="btn-secundario btn-importar-bruto">Importar</button></td>
+              <td class="cb-resultado hint"></td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="btn-secundario" id="btn-adicionar-linha-bruto" style="margin-top:8px">+ Adicionar outro almoxarifado</button>
+      </div>
+
+      <div class="panel panel-importar">
+        <div class="panel-title-row">
+          <h2>Dados de contexto (Excel — planilhas do banco SQL da empresa)</h2>
+        </div>
+        <p class="hint">
+          Faturamento, Ficha Técnica (BOM), Ordens de Produção, Consumo de OP e Transferências — usados pelo motor de investigação
+          e pelo modelo de ML pra explicar divergências (não só contar). <strong>Cada envio substitui os dados anteriores por completo</strong>
+          (são tabelas espelhadas do sistema da empresa, não um histórico acumulativo) — reenviar a versão mais atual é seguro, não duplica nada.
+        </p>
+        <table class="tabela" id="tabela-importadores-contexto">
+          <thead><tr><th>Fonte</th><th>Arquivo</th><th>Aba</th><th></th><th>Resultado</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Faturamento</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="faturamento-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Faturamento" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Ficha Técnica (BOM)</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="ficha-tecnica-bom-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Planilha1" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Ordens de Produção</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="ordens-producao-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Ops - PA" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Consumo de OP</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="consumo-op-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="OPs - Mat.P" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+            <tr>
+              <td>Transferências</td>
+              <td><input type="file" class="ctx-arquivo" data-endpoint="transferencias-excel" accept=".xlsx,.xlsm"></td>
+              <td><input type="text" class="ctx-aba" value="Transferencia" style="width:110px"></td>
+              <td><button class="btn-secundario btn-importar-contexto">Importar</button></td>
+              <td class="ctx-resultado hint"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Importações recentes</h2>
+        <p class="hint">Excluir uma importação remove todas as divergências e o histórico criados por ela.</p>
+        <table class="tabela" id="tabela-lotes-importacao">
+          <thead><tr><th>Data</th><th>Tipo</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Divergências</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-usuarios" class="view hidden">
+      <header class="view-header"><h1>Usuários</h1></header>
+
+      <div class="panel">
+        <h2>Novo usuário</h2>
+        <div class="form-novo-usuario">
+          <div>
+            <label>Username</label>
+            <input type="text" id="novo-usuario-username">
+          </div>
+          <div>
+            <label>Nome de exibição</label>
+            <input type="text" id="novo-usuario-nome">
+          </div>
+          <div>
+            <label>Senha inicial</label>
+            <input type="text" id="novo-usuario-senha">
+          </div>
+          <div>
+            <label>Papel</label>
+            <select id="novo-usuario-papel">
+              <option value="leitura">Leitura (só visualiza)</option>
+              <option value="analista">Analista (importa e confirma)</option>
+              <option value="admin">Admin (tudo + gerencia usuários)</option>
+            </select>
+          </div>
+          <button id="btn-criar-usuario" class="btn-primario">Criar usuário</button>
+        </div>
+        <p id="usuario-msg" class="hint"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Usuários cadastrados</h2>
+        <table class="tabela" id="tabela-usuarios">
+          <thead><tr><th>Username</th><th>Nome</th><th>Papel</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-cadastros" class="view hidden">
+      <header class="view-header">
+        <h1>Cadastros</h1>
+        <div class="filtros">
+          <button class="tab-btn active" data-tab="produtos">Produtos</button>
+          <button class="tab-btn" data-tab="almoxarifados">Almoxarifados</button>
+          <button class="tab-btn" data-tab="hipoteses">Hipóteses</button>
+        </div>
+      </header>
+
+      <div id="cadastro-produtos" class="cadastro-bloco">
+        <div class="panel">
+          <h2>Novo produto</h2>
+          <div class="form-cadastro">
+            <div><label>SKU</label><input id="prod-sku" type="text"></div>
+            <div><label>Descrição</label><input id="prod-descricao" type="text"></div>
+            <div><label>Categoria</label><input id="prod-categoria" type="text"></div>
+            <div><label>Unidade</label><input id="prod-unidade" type="text" placeholder="KG, PC..."></div>
+            <div><label>Custo unitário</label><input id="prod-custo" type="number" step="0.01"></div>
+            <button id="btn-salvar-produto" class="btn-primario">Salvar</button>
+          </div>
+          <p id="prod-msg" class="hint"></p>
+        </div>
+        <div class="panel">
+          <h2>Produtos cadastrados</h2>
+          <label class="checkbox-inline"><input type="checkbox" id="prod-incluir-inativos"> mostrar inativos</label>
+          <table class="tabela" id="tabela-produtos">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Categoria</th><th>Unidade</th><th>Custo</th><th>Status</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="cadastro-almoxarifados" class="cadastro-bloco hidden">
+        <div class="panel">
+          <h2>Novo almoxarifado</h2>
+          <div class="form-cadastro">
+            <div><label>Código</label><input id="almox-codigo" type="text"></div>
+            <div><label>Nome de exibição</label><input id="almox-nome" type="text"></div>
+            <button id="btn-salvar-almox" class="btn-primario">Salvar</button>
+          </div>
+          <p id="almox-msg" class="hint"></p>
+        </div>
+        <div class="panel">
+          <h2>Almoxarifados cadastrados</h2>
+          <label class="checkbox-inline"><input type="checkbox" id="almox-incluir-inativos"> mostrar inativos</label>
+          <p class="hint">
+            "Participa da contagem diária" controla se o almoxarifado entra na tela Cobertura de Conferência - desmarque
+            se ele não faz parte do planejamento de conferência diária (ex: depósito de material de escritório).
+          </p>
+          <table class="tabela" id="tabela-almoxarifados">
+            <thead><tr><th>Código</th><th>Nome</th><th>Status</th><th>Participa da contagem diária</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="cadastro-hipoteses" class="cadastro-bloco hidden">
+        <div class="panel">
+          <h2>Nova hipótese</h2>
+          <div class="form-cadastro">
+            <div><label>Código</label><input id="hip-codigo" type="text" placeholder="Ex: Novo_Motivo"></div>
+            <div><label>Nome</label><input id="hip-nome" type="text"></div>
+            <div><label>Descrição</label><input id="hip-descricao" type="text"></div>
+            <div><label>Peso padrão</label><input id="hip-peso" type="number" value="20"></div>
+            <button id="btn-salvar-hipotese" class="btn-primario">Salvar</button>
+          </div>
+          <p id="hip-msg" class="hint"></p>
+        </div>
+        <div class="panel">
+          <h2>Hipóteses cadastradas</h2>
+          <label class="checkbox-inline"><input type="checkbox" id="hip-incluir-inativos"> mostrar inativas</label>
+          <table class="tabela" id="tabela-hipoteses">
+            <thead><tr><th>Código</th><th>Nome</th><th>Peso</th><th>Status</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-auditoria" class="view hidden">
+      <header class="view-header"><h1>Auditoria</h1></header>
+
+      <div class="panel">
+        <h2>Backup do banco de dados</h2>
+        <p class="hint" id="backup-status">Carregando...</p>
+        <button id="btn-baixar-backup" class="btn-primario">Baixar backup agora</button>
+        <p class="hint" style="margin-top:10px">
+          O sistema também guarda automaticamente uma cópia toda vez que o servidor é iniciado (pasta <code>backups/</code>, mantém as últimas 15).
+          <strong>Antes de atualizar o código do sistema, baixe um backup e guarde fora da pasta do projeto.</strong>
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>Modelo de Machine Learning</h2>
+        <p class="hint" id="ml-status">Carregando...</p>
+        <p class="hint" id="ml-status-automatico" style="color:var(--teal)"></p>
+        <button id="btn-retreinar-ml" class="btn-primario">Retreinar agora</button>
+        <p class="hint" style="margin-top:10px">
+          Retreina usando o histórico bruto (<code>seed_data/</code>) + todos os casos que a equipe já confirmou até agora.
+          Pode levar alguns segundos. Não precisa reiniciar o servidor depois - o modelo novo já entra em uso na hora.
+        </p>
+        <pre id="ml-resultado" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel">
+        <h2>Reprocessar diagnósticos que falharam</h2>
+        <p class="hint">
+          Reprocessa em lote só as divergências que nunca chegaram a ter um diagnóstico de verdade (ex: se a investigação
+          falhou automaticamente por algum problema técnico já corrigido, como um modelo de ML incompatível). Não toca em
+          nenhum caso que já tem diagnóstico - mesmo que a equipe não concorde com ele.
+        </p>
+        <button id="btn-reinvestigar-falhas" class="btn-primario">Reprocessar agora</button>
+        <p class="hint" id="resultado-reinvestigar-falhas" style="margin-top:10px"></p>
+      </div>
+
+      <div class="panel">
+        <table class="tabela" id="tabela-auditoria">
+          <thead><tr><th>Data/hora</th><th>Usuário</th><th>Ação</th><th>Entidade</th><th>Detalhes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="paginacao-auditoria" class="paginacao"></div>
+      </div>
+    </section>
+
+    <section id="view-acuracia-ponderada" class="view hidden">
+      <header class="view-header">
+        <h1>Acurácia Ponderada</h1>
+        <div class="filtros">
+          <select id="ap-filtro-mes" class="select-filtro"><option value="">Todos os meses</option></select>
+          <select id="ap-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <button id="btn-exportar-html-acuracia-ponderada" class="btn-secundario">⭳ Exportar HTML</button>
+        </div>
+      </header>
+      <p class="hint">Item a item trata toda divergência como "1 erro", igual, pequena ou grande. Os dois indicadores abaixo pesam pelo tamanho real do impacto — quantidade (IAQ) e valor financeiro (IAP).</p>
+
+      <div class="kpi-row" id="ap-kpi-row"></div>
+
+      <div class="panel">
+        <h2>Os três modelos, lado a lado</h2>
+        <p class="panel-sub">Mesmo universo de itens — a diferença entre as barras É a distorção que o modelo item a item escondia</p>
+        <canvas id="ap-chart-comparativo" height="90"></canvas>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Acurácia por Grupo — os 3 modelos</h2>
+          <p class="panel-sub">Em qual grupo de produto a distorção item a item é maior</p>
+          <canvas id="ap-chart-grupo"></canvas>
+        </div>
+        <div class="panel">
+          <h2>Acurácia por Almoxarifado — os 3 modelos</h2>
+          <p class="panel-sub">Mesma leitura, por almoxarifado</p>
+          <canvas id="ap-chart-almox"></canvas>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Concentração de valor (curva de Pareto)</h2>
+          <p class="panel-sub">Quanto do valor em risco está concentrado em poucos itens</p>
+          <canvas id="ap-chart-pareto"></canvas>
+          <p class="panel-footer" id="ap-pareto-footer"></p>
+        </div>
+        <div class="panel">
+          <h2>Distribuição por magnitude da divergência</h2>
+          <p class="panel-sub">Colunas: nº de itens · Linha: valor total (R$) por faixa · duplo clique numa coluna pra ver os itens</p>
+          <canvas id="ap-chart-magnitude"></canvas>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Análise MoM — Acurácia Ponderada</h2>
+          <select id="ap-mom-metrica" class="select-filtro">
+            <option value="iap_pct">IAP (valor)</option>
+            <option value="iaq_pct">IAQ (quantidade)</option>
+            <option value="item_a_item_pct">Item a item</option>
+            <option value="valor_mod">Valor Mod (R$)</option>
+          </select>
+        </div>
+        <p class="panel-sub" id="ap-mom-subtitulo">Colunas: acurácia do mês · Linha: variação MoM em pontos percentuais</p>
+        <canvas id="ap-chart-mom"></canvas>
+      </div>
+
+      <div class="panel">
+        <h2>Evolução mensal dos três modelos</h2>
+        <canvas id="ap-chart-evolucao"></canvas>
+      </div>
+
+      <div class="panel">
+        <h2>Top itens que mais concentram valor em risco</h2>
+        <table class="tabela" id="ap-tabela-pareto">
+          <thead><tr><th>#</th><th>SKU</th><th>Descrição</th><th>Valor</th><th>% acumulado do valor</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-compras" class="view hidden">
+      <header class="view-header">
+        <h1>Controle de Compras (Estoque Externo)</h1>
+        <div class="filtros">
+          <select id="cp-filtro-status" class="select-filtro">
+            <option value="">Todos os status</option>
+            <option value="Aberto">Aberto</option>
+            <option value="Parcialmente_Recebido">Parcialmente recebido</option>
+            <option value="Concluido">Concluído</option>
+            <option value="Cancelado">Cancelado</option>
+          </select>
+        </div>
+      </header>
+      <p class="hint">
+        Pedidos de compra entregues em várias remessas pelo fornecedor criam faltas "falsas" numa contagem feita antes da entrega completa.
+        Registrando o pedido e os recebimentos aqui, o motor de investigação passa a reconhecer essa falta como <strong>Pedido de Compra Pendente</strong>
+        em vez de perda real — em Movimentados e em Fechamento de Inventário, automaticamente.
+      </p>
+
+      <div class="kpi-row" id="cp-kpi-row"></div>
+
+      <div class="panel">
+        <h2>Novo pedido de compra</h2>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr)">
+          <div><label>Fornecedor</label><input id="cp-fornecedor" type="text" placeholder="Nome do fornecedor"></div>
+          <div><label>Nº do pedido (opcional)</label><input id="cp-numero-pedido" type="text"></div>
+          <div><label>SKU</label><input id="cp-sku" type="text"></div>
+          <div><label>Descrição</label><input id="cp-descricao" type="text"></div>
+        </div>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr); margin-top:10px">
+          <div><label>Almoxarifado destino</label><input id="cp-almoxarifado" type="text"></div>
+          <div><label>Quantidade pedida</label><input id="cp-quantidade" type="number" step="0.01"></div>
+          <div><label>Data do pedido</label><input id="cp-data-pedido" type="date"></div>
+          <div><label>Prazo de entrega previsto</label><input id="cp-prazo" type="date"></div>
+        </div>
+        <button id="btn-criar-pedido" class="btn-primario" style="margin-top:14px">Criar pedido</button>
+        <p id="cp-msg" class="hint"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Pedidos de compra</h2>
+        <table class="tabela" id="tabela-pedidos">
+          <thead><tr><th>Pedido</th><th>Fornecedor</th><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Pedida</th><th>Recebida</th><th>Pendente</th><th>Progresso</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-fechamento-dashboard" class="view hidden">
+      <header class="view-header">
+        <h1>Painel de Inventário</h1>
+        <div class="filtros">
+          <select id="fd-filtro-mes" class="select-filtro"><option value="">Todos os meses</option></select>
+          <select id="fd-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <button id="btn-exportar-html-fechamento-dashboard" class="btn-secundario">⭳ Exportar HTML</button>
+        </div>
+      </header>
+
+      <div class="kpi-row" id="fd-kpi-row"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Acurácia por Grupo</h2>
+          <canvas id="fd-chart-grupo"></canvas>
+        </div>
+        <div class="panel">
+          <h2>Acurácia por Almoxarifado</h2>
+          <p class="panel-sub">Com um mês específico selecionado, duplo clique numa barra abre o fechamento correspondente</p>
+          <canvas id="fd-chart-almox"></canvas>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Evolução Mensal (MoM)</h2>
+          <span class="hint" style="margin:0">Colunas: acurácia · Linha: quantidade de fechamentos realizados no mês</span>
+        </div>
+        <canvas id="fd-chart-evolucao-mensal"></canvas>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Ranking Financeiro — Top 10 Faltas</h2>
+          <canvas id="fd-chart-faltas"></canvas>
+        </div>
+        <div class="panel">
+          <h2>Ranking Financeiro — Top 10 Sobras</h2>
+          <canvas id="fd-chart-sobras"></canvas>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Top 10 Itens Mais Recorrentes em Divergência</h2>
+          <p class="panel-sub">Clique numa linha para abrir/criar ação de acompanhamento</p>
+          <table class="tabela" id="fd-tabela-recorrentes">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total impactado</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h2>Top 10 Impacto Financeiro (maiores passivos)</h2>
+          <p class="panel-sub">Clique numa linha para abrir/criar ação de acompanhamento</p>
+          <table class="tabela" id="fd-tabela-impacto-financeiro">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total impactado</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Top 10 Itens Recorrentes de Risco</h2>
+          <span class="hint" style="margin:0">Recorrência × valor — clique numa linha para abrir/criar ação de acompanhamento</span>
+        </div>
+        <table class="tabela" id="fd-tabela-risco">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Ocorrências</th><th>Valor total</th><th>Score de risco</th><th>Última ocorrência</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-pos-inventario" class="view hidden">
+      <header class="view-header">
+        <h1>Pós-Inventário</h1>
+        <div class="filtros">
+          <button id="btn-reconciliar-acoes" class="btn-secundario">↻ Reconciliar automaticamente</button>
+          <select id="pi-filtro-status" class="select-filtro">
+            <option value="">Todos os status</option>
+            <option value="Pendente">Pendente</option>
+            <option value="Em_Andamento">Em andamento</option>
+            <option value="Concluida">Concluída</option>
+            <option value="Cancelada">Cancelada</option>
+          </select>
+        </div>
+      </header>
+
+      <div class="panel">
+        <h2>Nova ação de acompanhamento</h2>
+        <div class="form-cadastro" style="grid-template-columns:1fr">
+          <div class="form-novo-usuario" style="grid-template-columns:repeat(5,1fr)">
+            <div><label>SKU</label><input id="pi-sku" type="text"></div>
+            <div><label>Almoxarifado</label><input id="pi-almox" type="text"></div>
+            <div><label>Ação</label><input id="pi-acao" type="text" placeholder="Ex: Solicitar recontagem"></div>
+            <div><label>Responsável</label><input id="pi-responsavel" type="text"></div>
+            <div><label>Prazo</label><input id="pi-prazo" type="date"></div>
+          </div>
+          <button id="btn-criar-acao" class="btn-primario">Criar ação</button>
+        </div>
+        <p id="pi-msg" class="hint"></p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Ações de acompanhamento</h2>
+          <div id="pi-barra-lote" class="hidden" style="display:flex; gap:8px; align-items:center">
+            <span class="hint" id="pi-lote-contagem" style="margin:0"></span>
+            <select id="pi-lote-status" class="select-filtro">
+              <option value="Concluida">Marcar como Concluída</option>
+              <option value="Em_Andamento">Marcar como Em andamento</option>
+              <option value="Cancelada">Marcar como Cancelada</option>
+              <option value="Pendente">Marcar como Pendente</option>
+            </select>
+            <button id="btn-aplicar-lote" class="btn-primario" style="margin:0">Aplicar aos selecionados</button>
+          </div>
+        </div>
+        <table class="tabela" id="tabela-pos-inventario">
+          <thead><tr><th><input type="checkbox" id="pi-marcar-todos"></th><th></th><th>SKU</th><th>Descrição</th><th>Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-fechamentos" class="view hidden">
+      <header class="view-header"><h1>Fechamento de Inventário</h1></header>
+
+      <div class="panel panel-importar">
+        <h2>Importar novo fechamento</h2>
+        <p class="hint">
+          Planilha de conciliação contábil × físico. Por padrão lê a aba <code>Saldo de estoque - ace4</code> (ajustável abaixo se sua planilha usar outro nome de aba).
+          Cada linha divergente é investigada automaticamente e comparada com fechamentos anteriores do mesmo item — se já divergiu antes, ganha ⭐.
+        </p>
+        <input type="file" id="input-arquivo-fechamento" accept=".xlsx,.xlsm">
+        <div class="wrap-almoxarifado">
+          <label for="input-aba-fechamento">Nome da aba</label>
+          <input type="text" id="input-aba-fechamento" value="Saldo de estoque - ace4" style="min-width:280px">
+        </div>
+        <button id="btn-importar-fechamento" class="btn-primario">Importar fechamento</button>
+        <pre id="resultado-importacao-fechamento" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel">
+        <h2>Fechamentos anteriores</h2>
+        <table class="tabela" id="tabela-fechamentos">
+          <thead><tr><th>Data</th><th>Almoxarifado</th><th>Itens</th><th>Divergentes</th><th>Valor em risco</th><th>Status</th><th></th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-fechamento-detalhe" class="view hidden">
+      <header class="view-header">
+        <button class="btn-voltar" id="btn-voltar-fechamento">&larr; voltar</button>
+        <h1 id="fechamento-detalhe-titulo">Fechamento</h1>
+      </header>
+
+      <div class="kpi-row" id="fechamento-kpi-row"></div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Divergências deste fechamento</h2>
+          <span class="hint" style="margin:0">⭐ = já divergiu em fechamento(s) anterior(es) deste mesmo item</span>
+        </div>
+        <table class="tabela" id="tabela-itens-divergentes">
+          <thead><tr><th></th><th>SKU</th><th>Descrição</th><th>Divergência</th><th>Valor</th><th>Resumo</th><th>Obs. pós-inventário</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Itens sem divergência</h2>
+        <table class="tabela" id="tabela-itens-ok">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Qtd. sistema</th><th>Qtd. contagem</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Ciência da conciliação</h2>
+        </div>
+        <p class="hint">
+          Exige duas assinaturas pra fechar o inventário: Diretor de Operações e Coordenador Financeiro. Cada confirmação
+          é autenticada (usuário logado + data/hora) e gera um PDF com a lista de itens divergentes, congelada no momento
+          da confirmação.
+        </p>
+        <p id="ciencia-status-resumo" class="hint" style="margin-bottom:12px"></p>
+        <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap">
+          <select id="ciencia-papel" class="select-filtro" style="min-width:220px">
+            <option value="">Assinando como...</option>
+            <option value="Diretor_Operacoes">Diretor de Operações</option>
+            <option value="Coordenador_Financeiro">Coordenador Financeiro</option>
+          </select>
+          <button id="btn-gerar-ciencia" class="btn-primario" style="margin:0">📝 Confirmar ciência e gerar documento</button>
+        </div>
+        <textarea id="ciencia-observacao" rows="2" placeholder="Observação opcional..." style="width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--radius-input); color:var(--text); padding:8px 10px; font-family:var(--sans); font-size:13px; margin-bottom:10px"></textarea>
+        <table class="tabela" id="tabela-ciencia">
+          <thead><tr><th>Data/hora</th><th>Papel</th><th>Gestor</th><th>Itens divergentes</th><th>Valor total</th><th>Observação</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="modal-acao-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2 id="modal-acao-titulo">Ação de acompanhamento</h2>
+      <button id="btn-fechar-modal-acao" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-coluna">
+        <label>Ação</label>
+        <textarea id="modal-acao-descricao" rows="2"></textarea>
+        <div class="form-cadastro" style="grid-template-columns:1fr 1fr; gap:12px">
+          <div><label>Responsável</label><input id="modal-acao-responsavel" type="text"></div>
+          <div><label>Prazo</label><input id="modal-acao-prazo" type="date"></div>
+        </div>
+        <label>Status</label>
+        <select id="modal-acao-status">
+          <option value="Pendente">Pendente</option>
+          <option value="Em_Andamento">Em andamento</option>
+          <option value="Concluida">Concluída</option>
+          <option value="Cancelada">Cancelada</option>
+        </select>
+        <label>Observação de conclusão</label>
+        <textarea id="modal-acao-observacao" rows="2"></textarea>
+
+        <label style="margin-top:16px">Checklist</label>
+        <div id="modal-checklist-itens"></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <input id="modal-checklist-novo" type="text" placeholder="Adicionar item ao checklist...">
+          <button id="btn-add-checklist" class="btn-secundario">Adicionar</button>
+        </div>
+
+        <button id="btn-salvar-modal-acao" class="btn-primario" style="margin-top:18px">Salvar</button>
+      </div>
+      <div class="modal-coluna modal-coluna-lateral">
+        <h3>Acompanhamento do item</h3>
+        <div id="modal-acompanhamento-kpis" class="kpi-row-modal"></div>
+        <canvas id="modal-chart-historico" height="140"></canvas>
+        <div id="modal-linha-do-tempo"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-magnitude-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(800px, 92vw)">
+    <div class="modal-header">
+      <h2 id="modal-magnitude-titulo">Itens da faixa</h2>
+      <button id="btn-fechar-modal-magnitude" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" style="margin-bottom:14px">Clique em "Criar ação" pra abrir o acompanhamento de um item específico dessa faixa.</p>
+      <table class="tabela" id="tabela-modal-magnitude">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Divergência</th><th>Valor</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="modal-pedido-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(800px, 92vw)">
+    <div class="modal-header">
+      <h2 id="modal-pedido-titulo">Pedido de compra</h2>
+      <button id="btn-fechar-modal-pedido" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <div id="modal-pedido-resumo" class="kpi-row-modal" style="margin-bottom:16px"></div>
+
+      <h3 style="font-family:var(--display); font-size:14px; margin-bottom:10px">Registrar novo recebimento</h3>
+      <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr)">
+        <div><label>Data do recebimento</label><input id="mp-data-recebimento" type="date"></div>
+        <div><label>Quantidade recebida</label><input id="mp-quantidade-recebida" type="number" step="0.01"></div>
+        <div><label>Nº nota fiscal</label><input id="mp-nota-fiscal" type="text"></div>
+        <div><label>Recebido por</label><input id="mp-recebido-por" type="text"></div>
+      </div>
+      <button id="btn-registrar-recebimento" class="btn-primario" style="margin-top:12px">Registrar recebimento</button>
+      <p id="modal-pedido-msg" class="hint"></p>
+
+      <h3 style="font-family:var(--display); font-size:14px; margin:20px 0 10px">Histórico de recebimentos</h3>
+      <table class="tabela" id="tabela-modal-recebimentos">
+        <thead><tr><th>Data</th><th>Quantidade</th><th>Nota fiscal</th><th>Recebido por</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <div style="margin-top:20px; display:flex; gap:8px">
+        <button id="btn-cancelar-pedido" class="btn-secundario">Cancelar pedido</button>
+        <button id="btn-excluir-pedido" class="btn-secundario" style="color:var(--critico)">Excluir pedido (dado errado)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-detalhe-mes-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(760px, 92vw)">
+    <div class="modal-header">
+      <h2 id="modal-detalhe-mes-titulo">Detalhe do mês</h2>
+      <button id="btn-fechar-modal-detalhe-mes" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <table class="tabela" id="tabela-modal-detalhe-mes">
+        <thead><tr><th>Data</th><th>Almoxarifado</th><th>Sistema</th><th>Contagem</th><th>Diferença</th><th>Hipótese</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="modal-dia-conferencia-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(900px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-dia-conferencia-titulo">Detalhe do dia</h2>
+      <button id="btn-fechar-modal-dia-conferencia" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" style="margin-bottom:14px">
+        "Sem divergência registrada ainda" não quer dizer que está tudo certo - só que ninguém confirmou uma divergência
+        pra esse item ainda. Se suspeitar de ruptura por causa do furo de conferência, clique em "Abrir investigação".
+      </p>
+      <table class="tabela" id="tabela-modal-dia-conferencia">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Saída</th><th>Entrada</th><th>Operações</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=51"></script>
+</body>
+</html>
