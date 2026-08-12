@@ -14,10 +14,29 @@ import openpyxl
 
 from .. import models
 from ..database import get_db
-from ..deps import obter_usuario_atual
+from ..deps import obter_usuario_atual, requer_papel
 from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote, importar_planilha_historico_lovable
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
+
+
+@router.post("/resetar")
+def resetar_historico(
+    usuario: models.Usuario = Depends(requer_papel("admin")),
+    db: Session = Depends(get_db),
+):
+    """Apaga TODO o histórico de baixas operacionais guardado no Atlas
+    (tabela baixas_operacionais) - usado quando o relatório fica com uma
+    contagem que não bate (ex: linhas de uma sincronização/importação
+    antiga, de antes de alguma correção de dedup, que nunca foram
+    corrigidas ou removidas). Em vez de tentar consertar linha a linha,
+    apaga tudo daqui e deixa o Lovable (fonte da verdade) repovoar do
+    zero na próxima chamada a /sincronizar. Não toca em Divergência nem em
+    nenhuma outra tabela - só nas baixas em si. Restrito a admin porque é
+    uma ação destrutiva sem confirmação extra na tela."""
+    total_apagado = db.query(models.BaixaOperacional).delete()
+    db.commit()
+    return {"apagadas": total_apagado}
 
 
 @router.post("/importar-lote")
