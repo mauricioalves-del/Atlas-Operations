@@ -565,6 +565,7 @@ async function carregarDashboard() {
   tentarRenderizar(() => renderRanking(rank));
   tentarRenderizar(() => renderTop(top));
   tentarRenderizar(() => preencherFiltroAlmoxarifado(heatmap));
+  tentarRenderizar(() => renderizarResumoExecutivoNarrado("dashboard-resumo-executivo", construirResumoExecutivoDashboard(kpis, causas)));
 }
 
 function tentarRenderizar(fn) {
@@ -1769,6 +1770,7 @@ async function carregarAcuraciaPonderada() {
   tentarRenderizar(() => renderApMagnitude(magnitude));
   tentarRenderizar(() => renderApEvolucao(evolucao));
   tentarRenderizar(() => renderApMom(evolucao));
+  tentarRenderizar(() => renderizarResumoExecutivoNarrado("ap-resumo-executivo", construirResumoExecutivoAcuraciaPonderada(comparativo)));
 
   if (!apFiltrosCarregados) {
     evolucao.forEach((d) => {
@@ -2105,6 +2107,7 @@ async function carregarDashboardFechamento() {
   tentarRenderizar(() => renderFdImpactoFinanceiro(impactoFinanceiro));
   tentarRenderizar(() => renderFdEvolucaoMensal(evolucaoMensal));
   tentarRenderizar(() => preencherFiltrosFechamentoDashboard(evolucaoMensal, porAlmox));
+  tentarRenderizar(() => renderizarResumoExecutivoNarrado("fd-resumo-executivo", construirResumoExecutivoFechamento(kpis)));
 }
 
 function renderFdKpis(k) {
@@ -2300,6 +2303,7 @@ async function carregarAcoesPosInventario() {
   const status = document.getElementById("pi-filtro-status").value;
   const acoes = await apiFetch(`${API}/fechamentos/acoes${status ? "?status=" + status : ""}`).then((r) => r.json());
   acoesCarregadas = acoes;
+  tentarRenderizar(() => renderizarResumoExecutivoNarrado("pi-resumo-executivo", construirResumoExecutivoPosInventario(acoes)));
   document.querySelector("#tabela-pos-inventario tbody").innerHTML = acoes
     .map(
       (a) => `<tr data-id="${a.id}">
@@ -2931,6 +2935,8 @@ async function carregarPedidosCompra() {
     .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
     .join("");
 
+  tentarRenderizar(() => renderizarResumoExecutivoNarrado("cp-resumo-executivo", construirResumoExecutivoCompras(kpis)));
+
   document.querySelector("#tabela-pedidos tbody").innerHTML = pedidos
     .map(
       (p) => `<tr data-id="${p.id}" style="cursor:pointer">
@@ -3120,6 +3126,13 @@ async function carregarCoberturaConferencia() {
   ]
     .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="color:${c.cor}">${c.value}</div></div>`)
     .join("");
+
+  tentarRenderizar(() =>
+    renderizarResumoExecutivoNarrado(
+      "cc-resumo-executivo",
+      construirResumoExecutivoCobertura(lista, coberturaMedia, semNenhumaConferencia, comFuroAtivo, maiorFuroGeral, semDadosCount)
+    )
+  );
 
   document.querySelector("#tabela-cobertura-almoxarifado tbody").innerHTML = lista
     .map((a) =>
@@ -4949,23 +4962,24 @@ window.addEventListener("resize", () => {
   }, 150);
 });
 
-// ---------- apresentação formal dos módulos (voz do "Exterminador",
-// uma única vez por sessão de navegador - sessionStorage some ao fechar
-// a aba) ----------
+// ---------- apresentação formal dos módulos (voz do "J.A.R.V.I.S.", trocado
+// do tom "Exterminador do Futuro" a pedido do Maurício em 13/08/2026 - uma
+// única vez por sessão de navegador - sessionStorage some ao fechar a aba)
+// ----------
 const ATLAS_APRESENTACAO_MODULOS = {
-  dashboard: { frase: "Vigilância central. Todos os indicadores, num único alvo.", resumo: "Visão consolidada dos principais indicadores do sistema em tempo real." },
-  lista: { frase: "Anomalias detectadas. Serão neutralizadas.", resumo: "Lista e trata inconsistências encontradas entre registros e contagens." },
-  "cobertura-conferencia": { frase: "Nenhum item escapa à varredura.", resumo: "Percentual de itens já conferidos no processo de inventário." },
-  importar: { frase: "Dados assimilados. Sistema atualizado.", resumo: "Envia planilhas e arquivos externos para dentro do sistema Atlas." },
-  "fechamento-dashboard": { frase: "Alvo do inventário, sob mira constante.", resumo: "Painel com o status geral do inventário em andamento." },
-  "acuracia-ponderada": { frase: "Precisão calculada. Erro é inaceitável.", resumo: "Mede a exatidão do inventário considerando o peso de cada item." },
-  compras: { frase: "Suprimentos rastreados, ponto a ponto.", resumo: "Acompanha pedidos, entradas e status das compras." },
-  fechamentos: { frase: "Missão concluída. O resultado será registrado.", resumo: "Consolida e encerra oficialmente o ciclo de inventário atual." },
-  "pos-inventario": { frase: "A missão não termina na contagem. Eu analiso o depois.", resumo: "Análises e ações realizadas após o encerramento do inventário." },
-  cadastros: { frase: "Bases de dados, organizadas sob meu comando.", resumo: "Cadastro e manutenção das informações base do sistema." },
-  auditoria: { frase: "Cada ação, registrada. Nada se esconde de mim.", resumo: "Histórico completo de ações e alterações realizadas no sistema." },
-  usuarios: { frase: "Identifiquei os operadores. Acesso sob controle.", resumo: "Gestão de contas, permissões e acessos dos usuários do sistema." },
-  "relatorio-baixa": { frase: "Baixas rastreadas. Nenhum descarte passa sem registro.", resumo: "Baixas operacionais importadas do Lovable e seu cruzamento com divergências." },
+  dashboard: { frase: "Painel principal ativado. Todos os indicadores à sua disposição, senhor.", resumo: "Visão consolidada dos principais indicadores do sistema em tempo real." },
+  lista: { frase: "Localizei as divergências, senhor. Já tenho os detalhes prontos para análise.", resumo: "Lista e trata inconsistências encontradas entre registros e contagens." },
+  "cobertura-conferencia": { frase: "A cobertura da conferência está sob controle, como sempre.", resumo: "Percentual de itens já conferidos no processo de inventário." },
+  importar: { frase: "Dados recebidos e processados com sucesso, senhor.", resumo: "Envia planilhas e arquivos externos para dentro do sistema Atlas." },
+  "fechamento-dashboard": { frase: "Acompanhando o fechamento do inventário de perto.", resumo: "Painel com o status geral do inventário em andamento." },
+  "acuracia-ponderada": { frase: "Calculando a precisão com toda a atenção que o senhor exige.", resumo: "Mede a exatidão do inventário considerando o peso de cada item." },
+  compras: { frase: "Pedidos de compra sob monitoramento constante, senhor.", resumo: "Acompanha pedidos, entradas e status das compras." },
+  fechamentos: { frase: "Fechamento consolidado. Tudo em ordem, senhor.", resumo: "Consolida e encerra oficialmente o ciclo de inventário atual." },
+  "pos-inventario": { frase: "A análise não termina na contagem, senhor - eu cuido do que vem depois.", resumo: "Análises e ações realizadas após o encerramento do inventário." },
+  cadastros: { frase: "As bases de dados estão organizadas e sob meus cuidados.", resumo: "Cadastro e manutenção das informações base do sistema." },
+  auditoria: { frase: "Todo registro devidamente arquivado. Nada escapa à auditoria, senhor.", resumo: "Histórico completo de ações e alterações realizadas no sistema." },
+  usuarios: { frase: "Acessos e permissões, tudo sob controle, senhor.", resumo: "Gestão de contas, permissões e acessos dos usuários do sistema." },
+  "relatorio-baixa": { frase: "Baixas rastreadas com precisão. Nenhum descarte passa sem registro.", resumo: "Baixas operacionais importadas do Lovable e seu cruzamento com divergências." },
 };
 
 function _atlasModulosJaApresentados() {
@@ -4986,14 +5000,105 @@ function _atlasEscolherVoz() {
   return vozes.find((v) => v.lang && v.lang.toLowerCase().startsWith("pt")) || null;
 }
 
+// ---------- conversão de valores em R$ pro extenso, em português (13/08/2026) ----------
+// O SpeechSynthesis do navegador lê "R$ 114752.69" caractere a caractere (a
+// letra R, o nome "cifrão", cada dígito solto, e o ponto decimal como se
+// fosse vírgula) em vez de como um valor em dinheiro. Esta função troca todo
+// trecho "R$ <número>" do texto por extenso ANTES de mandar pra fala, ex:
+// "R$ 114752.69" -> "cento e quatorze mil, setecentos e cinquenta e dois
+// reais e sessenta e nove centavos" - e "R$ -75.00" -> "menos setenta e
+// cinco reais". Cobre tanto o formato puro do backend (":.2f", ponto como
+// decimal, sem separador de milhar) quanto o formato de exibição
+// pt-BR ("114.752,69", ponto como milhar e vírgula como decimal).
+const _EXTENSO_UNIDADES = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+const _EXTENSO_DEZ_A_DEZENOVE = ["dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+const _EXTENSO_DEZENAS = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+const _EXTENSO_CENTENAS = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+
+function _extensoGrupo(n) {
+  // n entre 0 e 999
+  if (n === 0) return "";
+  if (n === 100) return "cem";
+  const centena = Math.floor(n / 100);
+  const resto = n % 100;
+  const partes = [];
+  if (centena > 0) partes.push(_EXTENSO_CENTENAS[centena]);
+  if (resto > 0) {
+    if (resto < 10) partes.push(_EXTENSO_UNIDADES[resto]);
+    else if (resto < 20) partes.push(_EXTENSO_DEZ_A_DEZENOVE[resto - 10]);
+    else {
+      const dezena = Math.floor(resto / 10);
+      const unidade = resto % 10;
+      partes.push(unidade === 0 ? _EXTENSO_DEZENAS[dezena] : `${_EXTENSO_DEZENAS[dezena]} e ${_EXTENSO_UNIDADES[unidade]}`);
+    }
+  }
+  return partes.join(" e ");
+}
+
+function _numeroExtenso(nAbsoluto) {
+  const n = Math.round(nAbsoluto);
+  if (n === 0) return "zero";
+
+  const bilhoes = Math.floor(n / 1e9);
+  const milhoes = Math.floor((n % 1e9) / 1e6);
+  const milhares = Math.floor((n % 1e6) / 1e3);
+  const centena = n % 1000;
+
+  const grupos = [];
+  if (bilhoes > 0) grupos.push(`${_extensoGrupo(bilhoes)} ${bilhoes === 1 ? "bilhão" : "bilhões"}`);
+  if (milhoes > 0) grupos.push(`${_extensoGrupo(milhoes)} ${milhoes === 1 ? "milhão" : "milhões"}`);
+  if (milhares > 0) grupos.push(milhares === 1 ? "mil" : `${_extensoGrupo(milhares)} mil`);
+  if (centena > 0) grupos.push(_extensoGrupo(centena));
+
+  return grupos.join(", ");
+}
+
+function _parseValorMonetario(bruto) {
+  let s = bruto.trim();
+  let negativo = false;
+  if (s.startsWith("-")) {
+    negativo = true;
+    s = s.slice(1);
+  }
+  // formato de exibição pt-BR ("114.752,69") - "." é milhar, "," é decimal
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  const valor = parseFloat(s);
+  return negativo ? -valor : valor;
+}
+
+function _valorMonetarioExtenso(bruto) {
+  const valor = _parseValorMonetario(bruto);
+  if (Number.isNaN(valor)) return bruto; // não reconheceu o número - devolve como veio, sem quebrar a frase
+  const negativo = valor < 0;
+  const absValor = Math.abs(valor);
+  const inteiro = Math.floor(absValor);
+  const centavos = Math.round((absValor - inteiro) * 100);
+
+  const inteiroExtenso = inteiro === 0 ? "zero" : _numeroExtenso(inteiro);
+  const unidadeReal = inteiro === 1 ? "real" : "reais";
+  let resultado = `${negativo ? "menos " : ""}${inteiroExtenso} ${unidadeReal}`;
+  if (centavos > 0) {
+    const unidadeCentavo = centavos === 1 ? "centavo" : "centavos";
+    resultado += ` e ${_numeroExtenso(centavos)} ${unidadeCentavo}`;
+  }
+  return resultado;
+}
+
+function prepararTextoParaNarracao(texto) {
+  // "-?\d+(?:[.,]\d+)*" - cada separador (. ou ,) só entra no número se for
+  // seguido de dígito; assim um ponto final de frase logo depois do valor
+  // (ex: "R$ 50.00. Das divergências...") não é engolido junto com o número.
+  return texto.replace(/R\$\s?(-?\d+(?:[.,]\d+)*)/g, (_match, numero) => _valorMonetarioExtenso(numero));
+}
+
 function falarResumoModulo(texto) {
   if (!("speechSynthesis" in window)) return;
   try {
     window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
-    const fala = new SpeechSynthesisUtterance(texto);
+    const fala = new SpeechSynthesisUtterance(prepararTextoParaNarracao(texto));
     fala.lang = "pt-BR";
-    fala.rate = 0.95;
-    fala.pitch = 0.8; // tom mais grave, no clima "Exterminador"
+    fala.rate = 0.98;
+    fala.pitch = 1.05; // tom mais refinado e composto, no clima "J.A.R.V.I.S." (não mais "Exterminador")
     const voz = _atlasEscolherVoz();
     if (voz) fala.voice = voz;
     window.speechSynthesis.speak(fala);
@@ -5019,6 +5124,125 @@ function apresentarModuloSeNecessario(view) {
   setTimeout(() => banner.remove(), 9000);
 
   falarResumoModulo(`${info.frase} ${info.resumo}`);
+}
+
+// ---------- resumo executivo narrado (dashboards de análise) ----------
+// Helper reutilizável: monta o painel de resumo executivo (título + botão de
+// narração) dentro de um container já existente no HTML, usando texto
+// construído a partir dos dados que o próprio loader da tela já buscou -
+// sem endpoint novo no backend.
+function renderizarResumoExecutivoNarrado(idContainer, textoNarrado) {
+  const container = document.getElementById(idContainer);
+  if (!container) return;
+  container.innerHTML = "";
+
+  const cabecalho = document.createElement("div");
+  cabecalho.className = "panel-title-row";
+
+  const titulo = document.createElement("h2");
+  titulo.textContent = "📋 Resumo Executivo";
+
+  const botao = document.createElement("button");
+  botao.className = "btn-secundario";
+  botao.textContent = "🔊 Narrar";
+  botao.addEventListener("click", () => falarResumoModulo(textoNarrado));
+
+  cabecalho.appendChild(titulo);
+  cabecalho.appendChild(botao);
+
+  const paragrafo = document.createElement("p");
+  paragrafo.className = "panel-sub";
+  paragrafo.style.lineHeight = "1.6";
+  paragrafo.textContent = textoNarrado;
+
+  container.appendChild(cabecalho);
+  container.appendChild(paragrafo);
+}
+
+function construirResumoExecutivoDashboard(kpis, causas) {
+  const abertas = kpis.divergencias_abertas || 0;
+  const investigacao = kpis.em_investigacao || 0;
+  const resolvidas = kpis.resolvidas || 0;
+  const taxa = kpis.taxa_acerto_modelo_pct != null ? `${kpis.taxa_acerto_modelo_pct}%` : "ainda não calculada";
+  const causaPrincipal = [...(causas || [])].sort((a, b) => b.quantidade - a.quantidade)[0];
+
+  let texto = `No recorte atual, o Atlas está acompanhando ${abertas} divergência${abertas === 1 ? "" : "s"} em aberto, `;
+  texto += `${investigacao} em investigação e ${resolvidas} já resolvida${resolvidas === 1 ? "" : "s"}. `;
+  texto += `O valor total em aberto soma ${formatarMoeda(kpis.valor_total_em_aberto)}. `;
+  texto += `A taxa de acerto do modelo de classificação está em ${taxa}. `;
+  if (causaPrincipal) {
+    texto += `A causa mais frequente identificada foi "${rotulo(causaPrincipal.hipotese)}", com ${causaPrincipal.quantidade} ocorrência${causaPrincipal.quantidade === 1 ? "" : "s"} registrada${causaPrincipal.quantidade === 1 ? "" : "s"}.`;
+  }
+  return texto.trim();
+}
+
+function construirResumoExecutivoCobertura(lista, coberturaMedia, semNenhumaConferencia, comFuroAtivo, maiorFuroGeral, semDadosCount) {
+  const totalAlmox = lista.length;
+  let texto = `Entre os ${totalAlmox} almoxarifado${totalAlmox === 1 ? "" : "s"} monitorados, a cobertura média de conferência está em ${coberturaMedia != null ? coberturaMedia + "%" : "ainda não calculada"}. `;
+  texto += semNenhumaConferencia > 0
+    ? `${semNenhumaConferencia} almoxarifado${semNenhumaConferencia === 1 ? "" : "s"} ainda não teve nenhuma conferência registrada. `
+    : `Todos os almoxarifados com dados já tiveram ao menos uma conferência. `;
+  if (comFuroAtivo > 0) {
+    texto += `${comFuroAtivo} almoxarifado${comFuroAtivo === 1 ? "" : "s"} ${comFuroAtivo === 1 ? "está" : "estão"} com furo ativo agora, três dias ou mais sem conferência. `;
+  }
+  texto += `O maior furo já registrado foi de ${maiorFuroGeral} dia${maiorFuroGeral === 1 ? "" : "s"}. `;
+  if (semDadosCount > 0) {
+    texto += `${semDadosCount} almoxarifado${semDadosCount === 1 ? "" : "s"} ainda não ${semDadosCount === 1 ? "tem" : "têm"} dados suficientes de movimentação pra calcular a cobertura.`;
+  }
+  return texto.trim();
+}
+
+function construirResumoExecutivoFechamento(k) {
+  const acuracia = k.acuracia_geral_pct != null ? k.acuracia_geral_pct + "%" : "ainda não calculada";
+  const skusAcima95 = k.pct_skus_acima_95 != null ? k.pct_skus_acima_95 + "%" : "—";
+  let texto = `O fechamento avaliou ${k.total_itens} ${k.total_itens === 1 ? "item" : "itens"}, dos quais ${k.total_divergentes} apresentaram divergência. `;
+  texto += `A acurácia geral do período foi de ${acuracia}, com ${skusAcima95} dos SKUs acima de 95% de acerto. `;
+  texto += `O déficit por faltas somou ${formatarMoeda(k.deficit_faltas)}, resultando num resultado líquido de ${formatarMoeda(k.resultado_liquido)}.`;
+  return texto.trim();
+}
+
+function construirResumoExecutivoAcuraciaPonderada(c) {
+  let texto = `A acurácia item a item está em ${c.item_a_item_pct != null ? c.item_a_item_pct + "%" : "—"}. `;
+  texto += `Quando ponderada por quantidade, o IAQ resulta em ${c.iaq_pct != null ? c.iaq_pct + "%" : "—"}, `;
+  texto += `e quando ponderada por valor financeiro, o IAP resulta em ${c.iap_pct != null ? c.iap_pct + "%" : "sem cobertura de custo suficiente para o cálculo"}. `;
+  if (c.gap_item_vs_iap_pp != null) {
+    const diferenca = Math.abs(c.gap_item_vs_iap_pp);
+    const direcao = c.gap_item_vs_iap_pp > 0 ? "subestimava" : "sobrestimava";
+    texto += `Isso mostra que o modelo item a item ${direcao} a real acurácia em ${diferenca} ${diferenca === 1 ? "ponto percentual" : "pontos percentuais"}, na comparação com o valor financeiro em risco.`;
+  }
+  return texto.trim();
+}
+
+function construirResumoExecutivoCompras(k) {
+  let texto = `O Atlas está acompanhando ${k.total_pedidos} pedido${k.total_pedidos === 1 ? "" : "s"} de compra, sendo ${k.pedidos_abertos} em aberto. `;
+  texto += k.pedidos_atrasados > 0
+    ? `${k.pedidos_atrasados} pedido${k.pedidos_atrasados === 1 ? "" : "s"} ${k.pedidos_atrasados === 1 ? "está" : "estão"} atrasado${k.pedidos_atrasados === 1 ? "" : "s"} em relação ao prazo previsto. `
+    : `Nenhum pedido está atrasado no momento. `;
+  texto += `A quantidade pendente de recebimento soma ${(k.itens_pendentes_qtd || 0).toLocaleString("pt-BR")} unidades.`;
+  return texto.trim();
+}
+
+function construirResumoExecutivoPosInventario(acoes) {
+  const total = acoes.length;
+  if (total === 0) return "Nenhuma ação de acompanhamento foi registrada ainda neste período.";
+
+  const pendentes = acoes.filter((a) => a.status === "Pendente").length;
+  const emAndamento = acoes.filter((a) => a.status === "Em_Andamento").length;
+  const concluidas = acoes.filter((a) => a.status === "Concluida").length;
+  const canceladas = acoes.filter((a) => a.status === "Cancelada").length;
+  const automaticas = acoes.filter((a) => a.origem_automatica).length;
+  const hoje = new Date().toISOString().slice(0, 10);
+  const atrasadas = acoes.filter((a) => a.prazo && a.prazo < hoje && a.status !== "Concluida" && a.status !== "Cancelada").length;
+
+  let texto = `Há ${total} ${total === 1 ? "ação" : "ações"} de acompanhamento registrada${total === 1 ? "" : "s"}, sendo ${pendentes} pendente${pendentes === 1 ? "" : "s"}, ${emAndamento} em andamento e ${concluidas} concluída${concluidas === 1 ? "" : "s"}`;
+  texto += canceladas > 0 ? ` e ${canceladas} cancelada${canceladas === 1 ? "" : "s"}. ` : ". ";
+  if (atrasadas > 0) {
+    texto += `${atrasadas} ${atrasadas === 1 ? "ação está" : "ações estão"} com o prazo vencido. `;
+  }
+  if (automaticas > 0) {
+    texto += `${automaticas} dessas ações ${automaticas === 1 ? "foi criada" : "foram criadas"} automaticamente pelo Atlas, a partir da reconciliação.`;
+  }
+  return texto.trim();
 }
 
 // ---------- comando de voz (navegação por fala) ----------
