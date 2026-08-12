@@ -3815,40 +3815,146 @@ let dadosMpMotivosMensal = null, dadosMpFluxoInventario = [], dadosMpEvolucaoMen
 // = Resultado do mês. Ver _fluxo_inventario_por_mes no backend.
 const CORES_FLUXO_INVENTARIO = { entrada: "#4caf50", saida: "#e5534b", resultado: "#5b75ac" };
 
+// ---------- resumo operacional (12/08/2026): 2 indicadores + filtros + pop-up ----------
+// Substitui os 9 KPI cards + 2 gráficos (Evolução Mensal / Fluxo de Inventário) antigos por só
+// Passivos e Resultado de Inventário Acumulado, filtráveis por Data/Mês/Ano/Almoxarifado/Motivo,
+// com duplo-clique em qualquer um dos dois abrindo o resumo executivo narrado dos dois juntos -
+// ver /dashboard/resumo-executivo no backend. Os outros 4 painéis (Resumo por Motivo, Motivos
+// Mensal, Top 10s, Justificativas) continuam como estavam, sem filtro próprio.
+const MESES_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+const IDS_FILTRO_MP = ["mp-filtro-ano", "mp-filtro-mes", "mp-filtro-data-inicio", "mp-filtro-data-fim", "mp-filtro-almoxarifado", "mp-filtro-motivo"];
+let dadosMpResumoExecutivo = null;
+
+function montarParamsResumoExecutivoMp() {
+  const params = {};
+  const ano = document.getElementById("mp-filtro-ano").value;
+  const mes = document.getElementById("mp-filtro-mes").value;
+  const dataInicio = document.getElementById("mp-filtro-data-inicio").value;
+  const dataFim = document.getElementById("mp-filtro-data-fim").value;
+  const almoxarifado = document.getElementById("mp-filtro-almoxarifado").value;
+  const motivo = document.getElementById("mp-filtro-motivo").value;
+  if (ano) params.ano = ano;
+  if (mes) params.mes = mes;
+  if (dataInicio) params.data_inicio = dataInicio;
+  if (dataFim) params.data_fim = dataFim;
+  if (almoxarifado) params.almoxarifado = almoxarifado;
+  if (motivo) params.motivo = motivo;
+  return params;
+}
+
+async function carregarFiltrosMp() {
+  const f = await apiFetch(`${API}/baixas-operacionais/dashboard/resumo-executivo/filtros`).then((r) => r.json());
+
+  const selAno = document.getElementById("mp-filtro-ano");
+  const anoAtual = selAno.value;
+  selAno.innerHTML = `<option value="">Todos os anos</option>` + f.anos.map((a) => `<option value="${a}">${a}</option>`).join("");
+  selAno.value = anoAtual;
+
+  const selMes = document.getElementById("mp-filtro-mes");
+  const mesAtual = selMes.value;
+  selMes.innerHTML = `<option value="">Todos os meses</option>` + f.meses.map((m) => `<option value="${m}">${MESES_PT[m - 1]}</option>`).join("");
+  selMes.value = mesAtual;
+
+  const selAlmox = document.getElementById("mp-filtro-almoxarifado");
+  const almoxAtual = selAlmox.value;
+  selAlmox.innerHTML = `<option value="">Todos os almoxarifados</option>` + f.almoxarifados.map((a) => `<option value="${a}">${a}</option>`).join("");
+  selAlmox.value = almoxAtual;
+
+  const selMotivo = document.getElementById("mp-filtro-motivo");
+  const motivoAtual = selMotivo.value;
+  selMotivo.innerHTML = `<option value="">Todos os motivos</option>` + f.motivos.map((m) => `<option value="${m}">${m}</option>`).join("");
+  selMotivo.value = motivoAtual;
+}
+
+async function carregarResumoExecutivoMp() {
+  const params = new URLSearchParams(montarParamsResumoExecutivoMp());
+  const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/resumo-executivo?${params.toString()}`).then((r) => r.json());
+  dadosMpResumoExecutivo = dados;
+
+  const ri = dados.resultado_inventario;
+  document.getElementById("mp-kpi-row-resumo").innerHTML = `
+    <div class="kpi-card-grande" id="mp-card-passivos" title="Duplo clique para o resumo executivo">
+      <div class="kpi-label">Passivos</div>
+      <div class="kpi-value">${formatarMoeda(dados.passivos.valor)}</div>
+      <div class="kpi-dica">${dados.passivos.quantidade} baixa(s) aprovada(s) neste recorte · duplo clique para o resumo executivo</div>
+    </div>
+    <div class="kpi-card-grande" id="mp-card-resultado-inventario" title="Duplo clique para o resumo executivo">
+      <div class="kpi-label">Resultado de Inventário Acumulado</div>
+      <div class="kpi-value" style="color:${ri.resultado_valor >= 0 ? CORES_FLUXO_INVENTARIO.entrada : CORES_FLUXO_INVENTARIO.saida}">${formatarMoeda(ri.resultado_valor)}</div>
+      <div class="kpi-dica">Entradas ${formatarMoeda(ri.entradas_valor)} − Saídas ${formatarMoeda(ri.saidas_valor)} · duplo clique para o resumo executivo</div>
+    </div>
+  `;
+  ["mp-card-passivos", "mp-card-resultado-inventario"].forEach((id) =>
+    document.getElementById(id).addEventListener("dblclick", abrirModalResumoExecutivoMp)
+  );
+}
+
+function abrirModalResumoExecutivoMp() {
+  const dados = dadosMpResumoExecutivo;
+  if (!dados) return;
+  const cat = dados.passivos.por_categoria;
+  const ri = dados.resultado_inventario;
+  const dv = dados.divergencias_resolvidas;
+
+  document.getElementById("modal-resumo-executivo-mp-corpo").innerHTML = `
+    <div class="kpi-row-modal">
+      <div class="kpi-mini"><div class="valor">${formatarMoeda(dados.passivos.valor)}</div><div class="rotulo">Passivos</div></div>
+      <div class="kpi-mini"><div class="valor">${formatarMoeda(ri.resultado_valor)}</div><div class="rotulo">Resultado Inventário</div></div>
+      <div class="kpi-mini"><div class="valor">${formatarMoeda(dv.perda_real.valor)}</div><div class="rotulo">Perda real confirmada</div></div>
+    </div>
+    <p class="hint" style="white-space:pre-line; line-height:1.6; margin-bottom:16px">${dados.resumo_narrado}</p>
+    <p class="panel-sub" style="margin-bottom:6px">Passivos por categoria de mapeamento</p>
+    <table class="tabela" style="margin-bottom:16px">
+      <thead><tr><th>Categoria</th><th>Quantidade</th><th>Valor</th></tr></thead>
+      <tbody>
+        <tr><td>${cat.inventario_mensal.label}</td><td>${cat.inventario_mensal.quantidade}</td><td>${formatarMoeda(cat.inventario_mensal.valor)}</td></tr>
+        <tr><td>${cat.movimentacao_diaria.label}</td><td>${cat.movimentacao_diaria.quantidade}</td><td>${formatarMoeda(cat.movimentacao_diaria.valor)}</td></tr>
+        <tr><td>${cat.aguardando_divergencia.label}</td><td>${cat.aguardando_divergencia.quantidade}</td><td>${formatarMoeda(cat.aguardando_divergencia.valor)}</td></tr>
+        <tr><td>${cat.nao_decidida.label}</td><td>${cat.nao_decidida.quantidade}</td><td>${formatarMoeda(cat.nao_decidida.valor)}</td></tr>
+      </tbody>
+    </table>
+    <p class="panel-sub" style="margin-bottom:6px">Divergências já resolvidas neste recorte — ajuste de processo (não é passivo real) x perda real confirmada</p>
+    <table class="tabela">
+      <thead><tr><th>Divergências resolvidas</th><th>Quantidade</th><th>Valor</th></tr></thead>
+      <tbody>
+        <tr><td>Ajuste de processo (não é passivo real)</td><td>${dv.ajuste_processo.quantidade}</td><td>${formatarMoeda(dv.ajuste_processo.valor)}</td></tr>
+        <tr><td>Perda real confirmada</td><td>${dv.perda_real.quantidade}</td><td>${formatarMoeda(dv.perda_real.valor)}</td></tr>
+        <tr><td>Não classificada</td><td>${dv.nao_classificado.quantidade}</td><td>${formatarMoeda(dv.nao_classificado.valor)}</td></tr>
+      </tbody>
+    </table>
+  `;
+  document.getElementById("modal-resumo-executivo-mp-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-resumo-executivo-mp").addEventListener("click", () => {
+  document.getElementById("modal-resumo-executivo-mp-overlay").classList.add("hidden");
+});
+document.getElementById("modal-resumo-executivo-mp-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-resumo-executivo-mp-overlay") document.getElementById("modal-resumo-executivo-mp-overlay").classList.add("hidden");
+});
+
+IDS_FILTRO_MP.forEach((id) => document.getElementById(id).addEventListener("change", () => carregarResumoExecutivoMp()));
+document.getElementById("btn-limpar-filtros-mp").addEventListener("click", () => {
+  IDS_FILTRO_MP.forEach((id) => (document.getElementById(id).value = ""));
+  carregarResumoExecutivoMp();
+});
+
 async function carregarMapeamentoPassivos() {
-  const [kpis, motivosMensal, motivosResumo, evolucaoMensal, topRecorrentes, topImpacto, fluxoInventarioMensal, fluxoInventarioTotais] = await Promise.all([
-    apiFetch(`${API}/baixas-operacionais/dashboard/kpis`).then((r) => r.json()),
+  const [motivosMensal, motivosResumo, topRecorrentes, topImpacto] = await Promise.all([
     apiFetch(`${API}/baixas-operacionais/dashboard/motivos-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/motivos-resumo`).then((r) => r.json()),
-    apiFetch(`${API}/baixas-operacionais/dashboard/evolucao-mensal`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-recorrentes`).then((r) => r.json()),
     apiFetch(`${API}/baixas-operacionais/dashboard/top-impacto-financeiro`).then((r) => r.json()),
-    apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-mensal`).then((r) => r.json()),
-    apiFetch(`${API}/baixas-operacionais/dashboard/fluxo-inventario-totais`).then((r) => r.json()),
   ]);
 
-  const m = kpis.mapeamento;
-  document.getElementById("mp-kpi-row").innerHTML = [
-    { label: "Total de baixas", value: kpis.total },
-    { label: "Valor total (aprovadas)", value: formatarMoeda(kpis.valor_aprovadas) },
-    { label: "Mapeadas via Inventário Mensal", value: `${m.inventario_mensal.quantidade} · ${formatarMoeda(m.inventario_mensal.valor)}` },
-    { label: "Mapeadas via Movimentação Diária", value: `${m.movimentacao_diaria.quantidade} · ${formatarMoeda(m.movimentacao_diaria.valor)}` },
-    { label: "Aguardando divergência", value: m.aguardando_divergencia.quantidade, cor: "var(--medio)" },
-    { label: "Pendentes/Reprovadas", value: m.nao_decidida.quantidade, cor: "var(--muted)" },
-    { label: "Entradas · Todos os Inventários", value: formatarMoeda(fluxoInventarioTotais.entradas_valor), cor: CORES_FLUXO_INVENTARIO.entrada },
-    { label: "Saídas · Todos os Inventários", value: formatarMoeda(fluxoInventarioTotais.saidas_valor), cor: CORES_FLUXO_INVENTARIO.saida },
-    {
-      label: "Resultado Total (Entradas − Saídas)", value: formatarMoeda(fluxoInventarioTotais.resultado_valor),
-      cor: fluxoInventarioTotais.resultado_valor >= 0 ? CORES_FLUXO_INVENTARIO.entrada : CORES_FLUXO_INVENTARIO.saida,
-    },
-  ]
-    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
-    .join("");
+  await carregarFiltrosMp();
+  await carregarResumoExecutivoMp();
 
   renderMpMotivosMensal(motivosMensal);
   renderMpMotivosResumo(motivosResumo);
-  renderMpFluxoInventario(fluxoInventarioMensal);
-  renderMpEvolucaoMensal(evolucaoMensal);
   renderMpTabelaTop("mp-tabela-recorrentes", topRecorrentes);
   renderMpTabelaTop("mp-tabela-impacto-financeiro", topImpacto);
   carregarJustificativasAjusteInventario();

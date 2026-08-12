@@ -316,34 +316,22 @@
     <section id="view-mapeamento-passivos" class="view hidden">
       <header class="view-header">
         <h1>Mapeamento de Passivos</h1>
+        <div class="filtros">
+          <select id="mp-filtro-ano" class="select-filtro"><option value="">Todos os anos</option></select>
+          <select id="mp-filtro-mes" class="select-filtro"><option value="">Todos os meses</option></select>
+          <input id="mp-filtro-data-inicio" type="date" class="select-filtro" title="Data início">
+          <input id="mp-filtro-data-fim" type="date" class="select-filtro" title="Data fim">
+          <select id="mp-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <select id="mp-filtro-motivo" class="select-filtro"><option value="">Todos os motivos</option></select>
+          <button id="btn-limpar-filtros-mp" class="btn-secundario">Limpar filtros</button>
+        </div>
       </header>
       <p class="hint">
-        Visão gerencial de todas as baixas operacionais já trazidas do Lovable. Clique em qualquer fatia, coluna, ponto da linha ou linha de tabela pra ver os produtos daquela categoria.
+        Resumo operacional das ações — Passivos e Resultado de Inventário Acumulado, já considerando os filtros acima.
+        Clique duas vezes em qualquer um dos dois cartões pra abrir o resumo executivo narrado dos dois juntos.
       </p>
 
-      <div class="kpi-row" id="mp-kpi-row"></div>
-
-      <div class="panel" id="mp-panel-principal" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 10%, var(--panel)) 0%, var(--panel) 100%)">
-        <div class="panel-title-row">
-          <h2>Evolução Mensal (MoM) — Análise Principal</h2>
-          <span class="hint" style="margin:0">Colunas empilhadas por mês: resultado do fluxo de inventário (valor absoluto) + passivos do período · Linha em destaque: curva de evolução (valor acumulado das duas fontes)</span>
-        </div>
-        <p class="panel-sub">Clique num segmento da coluna pra ver os produtos daquela fonte naquele mês</p>
-        <div style="height:340px"><canvas id="mp-chart-evolucao-mensal"></canvas></div>
-      </div>
-
-      <div class="panel" id="mp-panel-fluxo-inventario" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #4caf50 8%, var(--panel)) 0%, var(--panel) 100%)">
-        <div class="panel-title-row">
-          <h2>Fluxo de Inventário — Entradas x Saídas x Resultado (Todos os Inventários)</h2>
-          <span class="hint" style="margin:0">Total de Entradas − Total de Saídas do mês = Resultado Total do Mês, somando todos os almoxarifados/inventários</span>
-        </div>
-        <p class="panel-sub">
-          Fonte: tabela oficial de ajustes já conciliados (não o fechamento bruto — esse inclui item sinalizado como
-          divergente que nunca chegou a ser ajustado de fato). Barras: entradas (sobra) e saídas (falta) em R$ · Linha:
-          resultado do mês. Clique numa barra ou num ponto pra ver os itens daquele mês.
-        </p>
-        <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
-      </div>
+      <div class="kpi-row-resumo" id="mp-kpi-row-resumo"></div>
 
       <div class="panel">
         <h2>Resumo por Motivo — Quantidade e Custo Total</h2>
@@ -381,7 +369,7 @@
 
       <div class="panel">
         <h2>Justificativas de Ajustes de Inventário</h2>
-        <p class="panel-sub">Justificativas registradas a partir do fluxo de inventário (aba "Fluxo de Inventário" acima) — clique numa linha para reabrir e editar</p>
+        <p class="panel-sub">Justificativas registradas a partir dos ajustes oficiais de inventário — clique numa linha para reabrir e editar</p>
         <div class="tabela-scroll">
           <table class="tabela" id="mp-tabela-justificativas">
             <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
@@ -1281,6 +1269,16 @@
   </div>
 </div>
 
+<div id="modal-resumo-executivo-mp-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(760px, 94vw)">
+    <div class="modal-header">
+      <h2>Resumo Executivo — Passivos &amp; Resultado de Inventário Acumulado</h2>
+      <button id="btn-fechar-modal-resumo-executivo-mp" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px" id="modal-resumo-executivo-mp-corpo"></div>
+  </div>
+</div>
+
 <div id="modal-justificativa-overlay" class="modal-overlay hidden">
   <div class="modal-card">
     <div class="modal-header">
@@ -1343,6 +1341,6 @@
   </div>
 </div>
 
-<script src="app.js?v=64"></script>
+<script src="app.js?v=65"></script>
 </body>
 </html>
