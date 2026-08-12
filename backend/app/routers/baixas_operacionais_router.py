@@ -642,3 +642,241 @@ def dashboard_passivos_itens(
     ]
     itens.sort(key=lambda x: (x["data_baixa"] or "", abs(x["valor_total"] or 0)), reverse=True)
     return {"itens": itens, "total": len(itens), "valor_total": round(sum(b.valor_total or 0 for b in baixas), 2)}
+
+
+# ---------------------------------------------------------------------------
+# Resumo Executivo (12/08/2026) - a tela Mapeamento de Passivos foi
+# simplificada pra só 2 indicadores centrais (Passivos e Resultado de
+# Inventário Acumulado), com filtro de Data/Mês/Ano, Almoxarifado e Motivo,
+# e um pop-up de duplo-clique com o resumo narrado dos dois juntos. Ver
+# DECISOES.md / claude/indicadores-passivos.md (projeto) pro contexto dessa
+# mudança - substitui os 9 cards + 2 gráficos antigos.
+#
+# "Passivos" = valor total das baixas operacionais APROVADAS no recorte
+# filtrado (mesmo número que já existia em VALOR_TOTAL_APROVADAS, só que
+# agora filtrável). "Resultado de Inventário Acumulado" = Entradas − Saídas
+# de TODOS os ajustes oficiais de inventário (AjusteInventarioOficial) no
+# mesmo recorte - o resultado_valor que já existia em
+# dashboard/fluxo-inventario-totais, também agora filtrável.
+#
+# O resumo narrado distingue, dentre as Divergências já RESOLVIDAS no
+# recorte, quais foram encerradas como AJUSTE DE PROCESSO (erro de
+# cadastro/contagem, timing de nota fiscal ou transferência, produção não
+# encerrada etc. - catálogo em hipoteses_config.py) - ou seja, NÃO são
+# perda real de estoque, só uma correção de dado/processo - das que foram
+# CONFIRMADAS como perda real (avaria ou perda não identificada). Essa
+# distinção é o que o Maurício pediu explicitamente: "pontuando casos
+# justificados e solucionados como um não passivo real, apenas um ajuste
+# de processo".
+# ---------------------------------------------------------------------------
+
+HIPOTESES_AJUSTE_PROCESSO = {
+    "Transferencia_Pendente", "Consumo_Parcial_OP", "Pendencia_Faturamento", "Erro_Operacional",
+    "Erro_Cadastro", "Falha_Inventario", "Producao_Nao_Encerrada", "Ajuste_Manual_Incorreto",
+    "Movimentacao_Duplicada", "Conversao_Unidade_Incorreta", "Erro_Fiscal",
+    "Divergencia_Ficha_Tecnica", "Pedido_Compra_Pendente", "Sem_Divergencia_Real",
+}
+HIPOTESES_PERDA_REAL = {"Avaria_Perda", "Perda_Nao_Identificada"}
+# "Outros_Nao_Categorizado" fica de fora dos dois de propósito - não dá pra
+# afirmar se é perda real ou ajuste de processo só pelo código da hipótese,
+# então entra em "não_classificado" no resumo, não em nenhum dos dois lados.
+
+
+def _data_no_periodo(d, ano: int | None, mes: int | None, data_inicio, data_fim) -> bool:
+    """True se `d` (um date, pode ser None) cai dentro do recorte pedido.
+    Sem NENHUM filtro de data informado, considera tudo (não teria como
+    filtrar por data ausente)."""
+    if ano is None and mes is None and data_inicio is None and data_fim is None:
+        return True
+    if not d:
+        return False
+    if data_inicio and d < data_inicio:
+        return False
+    if data_fim and d > data_fim:
+        return False
+    if ano is not None and d.year != ano:
+        return False
+    if mes is not None and d.month != mes:
+        return False
+    return True
+
+
+@router.get("/dashboard/resumo-executivo/filtros")
+def resumo_executivo_filtros(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Opções pros dropdowns de filtro da tela Mapeamento de Passivos -
+    ano, almoxarifado e motivo, tirados dos valores que REALMENTE existem
+    em baixas_operacionais (não do catálogo estático), pra nunca mostrar
+    uma opção que não devolve nada."""
+    datas = [d for (d,) in db.query(models.BaixaOperacional.data_baixa).distinct() if d]
+    anos = sorted({d.year for d in datas}, reverse=True)
+    almoxarifados = sorted({a for (a,) in db.query(models.BaixaOperacional.almoxarifado).distinct() if a})
+    motivos = sorted({m for (m,) in db.query(models.BaixaOperacional.motivo_baixa_bruto).distinct() if m})
+    return {"anos": anos, "meses": list(range(1, 13)), "almoxarifados": almoxarifados, "motivos": motivos}
+
+
+def _montar_resumo_narrado(passivos, resultado_inventario, divergencias_resolvidas, ano, mes, di, df, almoxarifado, motivos_lista) -> str:
+    filtro_txt = []
+    if di or df:
+        filtro_txt.append(f"entre {di.isoformat() if di else '...'} e {df.isoformat() if df else '...'}")
+    elif ano and mes:
+        filtro_txt.append(f"em {mes:02d}/{ano}")
+    elif ano:
+        filtro_txt.append(f"no ano {ano}")
+    elif mes:
+        filtro_txt.append(f"no mês {mes:02d} (todos os anos)")
+    if almoxarifado:
+        filtro_txt.append(f"almoxarifado {almoxarifado}")
+    if motivos_lista:
+        filtro_txt.append(f"motivo(s) {', '.join(motivos_lista)}")
+    escopo = " · ".join(filtro_txt) if filtro_txt else "todo o histórico, sem filtro"
+
+    partes = [f"Recorte considerado: {escopo}."]
+
+    cat = passivos["por_categoria"]
+    partes.append(
+        f"Passivos: R$ {passivos['valor']:.2f} aprovados em {passivos['quantidade']} baixa(s) operacional(is). "
+        f"Dessas, {cat['inventario_mensal']['quantidade']} já foram mapeadas via inventário mensal "
+        f"(R$ {cat['inventario_mensal']['valor']:.2f}), {cat['movimentacao_diaria']['quantidade']} via "
+        f"movimentação diária (R$ {cat['movimentacao_diaria']['valor']:.2f}), e "
+        f"{cat['aguardando_divergencia']['quantidade']} continuam aprovadas mas aguardando cruzamento com uma "
+        f"divergência (R$ {cat['aguardando_divergencia']['valor']:.2f})."
+    )
+
+    ri = resultado_inventario
+    partes.append(
+        f"Resultado de Inventário Acumulado: Entradas R$ {ri['entradas_valor']:.2f} − Saídas "
+        f"R$ {ri['saidas_valor']:.2f} = R$ {ri['resultado_valor']:.2f} ({ri['entradas_qtd']} ajuste(s) de entrada, "
+        f"{ri['saidas_qtd']} de saída, neste recorte)."
+    )
+    if ri["entradas_qtd"] + ri["saidas_qtd"] > 0:
+        perda_fisica = -ri["resultado_valor"]
+        diferenca = round(perda_fisica - passivos["valor"], 2)
+        if abs(diferenca) < 1:
+            partes.append("O valor aprovado como baixa bate de perto com a perda física medida pelo inventário neste recorte.")
+        elif diferenca > 0:
+            partes.append(
+                f"Atenção: a perda física medida pelo inventário (R$ {perda_fisica:.2f}) é maior que o valor já "
+                f"aprovado como baixa operacional (R$ {passivos['valor']:.2f}) neste recorte - uma diferença de "
+                f"R$ {diferenca:.2f} de perda física ainda sem uma baixa operacional aprovada que a explique."
+            )
+        else:
+            partes.append(
+                f"O valor aprovado como baixa operacional (R$ {passivos['valor']:.2f}) é maior que a perda física "
+                f"líquida medida pelo inventário (R$ {perda_fisica:.2f}) neste recorte - diferença de "
+                f"R$ {abs(diferenca):.2f}, possivelmente baixas de um período que o inventário físico deste "
+                f"recorte ainda não cobriu."
+            )
+    else:
+        partes.append("Não há ajuste de inventário oficial registrado nesse recorte pra comparar com o valor de baixa aprovado.")
+
+    dp, dr, dn = divergencias_resolvidas["ajuste_processo"], divergencias_resolvidas["perda_real"], divergencias_resolvidas["nao_classificado"]
+    total_resolvidas = dp["quantidade"] + dr["quantidade"] + dn["quantidade"]
+    if total_resolvidas:
+        trecho = (
+            f"Das divergências já resolvidas neste recorte ({total_resolvidas} no total): {dp['quantidade']} "
+            f"(R$ {dp['valor']:.2f}) foram justificadas como AJUSTE DE PROCESSO - erro de cadastro, contagem, "
+            f"timing de nota fiscal/transferência, produção não encerrada etc. - ou seja, NÃO representam perda "
+            f"real de estoque; {dr['quantidade']} (R$ {dr['valor']:.2f}) foram confirmadas como PERDA REAL "
+            f"(avaria ou perda não identificada)"
+        )
+        trecho += f"; e {dn['quantidade']} (R$ {dn['valor']:.2f}) ficaram com hipótese não classificada nesse critério." if dn["quantidade"] else "."
+        partes.append(trecho)
+    else:
+        partes.append("Nenhuma divergência resolvida encontrada nesse recorte até agora.")
+
+    return " ".join(partes)
+
+
+@router.get("/dashboard/resumo-executivo")
+def resumo_executivo(
+    ano: int | None = None,
+    mes: int | None = Query(None, ge=1, le=12),
+    data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
+    data_fim: str | None = Query(None, description="YYYY-MM-DD"),
+    almoxarifado: str | None = None,
+    motivo: str | None = Query(None, description="motivo_baixa_bruto exato, ou lista separada por vírgula"),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Único endpoint por trás da tela Mapeamento de Passivos (versão
+    simplificada, 12/08/2026): devolve os 2 indicadores centrais (Passivos,
+    Resultado de Inventário Acumulado) e o texto do resumo executivo do
+    pop-up de duplo-clique, todos já filtrados pelos mesmos critérios
+    (Data/Mês/Ano, Almoxarifado, Motivo) - ver bloco de comentário acima."""
+    try:
+        di = date.fromisoformat(data_inicio) if data_inicio else None
+    except ValueError:
+        raise HTTPException(400, f"data_inicio inválida (esperado YYYY-MM-DD): {data_inicio}")
+    try:
+        df = date.fromisoformat(data_fim) if data_fim else None
+    except ValueError:
+        raise HTTPException(400, f"data_fim inválida (esperado YYYY-MM-DD): {data_fim}")
+    motivos_lista = [m.strip() for m in motivo.split(",") if m.strip()] if motivo else None
+
+    # --- Passivos (BaixaOperacional aprovada) ---
+    q = db.query(models.BaixaOperacional)
+    if almoxarifado:
+        q = q.filter(models.BaixaOperacional.almoxarifado == almoxarifado)
+    if motivos_lista:
+        q = q.filter(models.BaixaOperacional.motivo_baixa_bruto.in_(motivos_lista))
+    baixas_no_filtro = [b for b in q.all() if _data_no_periodo(b.data_baixa, ano, mes, di, df)]
+    aprovadas = [b for b in baixas_no_filtro if b.status_fluxo == "APROVADA"]
+    divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    por_categoria = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
+    for b in aprovadas:
+        c = _categoria_mapeamento(b, divergencias_por_id)
+        por_categoria[c]["quantidade"] += 1
+        por_categoria[c]["valor"] += b.valor_total or 0
+    passivos = {
+        "valor": round(sum(b.valor_total or 0 for b in aprovadas), 2),
+        "quantidade": len(aprovadas),
+        "total_no_filtro": len(baixas_no_filtro),
+        "por_categoria": {
+            chave: {"label": rotulo, "quantidade": por_categoria[chave]["quantidade"], "valor": round(por_categoria[chave]["valor"], 2)}
+            for chave, rotulo in CATEGORIA_MAPEAMENTO_LABELS.items()
+        },
+    }
+
+    # --- Resultado de Inventário Acumulado (AjusteInventarioOficial) ---
+    qa = db.query(models.AjusteInventarioOficial).filter(models.AjusteInventarioOficial.conta_como_ajuste_inventario.is_(True))
+    if almoxarifado:
+        qa = qa.filter(models.AjusteInventarioOficial.almoxarifado == almoxarifado)
+    ajustes = [a for a in qa.all() if a.ajuste_qtd and _data_no_periodo(a.dt_invent, ano, mes, di, df)]
+    entradas_valor = round(sum(abs(a.valor_total or 0) for a in ajustes if a.ajuste_qtd > 0), 2)
+    saidas_valor = round(sum(abs(a.valor_total or 0) for a in ajustes if a.ajuste_qtd < 0), 2)
+    resultado_inventario = {
+        "entradas_valor": entradas_valor, "saidas_valor": saidas_valor,
+        "resultado_valor": round(entradas_valor - saidas_valor, 2),
+        "entradas_qtd": sum(1 for a in ajustes if a.ajuste_qtd > 0),
+        "saidas_qtd": sum(1 for a in ajustes if a.ajuste_qtd < 0),
+    }
+
+    # --- Divergências resolvidas: ajuste de processo vs perda real ---
+    qd = db.query(models.Divergencia).filter(models.Divergencia.status == "Resolvida")
+    if almoxarifado:
+        qd = qd.filter(models.Divergencia.almoxarifado == almoxarifado)
+    divergencias = [d for d in qd.all() if _data_no_periodo(d.data_deteccao, ano, mes, di, df)]
+    ajuste_processo = [d for d in divergencias if d.hipotese_confirmada in HIPOTESES_AJUSTE_PROCESSO]
+    perda_real = [d for d in divergencias if d.hipotese_confirmada in HIPOTESES_PERDA_REAL]
+    ids_classificados = {d.id for d in ajuste_processo} | {d.id for d in perda_real}
+    nao_classificado = [d for d in divergencias if d.id not in ids_classificados]
+    divergencias_resolvidas = {
+        "ajuste_processo": {"quantidade": len(ajuste_processo), "valor": round(sum(d.valor_estimado or 0 for d in ajuste_processo), 2)},
+        "perda_real": {"quantidade": len(perda_real), "valor": round(sum(d.valor_estimado or 0 for d in perda_real), 2)},
+        "nao_classificado": {"quantidade": len(nao_classificado), "valor": round(sum(d.valor_estimado or 0 for d in nao_classificado), 2)},
+    }
+
+    resumo_narrado = _montar_resumo_narrado(
+        passivos, resultado_inventario, divergencias_resolvidas, ano, mes, di, df, almoxarifado, motivos_lista
+    )
+
+    return {
+        "filtros_aplicados": {
+            "ano": ano, "mes": mes, "data_inicio": data_inicio, "data_fim": data_fim,
+            "almoxarifado": almoxarifado, "motivos": motivos_lista,
+        },
+        "passivos": passivos,
+        "resultado_inventario": resultado_inventario,
+        "divergencias_resolvidas": divergencias_resolvidas,
+        "resumo_narrado": resumo_narrado,
+    }
