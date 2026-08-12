@@ -321,7 +321,26 @@
         Visão gerencial de todas as baixas operacionais já trazidas do Lovable. Clique em qualquer fatia, coluna, ponto da linha ou linha de tabela pra ver os produtos daquela categoria.
       </p>
 
-      <div class="kpi-row" id="mp-kpi-row"></div>
+      <div class="panel" id="mp-panel-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #f9a825 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Resumo Executivo — Passivos &amp; Resultado de Inventário Acumulado</h2>
+          <button id="btn-narrar-resumo-executivo-mp" class="btn-secundario" title='Atlas narra em voz alta o que ocorreu nesse período'>🔊 Narrar</button>
+        </div>
+        <p class="panel-sub">
+          Resumo operacional das ações, filtrável por Data/Mês/Ano, Almoxarifado e Motivo. Clique duas vezes em
+          qualquer um dos dois cartões pra abrir o resumo executivo narrado dos dois juntos (com a opção de narração em voz também lá dentro).
+        </p>
+        <div class="filtros" style="margin-bottom:16px">
+          <select id="mp-filtro-ano" class="select-filtro"><option value="">Todos os anos</option></select>
+          <select id="mp-filtro-mes" class="select-filtro"><option value="">Todos os meses</option></select>
+          <input id="mp-filtro-data-inicio" type="date" class="select-filtro" title="Data início">
+          <input id="mp-filtro-data-fim" type="date" class="select-filtro" title="Data fim">
+          <select id="mp-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <select id="mp-filtro-motivo" class="select-filtro"><option value="">Todos os motivos</option></select>
+          <button id="btn-limpar-filtros-mp" class="btn-secundario">Limpar filtros</button>
+        </div>
+        <div class="kpi-row-resumo" id="mp-kpi-row-resumo"></div>
+      </div>
 
       <div class="panel" id="mp-panel-principal" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 10%, var(--panel)) 0%, var(--panel) 100%)">
         <div class="panel-title-row">
@@ -1281,6 +1300,19 @@
   </div>
 </div>
 
+<div id="modal-resumo-executivo-mp-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(760px, 94vw)">
+    <div class="modal-header">
+      <h2>Resumo Executivo — Passivos &amp; Resultado de Inventário Acumulado</h2>
+      <div style="display:flex; gap:8px">
+        <button id="btn-narrar-resumo-executivo-mp-modal" class="btn-secundario" title='Atlas narra em voz alta o que ocorreu nesse período'>🔊 Narrar</button>
+        <button id="btn-fechar-modal-resumo-executivo-mp" class="btn-secundario">Fechar ✕</button>
+      </div>
+    </div>
+    <div style="padding:24px" id="modal-resumo-executivo-mp-corpo"></div>
+  </div>
+</div>
+
 <div id="modal-justificativa-overlay" class="modal-overlay hidden">
   <div class="modal-card">
     <div class="modal-header">
@@ -1343,6 +1375,6 @@
   </div>
 </div>
 
-<script src="app.js?v=64"></script>
+<script src="app.js?v=67"></script>
 </body>
 </html>

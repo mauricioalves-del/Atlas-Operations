@@ -454,13 +454,27 @@ def buscar_baixas_lovable_agora() -> list[dict]:
     url = f"{base_url}/api/public/atlas-exportar-baixas"
     requisicao = urllib.request.Request(url, method="GET")
     requisicao.add_header("x-atlas-sync-secret", secret)
+    # O app do Lovable é servido atrás de uma CDN (Cloudflare) com proteção
+    # anti-bot, que bloqueia requisições sem um User-Agent de navegador (o
+    # padrão do urllib, "Python-urllib/x.y", já foi bloqueado com
+    # HTTP 403 "error code: 1010" - ban de "autonomous software agent",
+    # nada a ver com o secret estar errado). Um User-Agent/Accept comuns
+    # de navegador resolvem isso sem precisar de nenhuma credencial nova.
+    requisicao.add_header("User-Agent", "Mozilla/5.0 (compatible; Atlas-Sync/1.0)")
+    requisicao.add_header("Accept", "application/json")
     try:
         with urllib.request.urlopen(requisicao, timeout=60) as resposta:
             registros = json.loads(resposta.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         corpo = e.read().decode("utf-8", errors="replace")
+        dica_extra = (
+            " (esse 'error code: 1010' é bloqueio anti-bot da Cloudflare na frente do "
+            "app do Lovable, não tem relação com o secret - se persistir, pode ser "
+            "necessário liberar o IP do Render nas configurações de segurança do Lovable)"
+            if "1010" in corpo else ""
+        )
         raise SincronizacaoIndisponivel(
-            f"O app do Lovable respondeu {e.code} ao buscar baixa_operacional: {corpo}. "
+            f"O app do Lovable respondeu {e.code} ao buscar baixa_operacional: {corpo}.{dica_extra} "
             f"Confira se LOVABLE_SYNC_URL/LOVABLE_SYNC_SECRET estão corretos e se o secret "
             f"bate com ATLAS_SYNC_SECRET cadastrado em Lovable Cloud > Secrets."
         ) from e

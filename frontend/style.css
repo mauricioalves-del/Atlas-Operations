@@ -615,6 +615,18 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 .kpi-value{font-family:var(--mono); font-size:28px; font-weight:600; color:var(--text); text-shadow:var(--hud-text-glow)}
 .kpi-value.accent{color:var(--accent)}
 
+/* ---- Mapeamento de Passivos: resumo operacional (12/08/2026) ---- */
+.kpi-row-resumo{display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px}
+.kpi-card-grande{
+  background:var(--panel); border:1px solid var(--hud-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card);
+  padding:28px 24px; cursor:pointer; transition:box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.kpi-card-grande:hover{box-shadow:var(--shadow-card), var(--glow-soft); border-color:var(--accent)}
+.kpi-card-grande .kpi-label{color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px}
+.kpi-card-grande .kpi-value{font-family:var(--mono); font-size:36px; font-weight:700; color:var(--text); text-shadow:var(--hud-text-glow)}
+.kpi-card-grande .kpi-dica{color:var(--muted); font-size:11px; margin-top:10px}
+@media (max-width:720px){ .kpi-row-resumo{grid-template-columns:1fr} }
+
 /* ---- painéis / grids ---- */
 .grid-2{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px}
 .panel{
