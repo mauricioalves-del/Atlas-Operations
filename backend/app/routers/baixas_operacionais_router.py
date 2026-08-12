@@ -70,8 +70,8 @@ async def reconciliar_planilha_historico(
     """Fecha a lacuna entre o que já está no Atlas e o export "Baixar
     relatório completo" da tela Baixas Operacionais (Lovable) - pra usar
     quando a sincronização automática (webhook e/ou "Sincronizar agora")
-    não trouxe tudo, ex: LOVABLE_SUPABASE_URL/KEY nunca configuradas no
-    Render. Ver importar_planilha_historico_lovable (baixas_operacionais.py)
+    não trouxe tudo, ex: LOVABLE_SYNC_URL/LOVABLE_SYNC_SECRET nunca
+    configuradas no Render. Ver importar_planilha_historico_lovable (baixas_operacionais.py)
     pro porquê disso ser reconciliação por assinatura, não upsert por id -
     a planilha não carrega o uuid único da linha no Lovable."""
     conteudo = await arquivo.read()
