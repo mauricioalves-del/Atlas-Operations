@@ -299,17 +299,7 @@
         </div>
       </header>
       <p class="hint" id="rb-sync-msg" style="min-height:16px"></p>
-      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable.</p>
-
-      <div class="panel panel-importar" id="rb-panel-reconciliar">
-        <h2>Reconciliar planilha (fecha lacunas do Lovable)</h2>
-        <p class="hint">
-          Se "Sincronizar agora" der erro (ex: credenciais do Supabase do Lovable não configuradas no servidor) ou a lista aqui estiver menor que a tela "Baixas Operacionais" do Lovable, suba aqui o export <strong>"Baixar relatório completo"</strong> daquela tela (aba "Histórico"). Cada linha da planilha é comparada com o que já existe aqui — só entra o que estiver faltando, nada é duplicado, e pode subir a mesma planilha de novo quantas vezes quiser.
-        </p>
-        <input type="file" id="rb-input-arquivo-reconciliar" accept=".xlsx,.xlsm">
-        <button id="rb-btn-reconciliar" class="btn-primario">Reconciliar planilha</button>
-        <pre id="rb-resultado-reconciliar" class="resultado-importacao"></pre>
-      </div>
+      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable. Se der erro de conexão, tem uma planilha de reserva na tela <strong><a href="#" id="rb-link-importar">Importar</a></strong>.</p>
 
       <div class="kpi-row" id="rb-kpi-row"></div>
 
@@ -552,6 +542,21 @@
           <thead><tr><th>Data</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Ajuste de inventário</th><th>Valor</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+
+      <div class="panel panel-importar" id="rb-panel-reconciliar">
+        <h2>Baixas operacionais (Lovable) — planilha de reserva</h2>
+        <p class="hint">
+          Só use isto se o botão <strong>"Sincronizar agora"</strong> na tela Relatório de Baixa der erro de conexão. Suba
+          aqui o export <strong>"Baixar relatório completo"</strong> da tela Baixas Operacionais do Lovable (aba
+          "Histórico"). Cada linha da planilha é comparada com o que já existe aqui pela mesma baixa (SKU, almoxarifado,
+          motivo, quantidade, valor e data) — se a baixa já existe e só o status mudou (ex: foi aprovada), o status é
+          atualizado no lugar; só entra linha nova quando a baixa realmente não existia ainda. Nada é duplicado, e pode
+          subir a mesma planilha de novo quantas vezes quiser.
+        </p>
+        <input type="file" id="rb-input-arquivo-reconciliar" accept=".xlsx,.xlsm">
+        <button id="rb-btn-reconciliar" class="btn-primario">Reconciliar planilha</button>
+        <pre id="rb-resultado-reconciliar" class="resultado-importacao"></pre>
       </div>
     </section>
 

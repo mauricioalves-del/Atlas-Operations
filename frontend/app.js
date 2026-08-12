@@ -3751,6 +3751,11 @@ document.getElementById("btn-sincronizar-lovable").addEventListener("click", asy
   }
 });
 
+document.getElementById("rb-link-importar").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  mostrarView("importar");
+});
+
 document.getElementById("rb-btn-reconciliar").addEventListener("click", async () => {
   const input = document.getElementById("rb-input-arquivo-reconciliar");
   const resultado = document.getElementById("rb-resultado-reconciliar");
@@ -3773,8 +3778,9 @@ document.getElementById("rb-btn-reconciliar").addEventListener("click", async ()
     }
     const linhas = [
       `Linhas na planilha: ${data.total_planilha}`,
-      `Já existiam no Atlas: ${data.ja_existentes}`,
-      `Novas importadas agora: ${data.novas_importadas}`,
+      `Já existiam no Atlas (sem mudança): ${data.ja_existentes}`,
+      `Status atualizado no lugar (ex: virou Aprovada/Reprovada): ${data.atualizadas_status || 0}`,
+      `Novas importadas agora (não existiam antes): ${data.novas_importadas}`,
       `Resolveram divergência automaticamente: ${data.resolvidas_automaticamente}`,
       `Aguardando divergência compatível: ${data.aguardando_divergencia}`,
     ];

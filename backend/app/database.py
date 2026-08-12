@@ -186,6 +186,9 @@ def garantir_colunas_novas():
         _backfill_lotes_ajuste_inventario_legado()
         _remover_duplicatas_cruzadas_ajuste_inventario()
 
+    if inspecao.has_table("baixas_operacionais"):
+        _remover_duplicatas_status_baixa_operacional()
+
 
 def _backfill_lotes_ajuste_inventario_legado():
     """Roda uma única vez, imediatamente depois da migração que criou a
@@ -346,6 +349,90 @@ def _remover_duplicatas_cruzadas_ajuste_inventario():
         print(
             f"Atlas: removidas {removidos} linha(s) duplicada(s) e corrigido custo de {custos_corrigidos} "
             f"lançamento(s) entre importações de ajuste de inventário (ajustado(s) {len(lotes_afetados)} lote(s))."
+        )
+    finally:
+        db.close()
+
+
+def _remover_duplicatas_status_baixa_operacional():
+    """Limpeza retroativa de um bug encontrado em produção em 12/08/2026: a
+    primeira versão de importar_planilha_historico_lovable (ver
+    baixas_operacionais.py) casava linhas da planilha "Baixar relatório
+    completo" contra o que já existia no Atlas usando uma assinatura que
+    incluía o Status (Pendente/Aprovada/Reprovada). Toda baixa nasce
+    Pendente e muda de status quando é decidida - então qualquer baixa cujo
+    status mudou entre a sincronização original (webhook) e a exportação da
+    planilha deixava de "casar" e era inserida de novo como se fosse um
+    evento novo. Rodado uma vez contra produção real (Maurício, tela
+    Relatório de Baixa): 638 baixas -> 865, sendo pelo menos 11 pares
+    confirmados como a MESMA baixa duplicada só por causa da mudança de
+    status.
+
+    A função já foi corrigida pra casar por uma chave ESTÁVEL (sem Status) e
+    atualizar o status no lugar em vez de inserir - mas isso não desfaz as
+    duplicatas que a versão antiga já criou. Esta limpeza roda em todo
+    startup (idempotente, barata quando não há nada pra corrigir) e refaz
+    retroativamente o que a versão corrigida teria feito:
+
+    Agrupa TODAS as linhas de baixas_operacionais pela mesma chave estável
+    (SKU + Almoxarifado + Hipótese + Quantidade + Valor + Data). Dentro de
+    cada grupo, separa as que vieram do backfill por planilha
+    (payload_bruto._fonte == "backfill_planilha_historico") das que já
+    existiam antes (webhook, colar lote, ou backfill de uma rodada
+    anterior). Casa 1-a-1, na ordem do id (mais antiga primeiro): pra cada
+    par, se o status diferir, atualiza o status da linha MAIS ANTIGA pro da
+    mais nova (preserva o id mais antigo, e qualquer divergência já
+    vinculada a ele) e tenta resolver divergência automaticamente se acabou
+    de virar Aprovada; a linha do backfill do par é removida. Se um grupo
+    tem mais linhas de backfill do que linhas antigas, o excedente fica -
+    são ocorrências genuinamente novas (a lacuna real que a planilha vinha
+    pra fechar), não duplicata."""
+    from . import models  # import local: evita ciclo (models importa Base deste módulo)
+    from .baixas_operacionais import buscar_divergencia_compativel, resolver_divergencia_automaticamente, STATUS_FLUXO_APROVADO
+    db = SessionLocal()
+    try:
+        linhas = db.query(models.BaixaOperacional).order_by(models.BaixaOperacional.id.asc()).all()
+        grupos = defaultdict(list)
+        for r in linhas:
+            chave = (r.sku, r.almoxarifado, r.hipotese_aplicada, r.quantidade, r.valor_total, r.data_baixa)
+            grupos[chave].append(r)
+
+        removidos = 0
+        status_corrigidos = 0
+        resolvidas = 0
+
+        def _e_backfill(registro):
+            return bool(registro.payload_bruto) and registro.payload_bruto.get("_fonte") == "backfill_planilha_historico"
+
+        for grupo in grupos.values():
+            if len(grupo) <= 1:
+                continue
+            antigas = [r for r in grupo if not _e_backfill(r)]
+            novas_backfill = [r for r in grupo if _e_backfill(r)]
+            if not antigas or not novas_backfill:
+                continue  # sem par antiga+backfill nesse grupo - nada a mesclar
+            for mantida, duplicata in zip(antigas, novas_backfill):
+                if mantida.status_fluxo != duplicata.status_fluxo:
+                    mantida.status_fluxo = duplicata.status_fluxo
+                    if duplicata.solicitante_nome:
+                        mantida.solicitante_nome = duplicata.solicitante_nome
+                    status_corrigidos += 1
+                    if mantida.status_fluxo == STATUS_FLUXO_APROVADO and not mantida.divergencia_vinculada_id:
+                        almoxarifado = mantida.almoxarifado or ""
+                        if mantida.data_baixa and not almoxarifado.startswith("NAO_MAPEADO__"):
+                            div = buscar_divergencia_compativel(db, mantida.sku, almoxarifado, mantida.data_baixa)
+                            if div:
+                                resolver_divergencia_automaticamente(db, div, mantida)
+                                resolvidas += 1
+                db.delete(duplicata)
+                removidos += 1
+
+        if not removidos and not status_corrigidos:
+            return
+        db.commit()
+        print(
+            f"Atlas: mesclada(s) {removidos} baixa(s) operacional(is) duplicada(s) por mudança de status "
+            f"(status corrigido em {status_corrigidos}, {resolvidas} divergência(s) resolvida(s) automaticamente na mesclagem)."
         )
     finally:
         db.close()
