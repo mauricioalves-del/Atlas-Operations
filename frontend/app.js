@@ -243,7 +243,8 @@ async function _esperarGraficosProntos(container, timeoutMs = 1500) {
   }
 }
 
-async function exportarDashboardComoHTML(containerId, nomeArquivoBase, tituloExibicao, idsFiltros, funcaoRecarregar) {
+async function exportarDashboardComoHTML(containerId, nomeArquivoBase, tituloExibicao, idsFiltros, funcaoRecarregar, opcoes = {}) {
+  const maxCombinacoes = opcoes.maxCombinacoes || 150;
   const original = document.getElementById(containerId);
   const botao = document.getElementById(`btn-exportar-html-${containerId.replace("view-", "")}`);
   if (!original) return;
@@ -251,7 +252,14 @@ async function exportarDashboardComoHTML(containerId, nomeArquivoBase, tituloExi
   const selects = idsFiltros.map((id) => document.getElementById(id)).filter(Boolean);
   const valoresOriginais = selects.map((s) => s.value);
   const opcoesPorSelect = selects.map((s) => Array.from(s.options).map((o) => o.value));
-  const todasCombinacoes = _cartesiano(opcoesPorSelect);
+  let todasCombinacoes = _cartesiano(opcoesPorSelect);
+
+  // Telas com muitas combinações de filtro possíveis (ex: 4 seletores
+  // independentes) não conseguem ter TODAS pré-geradas sem travar o
+  // navegador por minutos - nesse caso, captura só o recorte selecionado
+  // no momento da exportação e avisa isso claramente no arquivo gerado.
+  const modoUnico = todasCombinacoes.length > maxCombinacoes;
+  if (modoUnico) todasCombinacoes = [valoresOriginais];
 
   const textoOriginalBotao = botao ? botao.textContent : null;
   if (botao) botao.disabled = true;
@@ -306,7 +314,7 @@ body { padding: 24px; max-width: 1400px; margin: 0 auto; }
 </style>
 </head>
 <body>
-<div class="export-aviso">📄 Exportado do Atlas em ${agora} — instantâneo com os filtros congelados no momento da exportação (os dados não atualizam automaticamente; para ver ao vivo, acesse o sistema). Passe o mouse sobre os gráficos pra ver os valores.</div>
+<div class="export-aviso">📄 Exportado do Atlas em ${agora} — instantâneo com os filtros congelados no momento da exportação (os dados não atualizam automaticamente; para ver ao vivo, acesse o sistema). Passe o mouse sobre os gráficos pra ver os valores.${modoUnico ? " Esta tela tem muitas combinações de filtro possíveis - este arquivo captura só o recorte que estava selecionado no momento da exportação; mudar os filtros aqui não vai encontrar outra combinação pronta." : ""}</div>
 ${headerClone.outerHTML}
 <div id="atlas-snapshot-container"></div>
 <script>
@@ -371,6 +379,23 @@ document.getElementById("btn-exportar-html-fechamento-dashboard").addEventListen
 document.getElementById("btn-exportar-html-acuracia-ponderada").addEventListener("click", () =>
   exportarDashboardComoHTML("view-acuracia-ponderada", "acuracia_ponderada", "Acurácia Ponderada", ["ap-filtro-mes", "ap-filtro-almoxarifado"], carregarAcuraciaPonderada)
 );
+document.getElementById("btn-exportar-html-cobertura-conferencia").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-cobertura-conferencia", "cobertura_conferencia", "Cobertura de Conferência", ["cc-filtro-dias"], carregarCoberturaConferencia)
+);
+document.getElementById("btn-exportar-html-compras").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-compras", "controle_compras", "Controle de Compras", ["cp-filtro-status"], carregarPedidosCompra)
+);
+document.getElementById("btn-exportar-html-pos-inventario").addEventListener("click", () =>
+  exportarDashboardComoHTML("view-pos-inventario", "pos_inventario", "Pós-Inventário", ["pi-filtro-status"], carregarAcoesPosInventario)
+);
+document.getElementById("btn-exportar-html-mapeamento-passivos").addEventListener("click", () =>
+  exportarDashboardComoHTML(
+    "view-mapeamento-passivos", "mapeamento_passivos", "Mapeamento de Passivos",
+    ["mp-filtro-ano", "mp-filtro-mes", "mp-filtro-almoxarifado", "mp-filtro-motivo"],
+    carregarResumoExecutivoMp,
+    { maxCombinacoes: 150 }
+  )
+);
 
 // ---------- tema claro/escuro ----------
 function aplicarTemaSalvo() {
@@ -430,6 +455,38 @@ function corFarolAcuracia(pct) {
   if (pct < 50) return "#e5534b";
   if (pct < 75) return "#f9a825";
   return "#4caf50";
+}
+
+// ---------- clique-para-filtrar nos gráficos (estilo Power BI) ----------
+// Clicar numa barra/ponto de um gráfico já joga aquele valor no filtro
+// correspondente da própria tela e recarrega - mesma lógica do "cross-filter"
+// do Power BI. Convive com qualquer duplo clique que já existia nesse mesmo
+// gráfico (ex: abrir um modal com o detalhe) - são eventos diferentes
+// ("click" x "dblclick"), então o pop-up de sempre continua funcionando.
+function ativarCliqueParaFiltrar(chart, canvas, dados, extrairValor, idSelectFiltro) {
+  // as funções de render são chamadas de novo a cada recarregamento (troca
+  // de filtro) - sem este controle, cada chamada empilharia mais um
+  // "addEventListener" no mesmo canvas, e um único clique acabaria
+  // disparando várias vezes (com dados cada vez mais desatualizados nas
+  // chamadas antigas). Por isso o listener real só é registrado UMA VEZ por
+  // canvas; toda vez que a tela recarrega, só atualiza a referência com
+  // o gráfico/dados mais recentes, que é o que o clique de fato consulta.
+  canvas.style.cursor = "pointer";
+  canvas._atlasClickFiltro = { chart, dados, extrairValor, idSelectFiltro };
+  if (canvas._atlasClickFiltroAtivo) return;
+  canvas._atlasClickFiltroAtivo = true;
+  canvas.addEventListener("click", (evt) => {
+    const ctxAtual = canvas._atlasClickFiltro;
+    if (!ctxAtual || !ctxAtual.chart) return;
+    const pontos = ctxAtual.chart.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
+    if (!pontos.length) return;
+    const valor = ctxAtual.extrairValor(ctxAtual.dados[pontos[0].index]);
+    if (valor == null) return;
+    const select = document.getElementById(ctxAtual.idSelectFiltro);
+    if (!select || select.value === String(valor)) return; // já está nesse recorte
+    select.value = valor;
+    select.dispatchEvent(new Event("change"));
+  });
 }
 
 // ---------- rótulos de dados nos gráficos (opt-in por dataset, via dataset.formatarRotulo) ----------
@@ -834,13 +891,27 @@ function renderHeatmap(dados) {
           const v = valor(a, h);
           const intensidade = v / max;
           const cor = v === 0 ? "#212b30" : mixColor(intensidade);
-          return `<div class="heatmap-cell" style="background:${cor}" title="${a} × ${rotulo(h)}: ${v}">${v || ""}</div>`;
+          return `<div class="heatmap-cell" data-almox="${a}" style="background:${cor};cursor:pointer" title="${a} × ${rotulo(h)}: ${v} · clique pra filtrar por este almoxarifado">${v || ""}</div>`;
         })
         .join("");
-      return `<div class="heatmap-row"><div class="row-label">${a}</div><div class="heatmap-cells">${cells}</div></div>`;
+      return `<div class="heatmap-row"><div class="row-label" data-almox="${a}" style="cursor:pointer" title="Clique pra filtrar por este almoxarifado">${a}</div><div class="heatmap-cells">${cells}</div></div>`;
     })
     .join("");
   document.getElementById("heatmap").innerHTML = html || "<span style='color:var(--muted)'>Sem dados ainda.</span>";
+
+  document.querySelectorAll("#heatmap [data-almox]").forEach((el) =>
+    el.addEventListener("click", () => filtrarPainelPorAlmoxarifado(el.dataset.almox))
+  );
+}
+
+// usado tanto pelo heatmap quanto pelo ranking de almoxarifados reincidentes
+// abaixo - clicar joga o valor no filtro de almoxarifado do próprio painel
+// e recarrega (mesma lógica de cross-filter dos gráficos Chart.js).
+function filtrarPainelPorAlmoxarifado(almoxarifado) {
+  const select = document.getElementById("filtro-almoxarifado");
+  if (!select || select.value === almoxarifado) return;
+  select.value = almoxarifado;
+  select.dispatchEvent(new Event("change"));
 }
 
 function mixColor(intensidade) {
@@ -855,8 +926,11 @@ function renderRanking(rank) {
     .map((r) => `<li><span>${r.sku}${r.descricao ? " — " + r.descricao : ""}</span><span class="qtd">${r.quantidade}</span></li>`)
     .join("") || "<li>Sem dados</li>";
   document.getElementById("rank-almox").innerHTML = rank.top_almoxarifados
-    .map((r) => `<li>${r.almoxarifado} <span class="qtd">${r.quantidade}</span></li>`)
+    .map((r) => `<li data-almox="${r.almoxarifado}" style="cursor:pointer" title="Clique pra filtrar por este almoxarifado">${r.almoxarifado} <span class="qtd">${r.quantidade}</span></li>`)
     .join("") || "<li>Sem dados</li>";
+  document.querySelectorAll("#rank-almox li[data-almox]").forEach((li) =>
+    li.addEventListener("click", () => filtrarPainelPorAlmoxarifado(li.dataset.almox))
+  );
 }
 
 function renderTop(top) {
@@ -1871,6 +1945,8 @@ function renderApPorAlmoxarifado(dados) {
       },
     },
   });
+
+  ativarCliqueParaFiltrar(apChartAlmox3, ctx, dados, (d) => d.almoxarifado, "ap-filtro-almoxarifado");
 }
 
 const AP_MOM_ROTULOS = { iap_pct: "IAP (valor)", iaq_pct: "IAQ (quantidade)", item_a_item_pct: "Item a item" };
@@ -2056,6 +2132,8 @@ function renderApEvolucao(dados) {
       },
     },
   });
+
+  ativarCliqueParaFiltrar(apChartEvolucao, ctx, dados, (d) => d.mes, "ap-filtro-mes");
 }
 
 // ---------- painel de inventário (dashboard do módulo de fechamento) ----------
@@ -2162,6 +2240,8 @@ function renderFdPorAlmox(dados) {
     },
   });
 
+  ativarCliqueParaFiltrar(fdChartAlmox, ctx, dados, (d) => d.almoxarifado, "fd-filtro-almoxarifado");
+
   ctx.ondblclick = async (evt) => {
     const pontos = fdChartAlmox.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
     if (!pontos.length) return;
@@ -2210,6 +2290,8 @@ function renderFdEvolucaoMensal(dados) {
       },
     },
   });
+
+  ativarCliqueParaFiltrar(fdChartEvolucaoMensal, ctx, dados, (d) => d.mes, "fd-filtro-mes");
 }
 
 function renderFdRankingFinanceiro(ranking) {
@@ -4994,10 +5076,54 @@ function _atlasModulosJaApresentados() {
 // lista de vozes carrega de forma assíncrona em alguns navegadores, então
 // isso pode retornar vazio na primeiríssima chamada (nesse caso o
 // utterance ainda funciona, só usa a voz padrão do sistema pro lang pt-BR)
+//
+// (13/08/2026) Antes esta função só pegava a PRIMEIRA voz pt-* encontrada -
+// isso significa que, se o navegador só expõe uma única voz em português
+// (o caso mais comum no Chrome, que normalmente só traz "Google português
+// do Brasil"), ajustar pitch/rate no falarResumoModulo() não muda o timbre
+// de verdade: o Chrome ignora o parâmetro "pitch" pras vozes de rede do
+// Google (limitação conhecida do navegador, não um bug daqui) - então a voz
+// continuava parecendo a mesma de antes, por mais que a fala/pitch/rate no
+// código tivessem mudado. Agora a função tenta ativamente achar uma voz
+// DIFERENTE da primeira (de preferência masculina/mais grave, no clima
+// "mordomo educado" do J.A.R.V.I.S.) quando o navegador tiver mais de uma
+// opção em português - e loga no console quantas vozes existem, pra dar
+// pra confirmar rapidamente (F12 → Console) se a limitação é essa.
+const _NOMES_VOZ_PREFERIDOS = [
+  "jarvis", "daniel", "antonio", "antônio", "ricardo", "felipe", "fabio", "fábio",
+  "duarte", "male", "homem", "masculin",
+];
+
 function _atlasEscolherVoz() {
   if (!("speechSynthesis" in window)) return null;
   const vozes = window.speechSynthesis.getVoices();
-  return vozes.find((v) => v.lang && v.lang.toLowerCase().startsWith("pt")) || null;
+  const vozesPt = vozes.filter((v) => v.lang && v.lang.toLowerCase().startsWith("pt"));
+  if (!vozesPt.length) return null;
+
+  if (!window.__atlasVozesLogadas) {
+    window.__atlasVozesLogadas = true;
+    console.info(
+      `Atlas: ${vozesPt.length} voz(es) em português encontrada(s) neste navegador -`,
+      vozesPt.map((v) => `${v.name} (${v.lang}${v.localService ? ", local" : ", rede"})`)
+    );
+    if (vozesPt.length === 1) {
+      console.info(
+        "Atlas: como só há uma voz em português disponível, a troca de timbre fica limitada ao que pitch/rate conseguem mudar - " +
+        "e o Chrome costuma ignorar 'pitch' em vozes de rede do Google. Pra uma voz de fato diferente, seria preciso um serviço de TTS externo."
+      );
+    }
+  }
+
+  const preferida = vozesPt.find((v) => _NOMES_VOZ_PREFERIDOS.some((nome) => v.name.toLowerCase().includes(nome)));
+  if (preferida) return preferida;
+
+  // sem nome-alvo encontrado: se houver mais de uma voz pt, prefere uma
+  // voz LOCAL do sistema (localService) - essas costumam respeitar
+  // pitch/rate de verdade, ao contrário das vozes de rede do Google.
+  const local = vozesPt.find((v) => v.localService);
+  if (local) return local;
+
+  return vozesPt[0];
 }
 
 // ---------- conversão de valores em R$ pro extenso, em português (13/08/2026) ----------
@@ -5097,8 +5223,15 @@ function falarResumoModulo(texto) {
     window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
     const fala = new SpeechSynthesisUtterance(prepararTextoParaNarracao(texto));
     fala.lang = "pt-BR";
-    fala.rate = 0.98;
-    fala.pitch = 1.05; // tom mais refinado e composto, no clima "J.A.R.V.I.S." (não mais "Exterminador")
+    // (13/08/2026) "rate" é respeitado por praticamente todas as vozes -
+    // já "pitch" costuma ser IGNORADO pelo Chrome nas vozes de rede do
+    // Google (a mais comum de existir em português) - por isso o ajuste
+    // de tom sozinho não bastava pra sair do clima "Exterminador". Cadência
+    // um pouco mais lenta e composta (rate < 1), tom levemente mais grave
+    // (pitch < 1, aplicado quando a voz escolhida respeitar o parâmetro) -
+    // clima de mordomo educado, não de robô apressado.
+    fala.rate = 0.92;
+    fala.pitch = 0.94;
     const voz = _atlasEscolherVoz();
     if (voz) fala.voice = voz;
     window.speechSynthesis.speak(fala);
