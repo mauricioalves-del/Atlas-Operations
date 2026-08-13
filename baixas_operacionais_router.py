@@ -222,6 +222,7 @@ def _filtrar_baixas_dashboard(
     db: Session, status_fluxo: str | None, categoria_mapeamento: str | None, mes: str | None, sku: str | None,
     motivo: str | None = None, excluir_categoria_mapeamento: str | None = None,
     ano: int | None = None, data_inicio=None, data_fim=None, almoxarifado: str | None = None,
+    mes_numero: int | None = None,
 ) -> list:
     q = db.query(models.BaixaOperacional)
     if status_fluxo:
@@ -238,10 +239,11 @@ def _filtrar_baixas_dashboard(
     baixas = q.all()
     if mes:
         baixas = [b for b in baixas if b.data_baixa and str(b.data_baixa)[:7] == mes]
-    if ano or data_inicio or data_fim:
+    if ano or mes_numero or data_inicio or data_fim:
         # filtro de recorte do painel (Data/Mês/Ano) - o `mes` acima é o mês exato
-        # (YYYY-MM) de um clique num gráfico, um conceito diferente/independente.
-        baixas = [b for b in baixas if _data_no_periodo(b.data_baixa, ano, None, data_inicio, data_fim)]
+        # (YYYY-MM) de um clique num gráfico, um conceito diferente/independente do
+        # `mes_numero` (1-12, qualquer ano) do filtro do painel.
+        baixas = [b for b in baixas if _data_no_periodo(b.data_baixa, ano, mes_numero, data_inicio, data_fim)]
     if categoria_mapeamento or excluir_categoria_mapeamento:
         divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
         if categoria_mapeamento:
@@ -614,6 +616,7 @@ def dashboard_itens_fluxo_inventario(
     mes: str | None = Query(None, description="YYYY-MM"),
     direcao: str | None = Query(None, description="entrada | saida"),
     ano: int | None = Query(None, description="filtro do painel (recorte atual)"),
+    mes_numero: int | None = Query(None, ge=1, le=12, description="filtro do painel (recorte atual, 1-12, qualquer ano) - diferente do `mes` acima"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD - filtro do painel (recorte atual)"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD - filtro do painel (recorte atual)"),
     almoxarifado: str | None = Query(None, description="filtro do painel (recorte atual)"),
@@ -623,11 +626,12 @@ def dashboard_itens_fluxo_inventario(
     """Drill-down do painel de Fluxo de Inventário e da série 'Resultado do
     Fluxo de Inventário' no MoM - lista os ajustes oficiais (SKU x
     almoxarifado x lote) que geraram entrada/saída no mês/direção
-    clicados. ano/data_inicio/data_fim/almoxarifado (opcionais) deixam o
-    drill-down respeitar também o recorte atual do painel."""
+    clicados. ano/mes_numero/data_inicio/data_fim/almoxarifado (opcionais)
+    deixam o drill-down respeitar também o recorte atual do painel - usado,
+    por exemplo, pelo botão "Ver todos os Ajustes de Inventário"."""
     di = _parse_data_iso(data_inicio, "data_inicio")
     df = _parse_data_iso(data_fim, "data_fim")
-    linhas = _ajustes_inventario_contados(db, mes=mes, direcao=direcao, ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado)
+    linhas = _ajustes_inventario_contados(db, mes=mes, direcao=direcao, ano=ano, mes_numero=mes_numero, data_inicio=di, data_fim=df, almoxarifado=almoxarifado)
     skus = {registro.sku for registro, _m, _d in linhas if registro.sku}
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus)).all()}
 
@@ -756,6 +760,7 @@ def dashboard_passivos_itens(
     motivo: str | None = Query(None, description="motivo_baixa_bruto exato, ou lista separada por vírgula (usado pelo segmento 'Outros' de dashboard/motivos-mensal)"),
     excluir_categoria_mapeamento: str | None = Query(None, description="usado pelo gráfico de motivos, que já exclui inventario_mensal"),
     ano: int | None = Query(None, description="filtro do painel (recorte atual) - diferente do `mes` acima, que é o mês exato clicado"),
+    mes_numero: int | None = Query(None, ge=1, le=12, description="filtro do painel (recorte atual, 1-12, qualquer ano) - diferente do `mes` acima"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD - filtro do painel (recorte atual)"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD - filtro do painel (recorte atual)"),
     almoxarifado: str | None = Query(None, description="filtro do painel (recorte atual)"),
@@ -766,14 +771,15 @@ def dashboard_passivos_itens(
     Mapeamento de Passivos - clicar numa fatia da pizza, numa coluna do
     mapeamento por origem, num mês do MoM, numa linha de um Top 10 ou num
     segmento do gráfico de motivos de baixa cai aqui, com o filtro
-    correspondente. ano/data_inicio/data_fim/almoxarifado (opcionais) deixam o
-    drill-down respeitar também o recorte atual do painel (Data/Mês/Ano/
-    Almoxarifado), não só o filtro específico do ponto clicado."""
+    correspondente. ano/mes_numero/data_inicio/data_fim/almoxarifado
+    (opcionais) deixam o drill-down respeitar também o recorte atual do
+    painel (Data/Mês/Ano/Almoxarifado), não só o filtro específico do ponto
+    clicado - usado, por exemplo, pelo botão "Ver todos os Passivos"."""
     di = _parse_data_iso(data_inicio, "data_inicio")
     df = _parse_data_iso(data_fim, "data_fim")
     baixas = _filtrar_baixas_dashboard(
         db, status_fluxo, categoria_mapeamento, mes, sku, motivo, excluir_categoria_mapeamento,
-        ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado,
+        ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado, mes_numero=mes_numero,
     )
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_({b.sku for b in baixas if b.sku})).all()}
@@ -1130,6 +1136,60 @@ def dashboard_resultado_por_almoxarifado(
         })
     linhas.sort(key=lambda x: x["valor_acumulado"], reverse=True)
     return linhas
+
+
+@router.get("/dashboard/top-10-movimentos")
+def dashboard_top_10_movimentos(
+    ano: int | None = None,
+    mes: int | None = Query(None, ge=1, le=12),
+    data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
+    data_fim: str | None = Query(None, description="YYYY-MM-DD"),
+    almoxarifado: str | None = None,
+    motivo: str | None = Query(None, description="motivo_baixa_bruto exato, ou lista separada por vírgula"),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """As 10 maiores movimentações do recorte atual (13/08/2026), misturando
+    Passivos aprovados e Ajustes de Inventário numa lista só, ordenada por
+    valor absoluto - complementa o "Resultado por Almoxarifado" (que soma
+    por almoxarifado): aqui é o detalhe linha a linha das maiores baixas
+    específicas do período, de onde vier. `tipo` distingue "passivo" de
+    "inventario" - o front usa isso pra decidir que ação de justificativa
+    oferecer em cada linha (ver abrirModalJustificativaPorItem)."""
+    di = _parse_data_iso(data_inicio, "data_inicio")
+    df = _parse_data_iso(data_fim, "data_fim")
+    motivos_lista = _parse_motivos(motivo)
+
+    aprovadas = [
+        b for b in _dados_passivos_filtrados(db, ano, mes, di, df, almoxarifado, motivos_lista)
+        if b.status_fluxo == "APROVADA"
+    ]
+    ajustes = _dados_inventario_filtrados(db, ano, mes, di, df, almoxarifado)
+
+    skus = {b.sku for b in aprovadas if b.sku} | {a.sku for a in ajustes if a.sku}
+    descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus)).all()}
+
+    itens = []
+    for b in aprovadas:
+        itens.append({
+            "tipo": "passivo", "id": b.id, "sku": b.sku, "descricao_produto": descricoes.get(b.sku),
+            "almoxarifado": b.almoxarifado, "data": str(b.data_baixa) if b.data_baixa else None,
+            "quantidade": b.quantidade, "valor": round(abs(b.valor_total or 0), 2), "valor_com_sinal": round(b.valor_total or 0, 2),
+            "motivo": b.motivo_baixa_bruto, "status_fluxo": b.status_fluxo,
+            "divergencia_vinculada_id": b.divergencia_vinculada_id,
+            "id_lote": None, "qtd_sistema": None, "qtd_contagem": None, "direcao": None,
+        })
+    for a in ajustes:
+        itens.append({
+            "tipo": "inventario", "id": a.id, "sku": a.sku, "descricao_produto": a.descricao_produto or descricoes.get(a.sku),
+            "almoxarifado": a.almoxarifado, "data": str(a.dt_invent) if a.dt_invent else None,
+            "quantidade": a.ajuste_qtd, "valor": round(abs(a.valor_total or 0), 2), "valor_com_sinal": round(a.valor_total or 0, 2),
+            "motivo": None, "status_fluxo": None, "divergencia_vinculada_id": None,
+            "id_lote": a.id_lote, "qtd_sistema": a.qtd_sistema, "qtd_contagem": a.qtd_contagem,
+            "direcao": _direcao_ajuste(a),
+        })
+    itens.sort(key=lambda x: x["valor"], reverse=True)
+    return itens[:10]
 
 
 @router.get("/dashboard/exportar-excel")
