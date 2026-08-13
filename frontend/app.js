@@ -4780,18 +4780,34 @@ async function abrirModalPassivosItens(filtros, titulo) {
   document.getElementById("modal-passivos-itens-resumo").textContent = `Valor total: ${formatarMoeda(dados.valor_total)}`;
   document.querySelector("#tabela-modal-passivos-itens tbody").innerHTML = dados.itens
     .map(
-      (i) => `<tr>
+      (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
         <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
         <td>${i.motivo || "—"}</td><td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total)}</td>
         <td>${badgeStatusBaixa(i.status_fluxo)}</td><td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
         <td>${i.divergencia_vinculada_id ? "#" + i.divergencia_vinculada_id : "—"}</td>
         <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
+        <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
+        <td><button class="btn-secundario btn-justificar-passivo-item" data-id="${i.id}">Justificar</button></td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma baixa encontrada nessa categoria.</td></tr>`;
+    .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma baixa encontrada nessa categoria.</td></tr>`;
 
+  const abrirJustificativaDoItemPassivo = (id) => {
+    const item = dados.itens.find((i) => i.id === id);
+    if (item) abrirModalJustificativaPorItem(item, "passivo");
+  };
+  document.querySelectorAll("#tabela-modal-passivos-itens tbody tr[data-id]").forEach((tr) =>
+    tr.addEventListener("click", () => abrirJustificativaDoItemPassivo(parseInt(tr.dataset.id)))
+  );
+  document.querySelectorAll(".btn-justificar-passivo-item").forEach((btn) =>
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      abrirJustificativaDoItemPassivo(parseInt(btn.dataset.id));
+    })
+  );
   document.querySelectorAll(".btn-ver-divergencia-passivo").forEach((btn) =>
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
       document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
       mostrarView("lista");
       abrirDetalhe(parseInt(btn.dataset.id));
@@ -4818,20 +4834,29 @@ async function abrirModalFluxoInventarioItens(filtros, titulo) {
     `Resultado: ${formatarMoeda(dados.entradas_valor - dados.saidas_valor)}`;
   document.querySelector("#tabela-modal-fluxo-inventario-itens tbody").innerHTML = dados.itens
     .map(
-      (i) => `<tr data-id="${i.id}" class="linha-clicavel">
+      (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
         <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
         <td>${i.id_lote || "—"}</td>
         <td>${i.qtd_sistema ?? "—"}</td><td>${i.qtd_contagem ?? "—"}</td><td>${i.divergencia_qtd ?? "—"}</td>
         <td style="color:${i.direcao === "entrada" ? "var(--ok)" : "var(--critico)"}">${i.direcao === "entrada" ? "Entrada" : "Saída"}</td>
         <td>${formatarMoeda(i.valor_estimado)}</td><td>${i.data_fechamento ? formatarDataCurta(i.data_fechamento) : "—"}</td>
+        <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
+        <td><button class="btn-secundario btn-justificar-inventario-item" data-id="${i.id}">Justificar</button></td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhum ajuste de inventário encontrado.</td></tr>`;
+    .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhum ajuste de inventário encontrado.</td></tr>`;
 
+  const abrirJustificativaDoItemInventario = (id) => {
+    const item = dados.itens.find((i) => i.id === id);
+    if (item) abrirModalJustificativaPorItem(item, "inventario");
+  };
   document.querySelectorAll("#tabela-modal-fluxo-inventario-itens tbody tr[data-id]").forEach((tr) =>
-    tr.addEventListener("click", () => {
-      const item = dados.itens.find((i) => String(i.id) === tr.dataset.id);
-      if (item) abrirModalJustificativaPorItem(item, "inventario");
+    tr.addEventListener("click", () => abrirJustificativaDoItemInventario(parseInt(tr.dataset.id)))
+  );
+  document.querySelectorAll(".btn-justificar-inventario-item").forEach((btn) =>
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      abrirJustificativaDoItemInventario(parseInt(btn.dataset.id));
     })
   );
 

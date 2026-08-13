@@ -1374,33 +1374,36 @@
 </div>
 
 <div id="modal-passivos-itens-overlay" class="modal-overlay hidden">
-  <div class="modal-card" style="width:min(1000px, 94vw)">
+  <div class="modal-card" style="width:min(1400px, 98vw); max-height:94vh">
     <div class="modal-header">
       <h2 id="modal-passivos-itens-titulo">Produtos</h2>
       <button id="btn-fechar-modal-passivos-itens" class="btn-secundario">Fechar ✕</button>
     </div>
     <div style="padding:24px">
       <p class="hint" id="modal-passivos-itens-resumo" style="margin-bottom:14px"></p>
-      <table class="tabela" id="tabela-modal-passivos-itens">
-        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Motivo</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Data</th><th>Divergência</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <p class="hint" style="margin-bottom:14px">Clique numa linha (ou no botão "Justificar") pra abrir/editar a justificativa daquele item.</p>
+      <div class="tabela-scroll">
+        <table class="tabela" id="tabela-modal-passivos-itens">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Motivo</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Data</th><th>Divergência</th><th></th><th>Investigação</th><th>Justificativa</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
 
 <div id="modal-fluxo-inventario-itens-overlay" class="modal-overlay hidden">
-  <div class="modal-card" style="width:min(1180px, 96vw)">
+  <div class="modal-card" style="width:min(1500px, 98vw); max-height:94vh">
     <div class="modal-header">
       <h2 id="modal-fluxo-inventario-itens-titulo">Itens do fluxo de inventário</h2>
       <button id="btn-fechar-modal-fluxo-inventario-itens" class="btn-secundario">Fechar ✕</button>
     </div>
     <div style="padding:24px">
       <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
-      <p class="hint" style="margin-bottom:14px">Clique numa linha para justificar o ajuste e registrar a solução aplicada.</p>
+      <p class="hint" style="margin-bottom:14px">Clique numa linha (ou no botão "Justificar") para justificar o ajuste e registrar a solução aplicada.</p>
       <div class="tabela-scroll">
         <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
-          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th></tr></thead>
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th><th>Investigação</th><th>Justificativa</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1513,6 +1516,6 @@
   </div>
 </div>
 
-<script src="app.js?v=79"></script>
+<script src="app.js?v=80"></script>
 </body>
 </html>

@@ -647,6 +647,16 @@ def dashboard_itens_fluxo_inventario(
         for registro, _mes_registro, direcao_registro in linhas
     ]
     itens.sort(key=lambda x: abs(x["valor_estimado"] or 0), reverse=True)
+
+    # tem_justificativa (Sim/Não) - mesma marcação do Top 10 Maiores Movimentações (13/08/2026),
+    # estendida aqui pra lista completa ("Ver todos os Ajustes de Inventário") ter a mesma
+    # informação e o mesmo botão de Justificar (14/08/2026).
+    ajustes_com_justificativa = _ids_com_justificativa(
+        db, {i["id"] for i in itens}, models.JustificativaAjusteInventario.ajuste_id
+    )
+    for item in itens:
+        item["tem_justificativa"] = item["id"] in ajustes_com_justificativa
+
     return {
         "itens": itens, "total": len(itens),
         "entradas_valor": round(sum(i["valor_estimado"] for i in itens if i["direcao"] == "entrada"), 2),
@@ -797,6 +807,16 @@ def dashboard_passivos_itens(
         for b in baixas
     ]
     itens.sort(key=lambda x: (x["data_baixa"] or "", abs(x["valor_total"] or 0)), reverse=True)
+
+    # tem_justificativa (Sim/Não) - mesma marcação do Top 10 Maiores Movimentações (13/08/2026),
+    # estendida aqui pra lista completa ("Ver todos os Passivos") ter a mesma informação e o
+    # mesmo botão de Justificar (14/08/2026).
+    baixas_com_justificativa = _ids_com_justificativa(
+        db, {i["id"] for i in itens}, models.JustificativaAjusteInventario.baixa_operacional_id
+    )
+    for item in itens:
+        item["tem_justificativa"] = item["id"] in baixas_com_justificativa
+
     return {"itens": itens, "total": len(itens), "valor_total": round(sum(b.valor_total or 0 for b in baixas), 2)}
 
 
@@ -855,6 +875,19 @@ def _parse_motivos(motivo: str | None) -> list[str] | None:
     """Mesma convenção usada em todo o painel: motivo pode ser um valor único
     ou uma lista separada por vírgula (clique no segmento "Outros")."""
     return [m.strip() for m in motivo.split(",") if m.strip()] if motivo else None
+
+
+def _ids_com_justificativa(db: Session, ids: set, coluna) -> set:
+    """Dado um conjunto de ids (de BaixaOperacional ou AjusteInventarioOficial,
+    dependendo de `coluna`) devolve o subconjunto que já tem alguma
+    JustificativaAjusteInventario aberta - usado pra marcar `tem_justificativa`
+    (Sim/Não) nas listas de Passivos/Ajustes de Inventário e no Top 10
+    Maiores Movimentações, sem repetir a mesma query em cada endpoint."""
+    if not ids:
+        return set()
+    return {
+        r[0] for r in db.query(coluna).filter(coluna.in_(ids)).all() if r[0] is not None
+    }
 
 
 def _data_no_periodo(d, ano: int | None, mes: int | None, data_inicio, data_fim) -> bool:
@@ -1197,22 +1230,8 @@ def dashboard_top_10_movimentos(
 
     ids_passivo = {i["id"] for i in top10 if i["tipo"] == "passivo"}
     ids_inventario = {i["id"] for i in top10 if i["tipo"] == "inventario"}
-    baixas_com_justificativa = set()
-    ajustes_com_justificativa = set()
-    if ids_passivo:
-        baixas_com_justificativa = {
-            j.baixa_operacional_id
-            for j in db.query(models.JustificativaAjusteInventario)
-            .filter(models.JustificativaAjusteInventario.baixa_operacional_id.in_(ids_passivo))
-            .all()
-        }
-    if ids_inventario:
-        ajustes_com_justificativa = {
-            j.ajuste_id
-            for j in db.query(models.JustificativaAjusteInventario)
-            .filter(models.JustificativaAjusteInventario.ajuste_id.in_(ids_inventario))
-            .all()
-        }
+    baixas_com_justificativa = _ids_com_justificativa(db, ids_passivo, models.JustificativaAjusteInventario.baixa_operacional_id)
+    ajustes_com_justificativa = _ids_com_justificativa(db, ids_inventario, models.JustificativaAjusteInventario.ajuste_id)
 
     for item in top10:
         if item["tipo"] == "passivo":
