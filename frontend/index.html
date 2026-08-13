@@ -400,6 +400,7 @@
           <select id="mp-filtro-motivo" class="select-filtro"><option value="">Todos os motivos</option></select>
           <button id="btn-limpar-filtros-mp" class="btn-secundario">Limpar filtros</button>
           <button id="btn-exportar-html-mapeamento-passivos" class="btn-secundario">⭳ Exportar HTML</button>
+          <button id="btn-exportar-excel-mapeamento-passivos" class="btn-secundario">📊 Exportar Excel</button>
         </div>
         <div class="kpi-row-resumo" id="mp-kpi-row-resumo"></div>
       </div>
@@ -424,6 +425,15 @@
           resultado do mês. Clique numa barra ou num ponto pra ver os itens daquele mês.
         </p>
         <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
+      </div>
+
+      <div class="panel" id="mp-panel-resultado-almoxarifado" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #e5534b 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Resultado por Almoxarifado — Onde Estão as Maiores Perdas</h2>
+          <span class="hint" style="margin:0">Barra horizontal empilhada: Passivos + Resultado de Inventário (valor absoluto), por almoxarifado, do maior pro menor valor acumulado no período</span>
+        </div>
+        <p class="panel-sub">Clique numa barra pra filtrar todo o relatório por aquele almoxarifado (e ver o resumo operacional do ponto)</p>
+        <div style="height:340px"><canvas id="mp-chart-resultado-almoxarifado"></canvas></div>
       </div>
 
       <div class="panel">
@@ -1464,6 +1474,6 @@
   </div>
 </div>
 
-<script src="app.js?v=74"></script>
+<script src="app.js?v=75"></script>
 </body>
 </html>
