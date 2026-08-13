@@ -4777,43 +4777,79 @@ async function abrirModalPassivosItens(filtros, titulo) {
   const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/itens?${params.toString()}`).then((r) => r.json());
 
   document.getElementById("modal-passivos-itens-titulo").textContent = `${titulo} (${dados.total})`;
-  document.getElementById("modal-passivos-itens-resumo").textContent = `Valor total: ${formatarMoeda(dados.valor_total)}`;
-  document.querySelector("#tabela-modal-passivos-itens tbody").innerHTML = dados.itens
-    .map(
-      (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
-        <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
-        <td>${i.motivo || "—"}</td><td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total)}</td>
-        <td>${badgeStatusBaixa(i.status_fluxo)}</td><td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
-        <td>${i.divergencia_vinculada_id ? "#" + i.divergencia_vinculada_id : "—"}</td>
-        <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
-        <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
-        <td><button class="btn-secundario btn-justificar-passivo-item" data-id="${i.id}">Justificar</button></td>
-      </tr>`
-    )
-    .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma baixa encontrada nessa categoria.</td></tr>`;
 
-  const abrirJustificativaDoItemPassivo = (id) => {
-    const item = dados.itens.find((i) => i.id === id);
-    if (item) abrirModalJustificativaPorItem(item, "passivo");
+  // Busca (SKU/descrição) + filtro de almoxarifado direto na lista já carregada (14/08/2026) -
+  // client-side, sem chamada nova à API: com até milhares de itens numa lista só ("Ver todos os
+  // Passivos"), refinar aqui dentro é bem mais rápido que fechar o modal e mudar o filtro do
+  // painel. O resumo (contagem/valor) passa a refletir só o que está filtrado no momento.
+  const selAlmox = document.getElementById("modal-passivos-itens-filtro-almoxarifado");
+  const almoxarifadosUnicos = [...new Set(dados.itens.map((i) => i.almoxarifado).filter(Boolean))].sort();
+  selAlmox.innerHTML = `<option value="">Todos os almoxarifados</option>` + almoxarifadosUnicos.map((a) => `<option value="${a}">${a}</option>`).join("");
+  const inputBusca = document.getElementById("modal-passivos-itens-busca");
+  inputBusca.value = "";
+
+  const renderLinhasPassivos = (itens) => {
+    document.getElementById("modal-passivos-itens-resumo").textContent =
+      `Mostrando ${itens.length} de ${dados.total} · Valor total: ${formatarMoeda(itens.reduce((s, i) => s + (i.valor_total || 0), 0))}`;
+
+    document.querySelector("#tabela-modal-passivos-itens tbody").innerHTML = itens
+      .map(
+        (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
+          <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
+          <td>${i.motivo || "—"}</td><td>${i.quantidade ?? "—"}</td><td>${formatarMoeda(i.valor_total)}</td>
+          <td>${badgeStatusBaixa(i.status_fluxo)}</td><td>${i.data_baixa ? formatarDataCurta(i.data_baixa) : "—"}</td>
+          <td>${i.divergencia_vinculada_id ? "#" + i.divergencia_vinculada_id : "—"}</td>
+          <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
+          <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
+          <td><button class="btn-secundario btn-justificar-passivo-item" data-id="${i.id}">Justificar</button></td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma baixa encontrada com esse filtro.</td></tr>`;
+
+    const abrirJustificativaDoItemPassivo = (id) => {
+      const item = itens.find((i) => i.id === id);
+      if (item) abrirModalJustificativaPorItem(item, "passivo");
+    };
+    document.querySelectorAll("#tabela-modal-passivos-itens tbody tr[data-id]").forEach((tr) =>
+      tr.addEventListener("click", () => abrirJustificativaDoItemPassivo(parseInt(tr.dataset.id)))
+    );
+    document.querySelectorAll(".btn-justificar-passivo-item").forEach((btn) =>
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        abrirJustificativaDoItemPassivo(parseInt(btn.dataset.id));
+      })
+    );
+    document.querySelectorAll(".btn-ver-divergencia-passivo").forEach((btn) =>
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
+        mostrarView("lista");
+        abrirDetalhe(parseInt(btn.dataset.id));
+      })
+    );
   };
-  document.querySelectorAll("#tabela-modal-passivos-itens tbody tr[data-id]").forEach((tr) =>
-    tr.addEventListener("click", () => abrirJustificativaDoItemPassivo(parseInt(tr.dataset.id)))
-  );
-  document.querySelectorAll(".btn-justificar-passivo-item").forEach((btn) =>
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      abrirJustificativaDoItemPassivo(parseInt(btn.dataset.id));
-    })
-  );
-  document.querySelectorAll(".btn-ver-divergencia-passivo").forEach((btn) =>
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
-      mostrarView("lista");
-      abrirDetalhe(parseInt(btn.dataset.id));
-    })
-  );
 
+  const aplicarFiltroPassivos = () => {
+    const busca = inputBusca.value.trim().toLowerCase();
+    const almox = selAlmox.value;
+    const itensFiltrados = dados.itens.filter(
+      (i) =>
+        (!almox || i.almoxarifado === almox) &&
+        (!busca || i.sku.toLowerCase().includes(busca) || (i.descricao_produto || "").toLowerCase().includes(busca))
+    );
+    renderLinhasPassivos(itensFiltrados);
+  };
+
+  // Atribuição direta (não addEventListener) pra não empilhar um listener novo a cada vez que
+  // esse modal é reaberto - os dois campos são elementos fixos do HTML, reaproveitados sempre.
+  let _timeoutBuscaPassivos = null;
+  inputBusca.oninput = () => {
+    clearTimeout(_timeoutBuscaPassivos);
+    _timeoutBuscaPassivos = setTimeout(aplicarFiltroPassivos, 250);
+  };
+  selAlmox.onchange = aplicarFiltroPassivos;
+
+  aplicarFiltroPassivos();
   document.getElementById("modal-passivos-itens-overlay").classList.remove("hidden");
 }
 
@@ -4829,37 +4865,71 @@ async function abrirModalFluxoInventarioItens(filtros, titulo) {
   const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/itens-fluxo-inventario?${params.toString()}`).then((r) => r.json());
 
   document.getElementById("modal-fluxo-inventario-itens-titulo").textContent = `${titulo} (${dados.total})`;
-  document.getElementById("modal-fluxo-inventario-itens-resumo").textContent =
-    `Entradas: ${formatarMoeda(dados.entradas_valor)} · Saídas: ${formatarMoeda(dados.saidas_valor)} · ` +
-    `Resultado: ${formatarMoeda(dados.entradas_valor - dados.saidas_valor)}`;
-  document.querySelector("#tabela-modal-fluxo-inventario-itens tbody").innerHTML = dados.itens
-    .map(
-      (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
-        <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
-        <td>${i.id_lote || "—"}</td>
-        <td>${i.qtd_sistema ?? "—"}</td><td>${i.qtd_contagem ?? "—"}</td><td>${i.divergencia_qtd ?? "—"}</td>
-        <td style="color:${i.direcao === "entrada" ? "var(--ok)" : "var(--critico)"}">${i.direcao === "entrada" ? "Entrada" : "Saída"}</td>
-        <td>${formatarMoeda(i.valor_estimado)}</td><td>${i.data_fechamento ? formatarDataCurta(i.data_fechamento) : "—"}</td>
-        <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
-        <td><button class="btn-secundario btn-justificar-inventario-item" data-id="${i.id}">Justificar</button></td>
-      </tr>`
-    )
-    .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhum ajuste de inventário encontrado.</td></tr>`;
 
-  const abrirJustificativaDoItemInventario = (id) => {
-    const item = dados.itens.find((i) => i.id === id);
-    if (item) abrirModalJustificativaPorItem(item, "inventario");
+  // Mesma busca + filtro de almoxarifado client-side do modal de Passivos (14/08/2026) - a
+  // lista pode ter quase 2 mil linhas ("Ver todos os Ajustes de Inventário"), então filtrar
+  // aqui dentro sem sair do modal é bem mais rápido do que mudar o filtro do painel.
+  const selAlmox = document.getElementById("modal-fluxo-inventario-itens-filtro-almoxarifado");
+  const almoxarifadosUnicos = [...new Set(dados.itens.map((i) => i.almoxarifado).filter(Boolean))].sort();
+  selAlmox.innerHTML = `<option value="">Todos os almoxarifados</option>` + almoxarifadosUnicos.map((a) => `<option value="${a}">${a}</option>`).join("");
+  const inputBusca = document.getElementById("modal-fluxo-inventario-itens-busca");
+  inputBusca.value = "";
+
+  const renderLinhasFluxoInventario = (itens) => {
+    const entradasValor = itens.reduce((s, i) => s + (i.direcao === "entrada" ? i.valor_estimado || 0 : 0), 0);
+    const saidasValor = itens.reduce((s, i) => s + (i.direcao === "saida" ? i.valor_estimado || 0 : 0), 0);
+    document.getElementById("modal-fluxo-inventario-itens-resumo").textContent =
+      `Mostrando ${itens.length} de ${dados.total} · Entradas: ${formatarMoeda(entradasValor)} · Saídas: ${formatarMoeda(saidasValor)} · ` +
+      `Resultado: ${formatarMoeda(entradasValor - saidasValor)}`;
+
+    document.querySelector("#tabela-modal-fluxo-inventario-itens tbody").innerHTML = itens
+      .map(
+        (i) => `<tr data-id="${i.id}" class="linha-clicavel" title='Clique pra abrir/editar a justificativa deste item'>
+          <td>${i.sku}</td><td class="col-descricao">${i.descricao_produto || "—"}</td><td>${i.almoxarifado || "—"}</td>
+          <td>${i.id_lote || "—"}</td>
+          <td>${i.qtd_sistema ?? "—"}</td><td>${i.qtd_contagem ?? "—"}</td><td>${i.divergencia_qtd ?? "—"}</td>
+          <td style="color:${i.direcao === "entrada" ? "var(--ok)" : "var(--critico)"}">${i.direcao === "entrada" ? "Entrada" : "Saída"}</td>
+          <td>${formatarMoeda(i.valor_estimado)}</td><td>${i.data_fechamento ? formatarDataCurta(i.data_fechamento) : "—"}</td>
+          <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
+          <td><button class="btn-secundario btn-justificar-inventario-item" data-id="${i.id}">Justificar</button></td>
+        </tr>`
+      )
+      .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhum ajuste de inventário encontrado com esse filtro.</td></tr>`;
+
+    const abrirJustificativaDoItemInventario = (id) => {
+      const item = itens.find((i) => i.id === id);
+      if (item) abrirModalJustificativaPorItem(item, "inventario");
+    };
+    document.querySelectorAll("#tabela-modal-fluxo-inventario-itens tbody tr[data-id]").forEach((tr) =>
+      tr.addEventListener("click", () => abrirJustificativaDoItemInventario(parseInt(tr.dataset.id)))
+    );
+    document.querySelectorAll(".btn-justificar-inventario-item").forEach((btn) =>
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        abrirJustificativaDoItemInventario(parseInt(btn.dataset.id));
+      })
+    );
   };
-  document.querySelectorAll("#tabela-modal-fluxo-inventario-itens tbody tr[data-id]").forEach((tr) =>
-    tr.addEventListener("click", () => abrirJustificativaDoItemInventario(parseInt(tr.dataset.id)))
-  );
-  document.querySelectorAll(".btn-justificar-inventario-item").forEach((btn) =>
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      abrirJustificativaDoItemInventario(parseInt(btn.dataset.id));
-    })
-  );
 
+  const aplicarFiltroFluxoInventario = () => {
+    const busca = inputBusca.value.trim().toLowerCase();
+    const almox = selAlmox.value;
+    const itensFiltrados = dados.itens.filter(
+      (i) =>
+        (!almox || i.almoxarifado === almox) &&
+        (!busca || i.sku.toLowerCase().includes(busca) || (i.descricao_produto || "").toLowerCase().includes(busca))
+    );
+    renderLinhasFluxoInventario(itensFiltrados);
+  };
+
+  let _timeoutBuscaFluxoInventario = null;
+  inputBusca.oninput = () => {
+    clearTimeout(_timeoutBuscaFluxoInventario);
+    _timeoutBuscaFluxoInventario = setTimeout(aplicarFiltroFluxoInventario, 250);
+  };
+  selAlmox.onchange = aplicarFiltroFluxoInventario;
+
+  aplicarFiltroFluxoInventario();
   document.getElementById("modal-fluxo-inventario-itens-overlay").classList.remove("hidden");
 }
 
@@ -5130,11 +5200,29 @@ function renderAcompanhamentoModalJustificativa(historico) {
     });
   }
 
-  document.getElementById("modal-justificativa-linha-do-tempo").innerHTML = linha
-    .slice()
-    .reverse()
-    .map((p) => `<div class="linha-tempo-item"><span>${formatarDataCurta(p.data)} · ${p.almoxarifado}</span><span style="color:${p.divergente ? "var(--critico)" : "var(--ok)"}">${p.divergente ? "Divergente" : "OK"}</span></div>`)
+  // Linha do tempo: quando o ponto tem uma Divergencia linkada (só acontece se `divergente`), a
+  // linha vira clicável e abre o diagnóstico completo daquela divergência (mesma tela usada em
+  // todo o resto do app) - fecha o modal de justificativa e navega pra lá (14/08/2026).
+  const linhaOrdenada = linha.slice().reverse();
+  document.getElementById("modal-justificativa-linha-do-tempo").innerHTML = linhaOrdenada
+    .map((p, idx) => {
+      const clicavel = !!p.divergencia_id;
+      return `<div class="linha-tempo-item${clicavel ? " linha-clicavel" : ""}" data-idx="${idx}" ${clicavel ? "title='Clique pra ver os detalhes dessa divergência'" : ""}>
+        <span>${formatarDataCurta(p.data)} · ${p.almoxarifado}</span>
+        <span style="color:${p.divergente ? "var(--critico)" : "var(--ok)"}">${p.divergente ? "Divergente" : "OK"}</span>
+      </div>`;
+    })
     .join("");
+
+  document.querySelectorAll("#modal-justificativa-linha-do-tempo .linha-clicavel").forEach((el) =>
+    el.addEventListener("click", () => {
+      const ponto = linhaOrdenada[parseInt(el.dataset.idx)];
+      if (!ponto || !ponto.divergencia_id) return;
+      document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+      mostrarView("lista");
+      abrirDetalhe(ponto.divergencia_id);
+    })
+  );
 }
 
 function renderComparativoModalJustificativa(item, ehPassivo) {

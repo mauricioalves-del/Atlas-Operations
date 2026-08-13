@@ -1382,6 +1382,10 @@
     <div style="padding:24px">
       <p class="hint" id="modal-passivos-itens-resumo" style="margin-bottom:14px"></p>
       <p class="hint" style="margin-bottom:14px">Clique numa linha (ou no botão "Justificar") pra abrir/editar a justificativa daquele item.</p>
+      <div class="filtros" style="margin-bottom:14px">
+        <input type="text" id="modal-passivos-itens-busca" class="select-filtro" placeholder="Buscar por SKU ou descrição..." style="min-width:260px">
+        <select id="modal-passivos-itens-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+      </div>
       <div class="tabela-scroll">
         <table class="tabela" id="tabela-modal-passivos-itens">
           <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Motivo</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Data</th><th>Divergência</th><th></th><th>Investigação</th><th>Justificativa</th></tr></thead>
@@ -1401,6 +1405,10 @@
     <div style="padding:24px">
       <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
       <p class="hint" style="margin-bottom:14px">Clique numa linha (ou no botão "Justificar") para justificar o ajuste e registrar a solução aplicada.</p>
+      <div class="filtros" style="margin-bottom:14px">
+        <input type="text" id="modal-fluxo-inventario-itens-busca" class="select-filtro" placeholder="Buscar por SKU ou descrição..." style="min-width:260px">
+        <select id="modal-fluxo-inventario-itens-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+      </div>
       <div class="tabela-scroll">
         <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
           <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th><th>Investigação</th><th>Justificativa</th></tr></thead>
@@ -1516,6 +1524,6 @@
   </div>
 </div>
 
-<script src="app.js?v=80"></script>
+<script src="app.js?v=82"></script>
 </body>
 </html>
