@@ -1329,6 +1329,23 @@
   </div>
 </div>
 
+<!-- Pop-up genérico (13/08/2026): abre ao clicar num ponto/barra de QUALQUER gráfico
+     com clique-para-filtrar habilitado (ver ativarCliqueParaFiltrar em app.js) - mostra
+     um resumo operacional daquele ponto específico, mesmo quando não existe nenhuma
+     ação direta disponível pra aquele gráfico (só informativo). -->
+<div id="modal-resumo-ponto-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(560px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-resumo-ponto-titulo">Resumo do ponto</h2>
+      <div style="display:flex; gap:8px">
+        <button id="btn-narrar-resumo-ponto" class="btn-secundario" title="Atlas narra em voz alta este resumo">🔊 Narrar</button>
+        <button id="btn-fechar-modal-resumo-ponto" class="btn-secundario">Fechar ✕</button>
+      </div>
+    </div>
+    <div style="padding:24px" id="modal-resumo-ponto-corpo"></div>
+  </div>
+</div>
+
 <div id="modal-justificativa-overlay" class="modal-overlay hidden">
   <div class="modal-card">
     <div class="modal-header">
@@ -1391,6 +1408,6 @@
   </div>
 </div>
 
-<script src="app.js?v=69"></script>
+<script src="app.js?v=70"></script>
 </body>
 </html>

@@ -138,13 +138,13 @@ Chart.register({
   afterDatasetsDraw(chart) {
     const { ctx } = chart;
     chart.data.datasets.forEach((dataset, i) => {
-      if (!dataset.formatarRotulo) return;
+      if (!dataset.rotulos) return;
       const meta = chart.getDatasetMeta(i);
       if (meta.hidden) return;
       meta.data.forEach((el, idx) => {
         const valor = dataset.data[idx];
         if (valor == null) return;
-        const texto = dataset.formatarRotulo(valor);
+        const texto = dataset.rotulos[idx];
         if (!texto) return;
         const pos = el.tooltipPosition ? el.tooltipPosition() : { x: el.x, y: el.y };
         ctx.save();
@@ -172,13 +172,94 @@ function _cartesiano(arrays) {
   return arrays.reduce((acc, curr) => acc.flatMap((a) => curr.map((c) => [...a, c])), [[]]);
 }
 
+/** Percorre um objeto (as `options` de um gráfico) trocando toda função por
+ * um "marcador" serializável em JSON ({ __atlasFn: true, src: "..." }) -
+ * usado para as `options` de tooltip/eixo, que têm lógica variada demais
+ * pra pré-calcular como os rótulos de dataset acima. O par
+ * `_atlasReidratarFuncoes` (que roda dentro do arquivo exportado, por isso
+ * vai embutido como texto em CODIGO_REIDRATAR_FUNCOES) reconstrói essas
+ * funções lá, protegendo cada chamada com try/catch: se a função depender
+ * de algo que só existe no app principal, ela simplesmente não retorna nada
+ * (o Chart.js trata isso como "sem rótulo nesse ponto"), em vez de quebrar
+ * o gráfico inteiro. */
+function _serializarComFuncoes(valor) {
+  if (typeof valor === "function") {
+    return { __atlasFn: true, src: valor.toString() };
+  }
+  if (Array.isArray(valor)) {
+    return valor.map((v) => _serializarComFuncoes(v));
+  }
+  if (valor && typeof valor === "object") {
+    const resultado = {};
+    Object.keys(valor).forEach((k) => {
+      resultado[k] = _serializarComFuncoes(valor[k]);
+    });
+    return resultado;
+  }
+  return valor;
+}
+
+// contraparte de _serializarComFuncoes que roda DENTRO do arquivo exportado -
+// por isso vai como texto-fonte, embutida no <script> do HTML gerado.
+const CODIGO_REIDRATAR_FUNCOES = `
+function _atlasReidratarFuncoes(valor) {
+  if (valor && typeof valor === "object" && valor.__atlasFn) {
+    let real = null;
+    try { real = eval("(" + valor.src + ")"); } catch (e) { real = null; }
+    return function (...args) {
+      if (!real) return undefined;
+      try { return real.apply(this, args); } catch (e) { return undefined; }
+    };
+  }
+  if (Array.isArray(valor)) return valor.map((v) => _atlasReidratarFuncoes(v));
+  if (valor && typeof valor === "object") {
+    const resultado = {};
+    Object.keys(valor).forEach((k) => { resultado[k] = _atlasReidratarFuncoes(valor[k]); });
+    return resultado;
+  }
+  return valor;
+}`;
+
+/** Monta o texto-fonte (pra embutir no <script> do arquivo exportado) dos
+ * ajudantes de formatação mais usados dentro das opções de gráfico
+ * (tooltips, ticks) - formatarMoeda, corFarolAcuracia, formatarDataCurta e
+ * rotulo (hipóteses). Sem isso, qualquer tooltip/tick que chame
+ * formatarMoeda(...), por exemplo, quebraria no arquivo exportado (essas
+ * funções só existem no app principal, que não é levado inteiro pro
+ * export). `rotulo` depende de duas variáveis vivas (HIPOTESE_LABEL +
+ * HIPOTESES_DINAMICAS) - aqui é embutido como um dicionário já resolvido
+ * (congelado no momento da exportação), já que o arquivo exportado é uma
+ * foto estática mesmo. */
+function _codigoAjudantesExportacao() {
+  const mapaHipoteses = JSON.stringify(todasHipoteses());
+  return `
+${formatarMoeda.toString()}
+${corFarolAcuracia.toString()}
+${formatarDataCurta.toString()}
+const _ATLAS_MAPA_HIPOTESES = ${mapaHipoteses};
+function rotulo(h) { return _ATLAS_MAPA_HIPOTESES[h] || h || "—"; }
+`;
+}
+
 /** Captura o estado atual (HTML + configuração de cada gráfico) de tudo
  * dentro do container EXCETO o cabeçalho de filtros - isso vira um
  * "snapshot" independente que o arquivo exportado troca ao mudar o
- * filtro, sem precisar do servidor. Funções (formatarRotulo, callbacks
- * de tick) são preservadas como texto-fonte (.toString()) e
- * reconstituídas no arquivo exportado - todas são funções simples,
- * auto-contidas, sem depender de variável externa. */
+ * filtro, sem precisar do servidor.
+ *
+ * Os rótulos de dados (dataset.formatarRotulo) são resolvidos AGORA,
+ * enquanto ainda temos o app inteiro carregado (com formatarMoeda e
+ * qualquer outra variável que a função capture) - o resultado já pronto
+ * (texto final) é o que vai pro arquivo exportado, em vez do código-fonte
+ * da função. Isso evita o bug em que o arquivo exportado tentava reexecutar
+ * a função original e quebrava com "formatarMoeda is not defined" (os
+ * helpers do app principal não são levados pro arquivo exportado),
+ * deixando os gráficos sem rótulo/com aparência de dado vazio.
+ *
+ * Já as opções do gráfico (tooltips, ticks) podem ter funções com lógica
+ * mais complexa - essas são preservadas como texto-fonte via
+ * _serializarComFuncoes/_atlasReidratarFuncoes (ver mais abaixo) e alguns
+ * ajudantes comuns (formatarMoeda etc.) são levados junto pro arquivo
+ * exportado para que essas funções continuem funcionando lá também. */
 function _capturarSnapshotAtual(original) {
   const header = original.querySelector(".view-header");
   const partesResto = Array.from(original.children).filter((el) => el !== header);
@@ -197,13 +278,21 @@ function _capturarSnapshotAtual(original) {
       const dadosSerializaveis = JSON.parse(
         JSON.stringify(inst.config.data, (chave, valor) => (typeof valor === "function" ? undefined : valor))
       );
-      // recupera as funções que a serialização acima descartou (formatarRotulo por dataset)
+      // pré-calcula o TEXTO FINAL de cada rótulo agora (ver comentário acima da
+      // função) - o arquivo exportado só exibe esse texto, nunca reexecuta
+      // formatarRotulo sozinho.
       (inst.config.data.datasets || []).forEach((ds, i) => {
-        if (typeof ds.formatarRotulo === "function") dadosSerializaveis.datasets[i].formatarRotuloSrc = ds.formatarRotulo.toString();
+        if (typeof ds.formatarRotulo === "function") {
+          dadosSerializaveis.datasets[i].rotulos = (ds.data || []).map((valor) => {
+            try {
+              return ds.formatarRotulo(valor);
+            } catch (e) {
+              return null;
+            }
+          });
+        }
       });
-      const opcoesSerializaveis = JSON.parse(
-        JSON.stringify(inst.config.options || {}, (chave, valor) => (typeof valor === "function" ? undefined : valor))
-      );
+      const opcoesSerializaveis = _serializarComFuncoes(inst.config.options || {});
       graficos[c.id] = { type: inst.config.type, data: dadosSerializaveis, options: opcoesSerializaveis };
     })
   );
@@ -320,6 +409,8 @@ ${headerClone.outerHTML}
 <script>
 ${chartJsTexto}
 ${CODIGO_PLUGIN_ROTULOS}
+${CODIGO_REIDRATAR_FUNCOES}
+${_codigoAjudantesExportacao()}
 </script>
 <script>
 const ATLAS_SNAPSHOTS = ${JSON.stringify(snapshots)};
@@ -340,11 +431,9 @@ function atlasRenderizarSnapshot(chave) {
   Object.entries(snap.graficos).forEach(([canvasId, cfg]) => {
     const el = document.getElementById(canvasId);
     if (!el) return;
-    (cfg.data.datasets || []).forEach((ds) => {
-      if (ds.formatarRotuloSrc) { try { ds.formatarRotulo = eval("(" + ds.formatarRotuloSrc + ")"); } catch (e) {} }
-    });
+    const opcoes = _atlasReidratarFuncoes(cfg.options);
     try {
-      atlasChartsAtivos.push(new Chart(el, { type: cfg.type, data: cfg.data, options: cfg.options }));
+      atlasChartsAtivos.push(new Chart(el, { type: cfg.type, data: cfg.data, options: opcoes }));
     } catch (e) { console.error("Atlas: falha ao recriar gráfico exportado", canvasId, e); }
   });
 }
@@ -463,7 +552,7 @@ function corFarolAcuracia(pct) {
 // do Power BI. Convive com qualquer duplo clique que já existia nesse mesmo
 // gráfico (ex: abrir um modal com o detalhe) - são eventos diferentes
 // ("click" x "dblclick"), então o pop-up de sempre continua funcionando.
-function ativarCliqueParaFiltrar(chart, canvas, dados, extrairValor, idSelectFiltro) {
+function ativarCliqueParaFiltrar(chart, canvas, dados, extrairValor, idSelectFiltro, gerarResumoPonto) {
   // as funções de render são chamadas de novo a cada recarregamento (troca
   // de filtro) - sem este controle, cada chamada empilharia mais um
   // "addEventListener" no mesmo canvas, e um único clique acabaria
@@ -471,8 +560,15 @@ function ativarCliqueParaFiltrar(chart, canvas, dados, extrairValor, idSelectFil
   // chamadas antigas). Por isso o listener real só é registrado UMA VEZ por
   // canvas; toda vez que a tela recarrega, só atualiza a referência com
   // o gráfico/dados mais recentes, que é o que o clique de fato consulta.
+  //
+  // `gerarResumoPonto` (opcional) recebe (linhaClicada, valorExtraido) e
+  // devolve { titulo, resumo } - se fornecido, abre o pop-up de resumo
+  // operacional daquele ponto (ver abrirModalResumoPonto abaixo), mesmo
+  // quando o gráfico já estava nesse recorte (clicar de novo no mesmo
+  // ponto continua mostrando o resumo, a pedido do Maurício: "manter os
+  // pops ao clicar, mesmo que não seja habilitada uma ação direta").
   canvas.style.cursor = "pointer";
-  canvas._atlasClickFiltro = { chart, dados, extrairValor, idSelectFiltro };
+  canvas._atlasClickFiltro = { chart, dados, extrairValor, idSelectFiltro, gerarResumoPonto };
   if (canvas._atlasClickFiltroAtivo) return;
   canvas._atlasClickFiltroAtivo = true;
   canvas.addEventListener("click", (evt) => {
@@ -480,14 +576,50 @@ function ativarCliqueParaFiltrar(chart, canvas, dados, extrairValor, idSelectFil
     if (!ctxAtual || !ctxAtual.chart) return;
     const pontos = ctxAtual.chart.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
     if (!pontos.length) return;
-    const valor = ctxAtual.extrairValor(ctxAtual.dados[pontos[0].index]);
+    const linha = ctxAtual.dados[pontos[0].index];
+    const valor = ctxAtual.extrairValor(linha);
     if (valor == null) return;
     const select = document.getElementById(ctxAtual.idSelectFiltro);
-    if (!select || select.value === String(valor)) return; // já está nesse recorte
-    select.value = valor;
-    select.dispatchEvent(new Event("change"));
+    if (select && select.value !== String(valor)) {
+      select.value = valor;
+      select.dispatchEvent(new Event("change"));
+    }
+    if (typeof ctxAtual.gerarResumoPonto === "function") {
+      try {
+        const info = ctxAtual.gerarResumoPonto(linha, valor) || {};
+        if (info.resumo) abrirModalResumoPonto(info.titulo || String(valor), info.resumo);
+      } catch (e) {
+        console.error("Atlas: falha ao gerar o resumo do ponto clicado:", e);
+      }
+    }
   });
 }
+
+// ---------- pop-up genérico de "resumo operacional do ponto" (13/08/2026) ----------
+// Abre ao clicar num ponto/barra de qualquer gráfico com clique-para-filtrar
+// habilitado (ver ativarCliqueParaFiltrar acima) e no heatmap/ranking do Painel
+// de Divergências (ver filtrarPainelPorAlmoxarifado mais abaixo) - mostra um
+// resumo em texto corrido do que aconteceu naquele ponto específico. Fica
+// disponível mesmo quando o gráfico não tem nenhuma ação direta habilitada -
+// é só informativo, igual ao resumo executivo já usado em Mapeamento de
+// Passivos, só que por ponto clicado em vez de por KPI.
+let _textoResumoPontoAtual = "";
+function abrirModalResumoPonto(titulo, resumo) {
+  _textoResumoPontoAtual = resumo;
+  document.getElementById("modal-resumo-ponto-titulo").textContent = titulo;
+  document.getElementById("modal-resumo-ponto-corpo").innerHTML =
+    `<p class="hint" style="white-space:pre-line; line-height:1.6; margin:0">${resumo}</p>`;
+  document.getElementById("modal-resumo-ponto-overlay").classList.remove("hidden");
+}
+document.getElementById("btn-fechar-modal-resumo-ponto").addEventListener("click", () => {
+  document.getElementById("modal-resumo-ponto-overlay").classList.add("hidden");
+});
+document.getElementById("modal-resumo-ponto-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-resumo-ponto-overlay") document.getElementById("modal-resumo-ponto-overlay").classList.add("hidden");
+});
+document.getElementById("btn-narrar-resumo-ponto").addEventListener("click", () => {
+  if (_textoResumoPontoAtual) falarResumoModulo(_textoResumoPontoAtual);
+});
 
 // ---------- rótulos de dados nos gráficos (opt-in por dataset, via dataset.formatarRotulo) ----------
 if (window.Chart) {
@@ -884,6 +1016,17 @@ function renderHeatmap(dados) {
   const max = Math.max(1, ...dados.map((d) => d.quantidade));
   const valor = (a, h) => dados.find((d) => d.almoxarifado === a && d.hipotese === h)?.quantidade || 0;
 
+  // resumo operacional do almoxarifado clicado (texto corrido, pro pop-up) -
+  // mesma ideia do resumo de ponto dos gráficos Chart.js, mas o heatmap é
+  // HTML puro, então monta o texto na mão a partir dos mesmos `dados`.
+  const resumoAlmox = (a) => {
+    const linhas = dados.filter((d) => d.almoxarifado === a && d.quantidade > 0).sort((x, y) => y.quantidade - x.quantidade);
+    const total = linhas.reduce((s, d) => s + d.quantidade, 0);
+    if (!total) return `Nenhuma divergência registrada para o almoxarifado ${a} neste recorte.`;
+    const detalhe = linhas.map((d) => `${rotulo(d.hipotese)}: ${d.quantidade}`).join(", ");
+    return `O almoxarifado ${a} tem ${total} divergência${total === 1 ? "" : "s"} neste recorte, por hipótese — ${detalhe}.`;
+  };
+
   const html = almoxs
     .map((a) => {
       const cells = hipoteses
@@ -900,18 +1043,22 @@ function renderHeatmap(dados) {
   document.getElementById("heatmap").innerHTML = html || "<span style='color:var(--muted)'>Sem dados ainda.</span>";
 
   document.querySelectorAll("#heatmap [data-almox]").forEach((el) =>
-    el.addEventListener("click", () => filtrarPainelPorAlmoxarifado(el.dataset.almox))
+    el.addEventListener("click", () => filtrarPainelPorAlmoxarifado(el.dataset.almox, `Almoxarifado ${el.dataset.almox}`, resumoAlmox(el.dataset.almox)))
   );
 }
 
 // usado tanto pelo heatmap quanto pelo ranking de almoxarifados reincidentes
 // abaixo - clicar joga o valor no filtro de almoxarifado do próprio painel
-// e recarrega (mesma lógica de cross-filter dos gráficos Chart.js).
-function filtrarPainelPorAlmoxarifado(almoxarifado) {
+// e recarrega (mesma lógica de cross-filter dos gráficos Chart.js). Quando
+// um `resumo` é passado, também abre o pop-up de resumo operacional daquele
+// almoxarifado (mesmo clicando de novo no que já está selecionado).
+function filtrarPainelPorAlmoxarifado(almoxarifado, tituloResumo, resumo) {
   const select = document.getElementById("filtro-almoxarifado");
-  if (!select || select.value === almoxarifado) return;
-  select.value = almoxarifado;
-  select.dispatchEvent(new Event("change"));
+  if (select && select.value !== almoxarifado) {
+    select.value = almoxarifado;
+    select.dispatchEvent(new Event("change"));
+  }
+  if (resumo) abrirModalResumoPonto(tituloResumo || `Almoxarifado ${almoxarifado}`, resumo);
 }
 
 function mixColor(intensidade) {
@@ -928,9 +1075,11 @@ function renderRanking(rank) {
   document.getElementById("rank-almox").innerHTML = rank.top_almoxarifados
     .map((r) => `<li data-almox="${r.almoxarifado}" style="cursor:pointer" title="Clique pra filtrar por este almoxarifado">${r.almoxarifado} <span class="qtd">${r.quantidade}</span></li>`)
     .join("") || "<li>Sem dados</li>";
-  document.querySelectorAll("#rank-almox li[data-almox]").forEach((li) =>
-    li.addEventListener("click", () => filtrarPainelPorAlmoxarifado(li.dataset.almox))
-  );
+  document.querySelectorAll("#rank-almox li[data-almox]").forEach((li) => {
+    const r = rank.top_almoxarifados.find((x) => x.almoxarifado === li.dataset.almox);
+    const resumo = r ? `O almoxarifado ${r.almoxarifado} aparece no ranking de reincidência com ${r.quantidade} ocorrência${r.quantidade === 1 ? "" : "s"} neste recorte.` : null;
+    li.addEventListener("click", () => filtrarPainelPorAlmoxarifado(li.dataset.almox, `Almoxarifado ${li.dataset.almox}`, resumo));
+  });
 }
 
 function renderTop(top) {
@@ -1946,7 +2095,10 @@ function renderApPorAlmoxarifado(dados) {
     },
   });
 
-  ativarCliqueParaFiltrar(apChartAlmox3, ctx, dados, (d) => d.almoxarifado, "ap-filtro-almoxarifado");
+  ativarCliqueParaFiltrar(apChartAlmox3, ctx, dados, (d) => d.almoxarifado, "ap-filtro-almoxarifado", (d) => ({
+    titulo: `Acurácia Ponderada — ${d.almoxarifado}`,
+    resumo: `No almoxarifado ${d.almoxarifado}, a acurácia item a item foi de ${d.item_a_item_pct}%, o IAQ (ponderado por quantidade) foi de ${d.iaq_pct}% e o IAP (ponderado por valor) foi de ${d.iap_pct != null ? d.iap_pct + "%" : "sem dado"}.`,
+  }));
 }
 
 const AP_MOM_ROTULOS = { iap_pct: "IAP (valor)", iaq_pct: "IAQ (quantidade)", item_a_item_pct: "Item a item" };
@@ -2133,7 +2285,10 @@ function renderApEvolucao(dados) {
     },
   });
 
-  ativarCliqueParaFiltrar(apChartEvolucao, ctx, dados, (d) => d.mes, "ap-filtro-mes");
+  ativarCliqueParaFiltrar(apChartEvolucao, ctx, dados, (d) => d.mes, "ap-filtro-mes", (d) => ({
+    titulo: `Acurácia Ponderada — ${d.mes}`,
+    resumo: `Em ${d.mes}, a acurácia item a item foi de ${d.item_a_item_pct}%, o IAQ foi de ${d.iaq_pct}% e o IAP foi de ${d.iap_pct != null ? d.iap_pct + "%" : "sem dado nesse mês"}.`,
+  }));
 }
 
 // ---------- painel de inventário (dashboard do módulo de fechamento) ----------
@@ -2240,7 +2395,10 @@ function renderFdPorAlmox(dados) {
     },
   });
 
-  ativarCliqueParaFiltrar(fdChartAlmox, ctx, dados, (d) => d.almoxarifado, "fd-filtro-almoxarifado");
+  ativarCliqueParaFiltrar(fdChartAlmox, ctx, dados, (d) => d.almoxarifado, "fd-filtro-almoxarifado", (d) => ({
+    titulo: `Painel de Inventário — ${d.almoxarifado}`,
+    resumo: `O almoxarifado ${d.almoxarifado} fechou o período com ${d.acuracia_pct}% de acurácia.${document.getElementById("fd-filtro-mes")?.value ? " Duplo clique nesta mesma barra abre o fechamento correspondente." : " Selecione um mês específico (em vez de \"Todos os meses\") e dê duplo clique nesta barra pra abrir o fechamento correspondente."}`,
+  }));
 
   ctx.ondblclick = async (evt) => {
     const pontos = fdChartAlmox.getElementsAtEventForMode(evt, "index", { intersect: true }, true);
@@ -2291,7 +2449,10 @@ function renderFdEvolucaoMensal(dados) {
     },
   });
 
-  ativarCliqueParaFiltrar(fdChartEvolucaoMensal, ctx, dados, (d) => d.mes, "fd-filtro-mes");
+  ativarCliqueParaFiltrar(fdChartEvolucaoMensal, ctx, dados, (d) => d.mes, "fd-filtro-mes", (d) => ({
+    titulo: `Painel de Inventário — ${d.mes}`,
+    resumo: `Em ${d.mes}, a acurácia geral foi de ${d.acuracia_pct}%, com ${d.qtd_fechamentos_realizados} fechamento(s) realizado(s) em ${d.qtd_almoxarifados_avaliados} almoxarifado(s) avaliado(s).${d.variacao_mom_pp != null ? ` Variação em relação ao mês anterior: ${d.variacao_mom_pp > 0 ? "+" : ""}${d.variacao_mom_pp} pontos percentuais.` : ""}`,
+  }));
 }
 
 function renderFdRankingFinanceiro(ranking) {

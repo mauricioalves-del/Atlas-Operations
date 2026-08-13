@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=50">
+<link rel="stylesheet" href="style.css?v=64">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -54,9 +54,12 @@
       <span class="brand-name">Atlas</span>
     </div>
     <nav class="rail-nav">
-      <button class="rail-item active" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
+      <button class="rail-item active" data-view="hub"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 3"/></svg></span><span class="rail-label">Início</span></button>
+      <button class="rail-item" data-view="dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span><span class="rail-label">Painel</span></button>
       <button class="rail-item" data-view="lista"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="rail-label">Divergências</span></button>
       <button class="rail-item" data-view="relatorio-baixa"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1"/><path d="M3 8l9 6 9-6"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8"/></svg></span><span class="rail-label">Relatório de Baixa</span></button>
+      <button class="rail-item" data-view="mapeamento-passivos"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8a6 6 0 0 1-6.7 6.7"/><path d="M13 2.05A10 10 0 1 0 21.95 11H13z"/></svg></span><span class="rail-label">Mapeamento de Passivos</span></button>
+      <button class="rail-item" data-view="shelf-life"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span><span class="rail-label">Shelf Life</span></button>
       <button class="rail-item" data-view="cobertura-conferencia"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span class="rail-label">Cobertura de Conferência</span></button>
       <button class="rail-item" data-view="importar"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="rail-label">Importar</span></button>
       <button class="rail-item" data-view="fechamento-dashboard"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="rail-label">Painel Inventário</span></button>
@@ -83,7 +86,48 @@
 
   <main class="content">
 
-    <section id="view-dashboard" class="view">
+    <section id="view-hub" class="view">
+      <div class="hub-wrap">
+        <div class="hub-rings">
+          <div class="hub-ring hub-ring-1"></div>
+          <div class="hub-ring hub-ring-2"></div>
+          <div class="hub-ring hub-ring-3"></div>
+        </div>
+        <div class="hub-center">
+          <img src="assets/logo.png" alt="Atlas" class="hub-logo">
+          <div class="hub-title">ATLAS</div>
+          <button id="hub-mic-btn" class="hub-mic-btn" title='Escuta contínua já está ativa - diga "Atlas, [módulo]". Clique pra desligar.'>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
+        </div>
+        <div class="hub-nodes" id="hub-nodes"></div>
+      </div>
+      <p id="hub-voice-status" class="hub-voice-status"></p>
+      <p class="hint" style="text-align:center; margin-top:4px">
+        Clique num módulo pra abrir, ou diga em qualquer tela "Atlas, [nome do módulo]" — ex: "Atlas, cobertura de conferência". O microfone já escuta sozinho; clique nele só se quiser desligar.
+      </p>
+
+      <div class="panel" id="painel-mapa-demandas" style="max-width:1100px; margin:28px auto 0">
+        <div class="panel-title-row">
+          <h2>Mapa de Demandas de Gestão</h2>
+          <span class="hint" style="margin:0">Atualizado agora, ao entrar nesta tela</span>
+        </div>
+        <div class="kpi-row" id="md-kpi-row"></div>
+        <div class="grid-2" style="margin-top:18px; gap:24px">
+          <div>
+            <h3 style="font-family:var(--display); font-size:14px; margin-bottom:10px">Baixas operacionais pendentes (passivo em aberto)</h3>
+            <div id="md-baixas-por-motivo"></div>
+          </div>
+          <div>
+            <h3 style="font-family:var(--display); font-size:14px; margin-bottom:10px">Risco de obsolescência (baixo giro de estoque)</h3>
+            <div id="md-obsolescencia-farol"></div>
+          </div>
+        </div>
+        <div id="md-shelf-life" style="margin-top:6px"></div>
+      </div>
+    </section>
+
+    <section id="view-dashboard" class="view hidden">
       <header class="view-header">
         <h1>Painel de Divergências</h1>
         <div class="filtros">
@@ -100,6 +144,8 @@
           <button id="btn-exportar-html-dashboard" class="btn-secundario">⭳ Exportar HTML</button>
         </div>
       </header>
+
+      <div class="panel" id="dashboard-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
 
       <div class="kpi-row" id="kpi-row"></div>
 
@@ -174,6 +220,7 @@
             <option value="180">Últimos 180 dias</option>
             <option value="365">Últimos 365 dias</option>
           </select>
+          <button id="btn-exportar-html-cobertura-conferencia" class="btn-secundario">⭳ Exportar HTML</button>
         </div>
       </header>
       <p class="hint">
@@ -181,6 +228,8 @@
         não do estoque em si — um almoxarifado sem furos pode ter divergências reais; um almoxarifado com furo grande pode estar
         escondendo uma ruptura que simplesmente nunca foi contada, porque ninguém checou naquele período.
       </p>
+
+      <div class="panel" id="cc-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
 
       <div class="kpi-row" id="cc-kpi-row"></div>
 
@@ -254,7 +303,8 @@
           <button id="btn-sincronizar-lovable" class="btn-secundario">🔄 Sincronizar agora</button>
         </div>
       </header>
-      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso (📦⏳) na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable (por exemplo, depois de aprovar ou reprovar algo lá).</p>
+      <p class="hint" id="rb-sync-msg" style="min-height:16px"></p>
+      <p class="hint">Baixas operacionais (avaria, vencimento, descarte, degustação e outras) importadas do sistema de baixas (Lovable). As <strong>Aprovadas</strong> já foram cruzadas contra as divergências abertas — quando batem, resolvem a divergência sozinhas; quando não, ficam "aguardando divergência". As <strong>Pendentes</strong> ainda não foram decididas lá e aparecem como aviso na tela de Divergências quando batem com um caso aberto. Clique em <strong>Sincronizar agora</strong> para buscar o estado mais recente do Lovable. Se der erro de conexão, tem uma planilha de reserva na tela <strong><a href="#" id="rb-link-importar">Importar</a></strong>.</p>
 
       <div class="kpi-row" id="rb-kpi-row"></div>
 
@@ -265,6 +315,104 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="view-mapeamento-passivos" class="view hidden">
+      <header class="view-header">
+        <h1>Mapeamento de Passivos</h1>
+      </header>
+      <p class="hint">
+        Visão gerencial de todas as baixas operacionais já trazidas do Lovable. Clique em qualquer fatia, coluna, ponto da linha ou linha de tabela pra ver os produtos daquela categoria.
+      </p>
+
+      <div class="panel" id="mp-panel-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #f9a825 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Resumo Executivo — Passivos &amp; Resultado de Inventário Acumulado</h2>
+          <button id="btn-narrar-resumo-executivo-mp" class="btn-secundario" title='Atlas narra em voz alta o que ocorreu nesse período'>🔊 Narrar</button>
+        </div>
+        <p class="panel-sub">
+          Resumo operacional das ações, filtrável por Data/Mês/Ano, Almoxarifado e Motivo. Clique duas vezes em
+          qualquer um dos dois cartões pra abrir o resumo executivo narrado dos dois juntos (com a opção de narração em voz também lá dentro).
+        </p>
+        <div class="filtros" style="margin-bottom:16px">
+          <select id="mp-filtro-ano" class="select-filtro"><option value="">Todos os anos</option></select>
+          <select id="mp-filtro-mes" class="select-filtro"><option value="">Todos os meses</option></select>
+          <input id="mp-filtro-data-inicio" type="date" class="select-filtro" title="Data início">
+          <input id="mp-filtro-data-fim" type="date" class="select-filtro" title="Data fim">
+          <select id="mp-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <select id="mp-filtro-motivo" class="select-filtro"><option value="">Todos os motivos</option></select>
+          <button id="btn-limpar-filtros-mp" class="btn-secundario">Limpar filtros</button>
+          <button id="btn-exportar-html-mapeamento-passivos" class="btn-secundario">⭳ Exportar HTML</button>
+        </div>
+        <div class="kpi-row-resumo" id="mp-kpi-row-resumo"></div>
+      </div>
+
+      <div class="panel" id="mp-panel-principal" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 10%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Evolução Mensal (MoM) — Análise Principal</h2>
+          <span class="hint" style="margin:0">Colunas empilhadas por mês: resultado do fluxo de inventário (valor absoluto) + passivos do período · Linha em destaque: curva de evolução (valor acumulado das duas fontes)</span>
+        </div>
+        <p class="panel-sub">Clique num segmento da coluna pra ver os produtos daquela fonte naquele mês</p>
+        <div style="height:340px"><canvas id="mp-chart-evolucao-mensal"></canvas></div>
+      </div>
+
+      <div class="panel" id="mp-panel-fluxo-inventario" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #4caf50 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>Fluxo de Inventário — Entradas x Saídas x Resultado (Todos os Inventários)</h2>
+          <span class="hint" style="margin:0">Total de Entradas − Total de Saídas do mês = Resultado Total do Mês, somando todos os almoxarifados/inventários</span>
+        </div>
+        <p class="panel-sub">
+          Fonte: tabela oficial de ajustes já conciliados (não o fechamento bruto — esse inclui item sinalizado como
+          divergente que nunca chegou a ser ajustado de fato). Barras: entradas (sobra) e saídas (falta) em R$ · Linha:
+          resultado do mês. Clique numa barra ou num ponto pra ver os itens daquele mês.
+        </p>
+        <div style="height:300px"><canvas id="mp-chart-fluxo-inventario"></canvas></div>
+      </div>
+
+      <div class="panel">
+        <h2>Resumo por Motivo — Quantidade e Custo Total</h2>
+        <p class="panel-sub">Sem contar Inventário Mensal (esse fluxo já tem o painel dedicado acima) · Clique numa linha pra ver as baixas daquele motivo</p>
+        <table class="tabela" id="mp-tabela-motivos-resumo">
+          <thead><tr><th>Motivo</th><th>Quantidade</th><th>Custo Total</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Principais Motivos de Baixa Mapeados — Mês a Mês</h2>
+        <p class="panel-sub">Sem contar Inventário Mensal (esse fluxo já tem o painel dedicado acima) · Clique num segmento pra ver as baixas daquele motivo no mês</p>
+        <div style="height:320px"><canvas id="mp-chart-motivos-mensal"></canvas></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Top 10 Passivos Mais Recorrentes</h2>
+          <p class="panel-sub">Por quantidade de baixas aprovadas — clique numa linha</p>
+          <table class="tabela" id="mp-tabela-recorrentes">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h2>Top 10 Produtos — Maior Impacto Financeiro</h2>
+          <p class="panel-sub">Por valor total baixado — clique numa linha</p>
+          <table class="tabela" id="mp-tabela-impacto-financeiro">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Ocorrências</th><th>Valor total</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Justificativas de Ajustes de Inventário</h2>
+        <p class="panel-sub">Justificativas registradas a partir do fluxo de inventário (aba "Fluxo de Inventário" acima) — clique numa linha para reabrir e editar</p>
+        <div class="tabela-scroll">
+          <table class="tabela" id="mp-tabela-justificativas">
+            <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -396,6 +544,44 @@
           <thead><tr><th>Data</th><th>Tipo</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Divergências</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+
+      <div class="panel panel-importar" id="mp-panel-importar-ajustes">
+        <h2>Conciliação Oficial de Inventário (Ace4)</h2>
+        <p class="hint">
+          Planilha oficial de ajustes já conciliados (aba <code>Estoque</code> de "Inventários.xlsx") — a fonte do painel de
+          Fluxo de Inventário do Mapeamento de Passivos. Suba aqui o arquivo mais recente a cada conciliação nova. A coluna
+          "Inventário" da planilha decide o que conta: <strong>Sim</strong> = ajuste de inventário real; <strong>Não</strong>
+          = baixa de passivo que só passou por ali (já mapeada nas Baixas, não entra aqui de novo). A partir de jul/2026,
+          todo lançamento de inventário já conta como ajuste automaticamente, mesmo sem a coluna preenchida — baixa de
+          passivo agora vem só por nota fiscal. As colunas Grupo/Ano/Obs/Inventário/Mês/Mês-Ano são opcionais: se a
+          planilha futura não trouxer alguma delas, a importação continua normalmente, sem perder informação.
+        </p>
+        <input type="file" id="mp-input-arquivo-ajustes" accept=".xlsx,.xlsm">
+        <button id="mp-btn-importar-ajustes" class="btn-primario">Importar conciliação</button>
+        <pre id="mp-resultado-importacao-ajustes" class="resultado-importacao"></pre>
+
+        <h2 style="margin-top:22px">Importações anteriores</h2>
+        <p class="hint">Cada conciliação enviada fica registrada como um lote separado. Excluir um lote remove só as linhas dele, sem afetar as demais importações.</p>
+        <table class="tabela" id="tabela-lotes-ajuste-inventario">
+          <thead><tr><th>Data</th><th>Arquivo</th><th>Usuário</th><th>Linhas</th><th>Ajuste de inventário</th><th>Valor</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel panel-importar" id="rb-panel-reconciliar">
+        <h2>Baixas operacionais (Lovable) — planilha de reserva</h2>
+        <p class="hint">
+          Só use isto se o botão <strong>"Sincronizar agora"</strong> na tela Relatório de Baixa der erro de conexão. Suba
+          aqui o export <strong>"Baixar relatório completo"</strong> da tela Baixas Operacionais do Lovable (aba
+          "Histórico"). Cada linha da planilha é comparada com o que já existe aqui pela mesma baixa (SKU, almoxarifado,
+          motivo, quantidade, valor e data) — se a baixa já existe e só o status mudou (ex: foi aprovada), o status é
+          atualizado no lugar; só entra linha nova quando a baixa realmente não existia ainda. Nada é duplicado, e pode
+          subir a mesma planilha de novo quantas vezes quiser.
+        </p>
+        <input type="file" id="rb-input-arquivo-reconciliar" accept=".xlsx,.xlsm">
+        <button id="rb-btn-reconciliar" class="btn-primario">Reconciliar planilha</button>
+        <pre id="rb-resultado-reconciliar" class="resultado-importacao"></pre>
       </div>
     </section>
 
@@ -575,6 +761,8 @@
       </header>
       <p class="hint">Item a item trata toda divergência como "1 erro", igual, pequena ou grande. Os dois indicadores abaixo pesam pelo tamanho real do impacto — quantidade (IAQ) e valor financeiro (IAP).</p>
 
+      <div class="panel" id="ap-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
+
       <div class="kpi-row" id="ap-kpi-row"></div>
 
       <div class="panel">
@@ -649,6 +837,7 @@
             <option value="Concluido">Concluído</option>
             <option value="Cancelado">Cancelado</option>
           </select>
+          <button id="btn-exportar-html-compras" class="btn-secundario">⭳ Exportar HTML</button>
         </div>
       </header>
       <p class="hint">
@@ -656,6 +845,8 @@
         Registrando o pedido e os recebimentos aqui, o motor de investigação passa a reconhecer essa falta como <strong>Pedido de Compra Pendente</strong>
         em vez de perda real — em Movimentados e em Fechamento de Inventário, automaticamente.
       </p>
+
+      <div class="panel" id="cp-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
 
       <div class="kpi-row" id="cp-kpi-row"></div>
 
@@ -686,6 +877,71 @@
       </div>
     </section>
 
+    <section id="view-shelf-life" class="view hidden">
+      <header class="view-header">
+        <h1>Shelf Life — Risco de Validade</h1>
+        <div class="filtros">
+          <select id="sl-filtro-farol" class="select-filtro">
+            <option value="">Todos os faróis</option>
+            <option value="vencido">Vencidos</option>
+            <option value="30">Risco 30 dias</option>
+            <option value="60">Risco 60 dias</option>
+            <option value="90">Risco 90 dias</option>
+            <option value="sem_validade">Pendente de validade</option>
+          </select>
+          <select id="sl-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <input type="text" id="sl-filtro-busca" class="select-filtro" placeholder="Buscar SKU, descrição ou lote...">
+        </div>
+      </header>
+      <p class="hint">
+        Farol calculado a partir da validade de cada lote cadastrado aqui no Atlas (importação da planilha do sistema interno e/ou cadastro manual) —
+        substitui a dependência do módulo Shelf Life do Lovable, ao qual o Atlas não tem acesso direto de leitura.
+      </p>
+
+      <div class="kpi-row" id="sl-kpi-row"></div>
+
+      <div class="panel">
+        <h2>Novo lote</h2>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr)">
+          <div><label>SKU</label><input id="sl-sku" type="text"></div>
+          <div><label>Descrição</label><input id="sl-descricao" type="text"></div>
+          <div><label>Lote</label><input id="sl-lote" type="text"></div>
+          <div><label>Almoxarifado</label><select id="sl-almoxarifado"></select></div>
+        </div>
+        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr); margin-top:10px">
+          <div><label>Quantidade</label><input id="sl-quantidade" type="number" step="0.0001"></div>
+          <div><label>Unidade</label><input id="sl-unidade" type="text"></div>
+          <div><label>Data de validade</label><input id="sl-data-validade" type="date"></div>
+          <div><label>Custo unitário (opcional)</label><input id="sl-custo" type="number" step="0.0001"></div>
+        </div>
+        <button id="btn-criar-lote-shelf-life" class="btn-primario" style="margin-top:14px">Adicionar lote</button>
+        <p id="sl-msg" class="hint"></p>
+      </div>
+
+      <div class="panel panel-importar">
+        <h2>Importar planilha do sistema (Lote_Sistema.xlsx)</h2>
+        <p class="hint">
+          Aba <code>Lote_Sistema</code> com colunas <code>Ativo, TipoMaterial, Id_produto, descricao, um, Origem, Qtd, Lote, Dt_Validade, Unidade, Peso_Kg, Custo_Vlr, EAN</code> —
+          igual ao arquivo exportado direto do sistema. Reimportar atualiza os lotes já conhecidos (por SKU + Lote + Almoxarifado) sem duplicar, e não apaga lotes cadastrados manualmente.
+        </p>
+        <input type="file" id="sl-input-arquivo" accept=".xlsx,.xlsm">
+        <div class="wrap-almoxarifado" style="display:inline-block; margin-left:10px">
+          <label for="sl-input-aba">Aba</label>
+          <input type="text" id="sl-input-aba" value="Lote_Sistema" style="min-width:160px">
+        </div>
+        <button id="btn-importar-shelf-life" class="btn-primario">Importar planilha</button>
+        <pre id="sl-resultado-importacao" class="resultado-importacao"></pre>
+      </div>
+
+      <div class="panel">
+        <h2>Lotes em risco</h2>
+        <table class="tabela" id="tabela-shelf-life">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Almoxarifado</th><th>Quantidade</th><th>Validade</th><th>Dias</th><th>Valor</th><th>Farol</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="view-fechamento-dashboard" class="view hidden">
       <header class="view-header">
         <h1>Painel de Inventário</h1>
@@ -695,6 +951,8 @@
           <button id="btn-exportar-html-fechamento-dashboard" class="btn-secundario">⭳ Exportar HTML</button>
         </div>
       </header>
+
+      <div class="panel" id="fd-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
 
       <div class="kpi-row" id="fd-kpi-row"></div>
 
@@ -772,8 +1030,11 @@
             <option value="Concluida">Concluída</option>
             <option value="Cancelada">Cancelada</option>
           </select>
+          <button id="btn-exportar-html-pos-inventario" class="btn-secundario">⭳ Exportar HTML</button>
         </div>
       </header>
+
+      <div class="panel" id="pi-resumo-executivo" style="border:1px solid var(--accent, #5b75ac); background:linear-gradient(180deg, color-mix(in srgb, #5b75ac 8%, var(--panel)) 0%, var(--panel) 100%)"></div>
 
       <div class="panel">
         <h2>Nova ação de acompanhamento</h2>
@@ -1020,6 +1281,133 @@
   </div>
 </div>
 
-<script src="app.js?v=51"></script>
+<div id="modal-passivos-itens-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(1000px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-passivos-itens-titulo">Produtos</h2>
+      <button id="btn-fechar-modal-passivos-itens" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" id="modal-passivos-itens-resumo" style="margin-bottom:14px"></p>
+      <table class="tabela" id="tabela-modal-passivos-itens">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Motivo</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Data</th><th>Divergência</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="modal-fluxo-inventario-itens-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(1180px, 96vw)">
+    <div class="modal-header">
+      <h2 id="modal-fluxo-inventario-itens-titulo">Itens do fluxo de inventário</h2>
+      <button id="btn-fechar-modal-fluxo-inventario-itens" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" id="modal-fluxo-inventario-itens-resumo" style="margin-bottom:14px"></p>
+      <p class="hint" style="margin-bottom:14px">Clique numa linha para justificar o ajuste e registrar a solução aplicada.</p>
+      <div class="tabela-scroll">
+        <table class="tabela" id="tabela-modal-fluxo-inventario-itens">
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Divergência</th><th>Direção</th><th>Valor</th><th>Data</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-resumo-executivo-mp-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(760px, 94vw)">
+    <div class="modal-header">
+      <h2>Resumo Executivo — Passivos &amp; Resultado de Inventário Acumulado</h2>
+      <div style="display:flex; gap:8px">
+        <button id="btn-narrar-resumo-executivo-mp-modal" class="btn-secundario" title='Atlas narra em voz alta o que ocorreu nesse período'>🔊 Narrar</button>
+        <button id="btn-fechar-modal-resumo-executivo-mp" class="btn-secundario">Fechar ✕</button>
+      </div>
+    </div>
+    <div style="padding:24px" id="modal-resumo-executivo-mp-corpo"></div>
+  </div>
+</div>
+
+<!-- Pop-up genérico (13/08/2026): abre ao clicar num ponto/barra de QUALQUER gráfico
+     com clique-para-filtrar habilitado (ver ativarCliqueParaFiltrar em app.js) - mostra
+     um resumo operacional daquele ponto específico, mesmo quando não existe nenhuma
+     ação direta disponível pra aquele gráfico (só informativo). -->
+<div id="modal-resumo-ponto-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(560px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-resumo-ponto-titulo">Resumo do ponto</h2>
+      <div style="display:flex; gap:8px">
+        <button id="btn-narrar-resumo-ponto" class="btn-secundario" title="Atlas narra em voz alta este resumo">🔊 Narrar</button>
+        <button id="btn-fechar-modal-resumo-ponto" class="btn-secundario">Fechar ✕</button>
+      </div>
+    </div>
+    <div style="padding:24px" id="modal-resumo-ponto-corpo"></div>
+  </div>
+</div>
+
+<div id="modal-justificativa-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2 id="modal-justificativa-titulo">Justificativa do ajuste</h2>
+      <button id="btn-fechar-modal-justificativa" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-coluna">
+        <label>Justificativa (por que esse ajuste aconteceu)</label>
+        <textarea id="modal-justificativa-texto" rows="3"></textarea>
+        <label>Solução aplicada</label>
+        <textarea id="modal-justificativa-solucao" rows="2"></textarea>
+        <div class="form-cadastro" style="grid-template-columns:1fr 1fr; gap:12px">
+          <div><label>Responsável</label><input id="modal-justificativa-responsavel" type="text"></div>
+          <div><label>Prazo</label><input id="modal-justificativa-prazo" type="date"></div>
+        </div>
+        <label>Status</label>
+        <select id="modal-justificativa-status">
+          <option value="Pendente">Pendente</option>
+          <option value="Em_Andamento">Em andamento</option>
+          <option value="Concluida">Concluída</option>
+          <option value="Cancelada">Cancelada</option>
+        </select>
+
+        <label style="margin-top:16px">Checklist</label>
+        <div id="modal-justificativa-checklist-itens"></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <input id="modal-justificativa-checklist-novo" type="text" placeholder="Adicionar item ao checklist...">
+          <button id="btn-add-checklist-justificativa" class="btn-secundario">Adicionar</button>
+        </div>
+
+        <button id="btn-salvar-modal-justificativa" class="btn-primario" style="margin-top:18px">Salvar</button>
+      </div>
+      <div class="modal-coluna modal-coluna-lateral">
+        <h3>Acompanhamento do item</h3>
+        <div id="modal-justificativa-acompanhamento-kpis" class="kpi-row-modal"></div>
+        <canvas id="modal-justificativa-chart-historico" height="140"></canvas>
+        <div id="modal-justificativa-linha-do-tempo"></div>
+
+        <h3 style="margin-top:20px">Qtd. Sistema × Qtd. Contagem × Diferença</h3>
+        <canvas id="modal-justificativa-chart-comparativo" height="140"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-painel-periodo-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(920px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-painel-periodo-titulo">Itens divergentes</h2>
+      <button id="btn-fechar-modal-painel-periodo" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <p class="hint" style="margin-bottom:14px">Linhas com "Ver" abrem a investigação daquela divergência. Casos marcados "Histórico resolvido" já foram encerrados antes de existir uma divergência nova aqui - não têm mais investigação em aberto.</p>
+      <table class="tabela" id="tabela-modal-painel-periodo">
+        <thead><tr><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th><th>Valor</th><th>Hipótese</th><th>Status</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=70"></script>
 </body>
 </html>
