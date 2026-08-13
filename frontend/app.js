@@ -5437,27 +5437,60 @@ function prepararTextoParaNarracao(texto) {
   return texto.replace(/R\$\s?(-?\d+(?:[.,]\d+)*)/g, (_match, numero) => _valorMonetarioExtenso(numero));
 }
 
+// (13/08/2026) "voz mais robótica": quebra o texto em pedaços curtos (por
+// vírgula/ponto/ponto-e-vírgula/travessão, sempre que vier seguido de
+// espaço) e fala cada pedaço como uma frase SEPARADA, em sequência. O
+// SpeechSynthesisUtterance não dá nenhum controle sobre a entonação
+// (prosódia) DENTRO de uma fala longa - isso fica por conta do motor de voz
+// do navegador, que naturalmente arredonda a curva melódica de uma frase
+// inteira, soando "humano" demais mesmo com pitch baixo. Falando pedaço por
+// pedaço, cada trecho sai com entonação mais "reta"/segmentada (sem a
+// melodia de uma frase inteira), e a pausa curta entre eles reforça a
+// cadência de robô lendo uma lista, em vez de alguém contando uma história.
+// Evita quebrar em hífen simples de propósito (ex: "CD-01", "pós-inventário"
+// não podem virar dois pedaços por engano).
+function _dividirEmPedacosParaFala(texto) {
+  return texto
+    .split(/(?<=[.,;:—])\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
 function falarResumoModulo(texto) {
   if (!("speechSynthesis" in window)) return;
   try {
     window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
-    const fala = new SpeechSynthesisUtterance(prepararTextoParaNarracao(texto));
-    fala.lang = "pt-BR";
-    // (13/08/2026) "rate" é respeitado por praticamente todas as vozes -
-    // já "pitch" costuma ser IGNORADO pelo Chrome nas vozes de rede do
-    // Google (a mais comum de existir em português) - por isso o ajuste
-    // de tom sozinho não bastava pra sair do clima "Exterminador". Cadência
-    // um pouco mais lenta e composta (rate < 1), tom BEM mais grave (pitch
-    // 0.75 - o mínimo que ainda soa natural sem virar caricatura; só tem
-    // efeito de verdade quando a voz escolhida for uma voz LOCAL do sistema,
-    // por isso _atlasEscolherVoz() acima prioriza achar uma - ver o aviso no
-    // console (F12) se a voz do seu navegador for só de rede) - clima de
-    // mordomo educado e grave, não de robô apressado.
-    fala.rate = 0.9;
-    fala.pitch = 0.75;
     const voz = _atlasEscolherVoz();
-    if (voz) fala.voice = voz;
-    window.speechSynthesis.speak(fala);
+    const pedacos = _dividirEmPedacosParaFala(prepararTextoParaNarracao(texto));
+    if (!pedacos.length) return;
+
+    let indice = 0;
+    function falarProximoPedaco() {
+      if (indice >= pedacos.length) return;
+      const fala = new SpeechSynthesisUtterance(pedacos[indice]);
+      fala.lang = "pt-BR";
+      // "rate" é respeitado por praticamente todas as vozes - já "pitch"
+      // costuma ser IGNORADO pelo Chrome nas vozes de rede do Google (a mais
+      // comum de existir em português), por isso _atlasEscolherVoz() acima
+      // prioriza achar uma voz LOCAL do sistema (só nelas o pitch baixo
+      // funciona de verdade - ver aviso no console/F12 se a voz do seu
+      // navegador for só de rede). Cadência mais firme/constante (rate 1, em
+      // vez do "mordomo lento" de antes) + tom BEM mais grave (pitch 0.6) -
+      // clima de robô, não de mordomo educado.
+      fala.rate = 1.0;
+      fala.pitch = 0.6;
+      if (voz) fala.voice = voz;
+      fala.onend = () => {
+        indice++;
+        setTimeout(falarProximoPedaco, 80); // pausa curta entre pedaços - reforça a cadência mecânica/segmentada
+      };
+      fala.onerror = () => {
+        indice++;
+        falarProximoPedaco();
+      };
+      window.speechSynthesis.speak(fala);
+    }
+    falarProximoPedaco();
   } catch (e) {
     console.warn("Atlas: não consegui falar o resumo do módulo.", e);
   }
