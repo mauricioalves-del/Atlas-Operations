@@ -5456,17 +5456,119 @@ function _dividirEmPedacosParaFala(texto) {
     .filter(Boolean);
 }
 
+// ---------- efeitos sonoros "tecnológicos" (13/08/2026) ----------
+// Dois efeitos pedidos: um "pensamento tecnológico" (bipe de escaneamento
+// antes de falar) e um eco. Os dois são sintetizados na hora via Web Audio
+// API - sem precisar de nenhum arquivo .mp3/.wav - e o eco é um efeito de
+// áudio DE VERDADE (delay com realimentação, não um truque visual).
+//
+// IMPORTANTE - por que o eco não é na VOZ em si: o SpeechSynthesis do
+// navegador (usado pra falar os resumos) não expõe o áudio que produz pra
+// nenhuma API - não tem como pegar esse som e passar por um efeito de eco/
+// reverb, porque o navegador nunca entrega esse fluxo de áudio pra gente,
+// só toca ele direto na saída de som. Por isso o eco aqui é aplicado a um
+// SOM PRÓPRIO (um "tom de confirmação" tocado no fim da narração) em vez de
+// ecoar as palavras faladas - tecnicamente honesto e ainda dá o clima
+// desejado de "eco tecnológico" encerrando a fala. Pra ecoar a voz de
+// verdade, a fala precisaria ser gerada no servidor (arquivo de áudio) em
+// vez do navegador falar sozinho - mesma limitação já conversada sobre
+// trocar a voz.
+let _atlasAudioCtx = null;
+function _obterAudioCtx() {
+  const AudioContextClasse = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClasse) return null;
+  if (!_atlasAudioCtx) _atlasAudioCtx = new AudioContextClasse();
+  if (_atlasAudioCtx.state === "suspended") _atlasAudioCtx.resume().catch(() => {});
+  return _atlasAudioCtx;
+}
+
+// monta uma "linha de eco" reutilizável (delay + realimentação, que é o que
+// cria as repetições cada vez mais fracas) já ligada na saída de som -
+// qualquer som conectado nela sai com cauda de eco.
+function _criarLinhaDeEco(ctx, delaySegundos, realimentacaoGanho, volumeEco) {
+  const delay = ctx.createDelay();
+  delay.delayTime.value = delaySegundos;
+  const realimentacao = ctx.createGain();
+  realimentacao.gain.value = realimentacaoGanho; // < 1 sempre - senão o eco nunca se esvai (loop infinito)
+  const wet = ctx.createGain();
+  wet.gain.value = volumeEco;
+  delay.connect(realimentacao);
+  realimentacao.connect(delay);
+  delay.connect(wet);
+  wet.connect(ctx.destination);
+  return delay;
+}
+
+// "pensamento tecnológico": 3 bipes curtos e ascendentes (clima de HUD/
+// escaneamento, tipo Jarvis "processando") - tocado logo ANTES do Atlas
+// começar a falar um resumo.
+function tocarEfeitoPensamento() {
+  const ctx = _obterAudioCtx();
+  if (!ctx) return;
+  const agora = ctx.currentTime;
+  const linhaEco = _criarLinhaDeEco(ctx, 0.16, 0.32, 0.35);
+
+  [420, 620, 900].forEach((freq, i) => {
+    const inicio = agora + i * 0.09;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, inicio);
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.4, inicio + 0.07);
+
+    const envelope = ctx.createGain();
+    envelope.gain.setValueAtTime(0, inicio);
+    envelope.gain.linearRampToValueAtTime(0.16, inicio + 0.012);
+    envelope.gain.exponentialRampToValueAtTime(0.001, inicio + 0.11);
+
+    osc.connect(envelope);
+    envelope.connect(ctx.destination);
+    envelope.connect(linhaEco);
+    osc.start(inicio);
+    osc.stop(inicio + 0.13);
+  });
+}
+
+// "eco tecnológico": um tom único, descendente, tocado no FIM da narração -
+// a cauda de eco (repetições cada vez mais fracas) é o que dá o efeito de
+// eco pedido.
+function tocarEfeitoEco() {
+  const ctx = _obterAudioCtx();
+  if (!ctx) return;
+  const agora = ctx.currentTime;
+  const linhaEco = _criarLinhaDeEco(ctx, 0.22, 0.45, 0.55);
+
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(720, agora);
+  osc.frequency.exponentialRampToValueAtTime(360, agora + 0.35);
+
+  const envelope = ctx.createGain();
+  envelope.gain.setValueAtTime(0, agora);
+  envelope.gain.linearRampToValueAtTime(0.16, agora + 0.02);
+  envelope.gain.exponentialRampToValueAtTime(0.001, agora + 0.4);
+
+  osc.connect(envelope);
+  envelope.connect(ctx.destination);
+  envelope.connect(linhaEco);
+  osc.start(agora);
+  osc.stop(agora + 0.45);
+}
+
 function falarResumoModulo(texto) {
   if (!("speechSynthesis" in window)) return;
   try {
     window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
+    tocarEfeitoPensamento();
     const voz = _atlasEscolherVoz();
     const pedacos = _dividirEmPedacosParaFala(prepararTextoParaNarracao(texto));
     if (!pedacos.length) return;
 
     let indice = 0;
     function falarProximoPedaco() {
-      if (indice >= pedacos.length) return;
+      if (indice >= pedacos.length) {
+        tocarEfeitoEco(); // eco de encerramento, só depois do ÚLTIMO pedaço
+        return;
+      }
       const fala = new SpeechSynthesisUtterance(pedacos[indice]);
       fala.lang = "pt-BR";
       // "rate" é respeitado por praticamente todas as vozes - já "pitch"
@@ -5490,7 +5592,7 @@ function falarResumoModulo(texto) {
       };
       window.speechSynthesis.speak(fala);
     }
-    falarProximoPedaco();
+    setTimeout(falarProximoPedaco, 420); // dá tempo do efeito de "pensando" tocar antes da voz começar
   } catch (e) {
     console.warn("Atlas: não consegui falar o resumo do módulo.", e);
   }
