@@ -748,6 +748,24 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
      celular). */
   .rail-nav, .rail-toggle{display:none}
   .content{padding:20px 16px calc(84px + env(safe-area-inset-bottom, 0px)) 16px}
+
+  /* Tabelas no celular (13/08/2026): os painéis/gráficos já se adaptavam à
+     tela, mas as ~25 tabelas do sistema (".tabela") não tinham nenhum
+     tratamento - numa tela estreita, uma tabela de 6+ colunas ficava
+     espremida/ilegível ou estourava a largura da tela. Em vez de embrulhar
+     cada uma das tabelas em uma div de rolagem (o que já era feito só em 2
+     lugares, via ".tabela-scroll"), a própria tabela vira uma caixa com
+     rolagem horizontal PRÓPRIA: "display:block" faz o <table> virar uma
+     caixa de bloco comum (que aceita overflow-x), enquanto thead/tbody/tr/td
+     continuam com seus papéis de tabela internos (não tocados aqui) -
+     então cabeçalho e linhas continuam perfeitamente alinhados durante a
+     rolagem (testado). "white-space:nowrap" evita que o texto quebre em
+     várias linhas dentro da célula (o que deixaria a linha gigante) -
+     prefere-se rolar de lado a ter linhas altíssimas.
+     Isso cobre TODAS as tabelas automaticamente, sem precisar editar o
+     HTML de cada tela uma por uma. */
+  .tabela{display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap}
+  .tabela-scroll .tabela{display:table} /* nas 2 tabelas que já tinham wrapper próprio, evita rolagem duplicada (a do wrapper já basta) */
 }
 
 /* ---- barra inferior mobile (estilo app nativo) ---- */
