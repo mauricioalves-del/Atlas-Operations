@@ -1189,7 +1189,34 @@ def dashboard_top_10_movimentos(
             "direcao": _direcao_ajuste(a),
         })
     itens.sort(key=lambda x: x["valor"], reverse=True)
-    return itens[:10]
+    top10 = itens[:10]
+
+    ids_passivo = {i["id"] for i in top10 if i["tipo"] == "passivo"}
+    ids_inventario = {i["id"] for i in top10 if i["tipo"] == "inventario"}
+    baixas_com_justificativa = set()
+    ajustes_com_justificativa = set()
+    if ids_passivo:
+        baixas_com_justificativa = {
+            j.baixa_operacional_id
+            for j in db.query(models.JustificativaAjusteInventario)
+            .filter(models.JustificativaAjusteInventario.baixa_operacional_id.in_(ids_passivo))
+            .all()
+        }
+    if ids_inventario:
+        ajustes_com_justificativa = {
+            j.ajuste_id
+            for j in db.query(models.JustificativaAjusteInventario)
+            .filter(models.JustificativaAjusteInventario.ajuste_id.in_(ids_inventario))
+            .all()
+        }
+
+    for item in top10:
+        if item["tipo"] == "passivo":
+            item["tem_justificativa"] = item["id"] in baixas_com_justificativa
+        else:
+            item["tem_justificativa"] = item["id"] in ajustes_com_justificativa
+
+    return top10
 
 
 @router.get("/dashboard/exportar-excel")

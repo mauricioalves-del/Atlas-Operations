@@ -849,6 +849,17 @@ function formatarMoeda(v) {
   return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function definirLinhaTotal(idTabela, htmlCelulas) {
+  // Escreve (ou limpa) a linha de total no <tfoot> de uma tabela, pra dar
+  // ao usuário um jeito rápido de conferir se os valores exibidos batem
+  // com o esperado. htmlCelulas já vem como string de <td>...</td> prontos
+  // (cada chamador decide quantas colunas/o que preencher); passar null
+  // ou string vazia limpa a linha (ex.: tabela sem dados).
+  const tfoot = document.querySelector(`#${idTabela} tfoot`);
+  if (!tfoot) return;
+  tfoot.innerHTML = htmlCelulas ? `<tr>${htmlCelulas}</tr>` : "";
+}
+
 function renderKpis(k) {
   const cards = [
     { label: "Divergências abertas", value: k.divergencias_abertas },
@@ -4345,6 +4356,13 @@ function renderMpMotivosResumo(dados) {
       )
     )
   );
+
+  definirLinhaTotal(
+    "mp-tabela-motivos-resumo",
+    dados.length
+      ? `<td>Total</td><td>${dados.reduce((s, d) => s + (d.quantidade || 0), 0)}</td><td>${formatarMoeda(dados.reduce((s, d) => s + (d.valor || 0), 0))}</td>`
+      : null
+  );
 }
 
 const CORES_MOTIVOS_BAIXA = ["#5b75ac", "#4caf50", "#e5534b", "#f9a825", "#8e5b9e", "#3fb6c9"];
@@ -4674,6 +4692,13 @@ function renderMpTabelaTop(idTabela, lista) {
   document.querySelectorAll(`#${idTabela} tbody tr[data-sku]`).forEach((tr) =>
     tr.addEventListener("click", () => abrirModalPassivosItens({ sku: tr.dataset.sku }, `Baixas do SKU ${tr.dataset.sku}`))
   );
+
+  definirLinhaTotal(
+    idTabela,
+    lista.length
+      ? `<td colspan="2">Total (Top ${lista.length})</td><td>${lista.reduce((s, i) => s + (i.quantidade || 0), 0)}</td><td>${formatarMoeda(lista.reduce((s, i) => s + (i.valor || 0), 0))}</td>`
+      : null
+  );
 }
 
 // Converte o filtro do painel (montarParamsResumoExecutivoMp: {ano, mes, data_inicio, data_fim,
@@ -4699,6 +4724,9 @@ function renderMpTop10Movimentos(dados) {
         ? `${item.motivo || "—"} · ${badgeStatusBaixa(item.status_fluxo)}`
         : `Lote ${item.id_lote || "—"} · <span style="color:${item.direcao === "entrada" ? "var(--ok)" : "var(--critico)"}">${item.direcao === "entrada" ? "Entrada" : "Saída"}</span>`;
       const corTipo = item.tipo === "passivo" ? CORES_RESULTADO_ALMOX.passivos : CORES_RESULTADO_ALMOX.inventario;
+      const badgeInvestigacao = item.tem_justificativa
+        ? `<span class="badge badge-sim">Sim</span>`
+        : `<span class="badge badge-nao">Não</span>`;
       return `<tr data-idx="${idx}" style="cursor:pointer" title="Clique pra abrir/editar a justificativa deste item">
         <td><span class="badge-status" style="background:color-mix(in srgb, ${corTipo} 20%, transparent); color:${corTipo}">${item.tipo === "passivo" ? "Passivo" : "Inventário"}</span></td>
         <td>${item.sku}</td>
@@ -4708,10 +4736,18 @@ function renderMpTop10Movimentos(dados) {
         <td>${detalhe}</td>
         <td>${item.quantidade ?? "—"}</td>
         <td>${formatarMoeda(item.valor_com_sinal ?? item.valor)}</td>
+        <td>${badgeInvestigacao}</td>
         <td><button class="btn-secundario btn-justificar-top10" data-idx="${idx}">Justificar</button></td>
       </tr>`;
     })
-    .join("") || `<tr><td colspan="9" style="color:var(--muted)">Nenhuma movimentação encontrada nesse recorte.</td></tr>`;
+    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma movimentação encontrada nesse recorte.</td></tr>`;
+
+  definirLinhaTotal(
+    "mp-tabela-top-10-movimentos",
+    dados.length
+      ? `<td colspan="7">Total (${dados.length} ${dados.length === 1 ? "item exibido" : "itens exibidos"})</td><td>${formatarMoeda(dados.reduce((s, i) => s + (i.valor_com_sinal ?? i.valor ?? 0), 0))}</td><td colspan="2"></td>`
+      : null
+  );
 
   const abrirJustificativaDoItem = (idx) => {
     const item = dados[idx];
