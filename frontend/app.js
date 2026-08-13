@@ -699,6 +699,7 @@ function mostrarView(nome) {
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   document.getElementById("view-" + nome).classList.remove("hidden");
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
+  document.querySelectorAll(".bottom-nav-item[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
   apresentarModuloSeNecessario(nome);
   if (nome === "hub") { renderizarHub(); carregarMapaDemandas(); }
   if (nome === "dashboard") carregarDashboard();
@@ -721,6 +722,57 @@ function mostrarView(nome) {
   if (nome === "compras") carregarPedidosCompra();
   if (nome === "pos-inventario") carregarAcoesPosInventario();
 }
+
+// ---------- barra inferior mobile (13/08/2026) ----------
+// Os 5 atalhos fixos (Início, Divergências, Inventário, Acurácia, Passivos)
+// só chamam mostrarView, igual os botões da rail lateral - a barra some no
+// desktop via CSS, só a rail existe lá. O "Mais" abre uma bandeja com os
+// módulos que não couberam na barra (a mesma lista de módulos visíveis da
+// rail, na mesma ordem, respeitando permissão - reaproveita a lógica já
+// usada pelo hub orbital em renderizarHub) + atalhos de Tema/Sair, que na
+// tela estreita ficam escondidos junto com o resto do rodapé da rail.
+document.querySelectorAll(".bottom-nav-item[data-view]").forEach((btn) => {
+  btn.addEventListener("click", () => mostrarView(btn.dataset.view));
+});
+
+const VIEWS_NA_BARRA_INFERIOR = ["hub", "dashboard", "fechamento-dashboard", "acuracia-ponderada", "mapeamento-passivos"];
+
+function abrirBandejaMais() {
+  const itens = Array.from(document.querySelectorAll(".rail-item"))
+    .filter((b) => !b.classList.contains("hidden") && !VIEWS_NA_BARRA_INFERIOR.includes(b.dataset.view))
+    .map((b) => ({ view: b.dataset.view, label: b.querySelector(".rail-label").textContent, iconHtml: b.querySelector(".rail-icon").innerHTML }));
+
+  const lista = document.getElementById("bottom-sheet-mais-lista");
+  lista.innerHTML =
+    itens
+      .map(
+        (item) =>
+          `<button class="bottom-sheet-item" data-view="${item.view}"><span class="bottom-nav-icon">${item.iconHtml}</span><span>${item.label}</span></button>`
+      )
+      .join("") +
+    `<button class="bottom-sheet-item" id="btn-bottom-sheet-tema"><span class="bottom-nav-icon">🌓</span><span>Alternar tema</span></button>` +
+    `<button class="bottom-sheet-item" id="btn-bottom-sheet-sair"><span class="bottom-nav-icon">↪</span><span>Sair</span></button>`;
+
+  lista.querySelectorAll(".bottom-sheet-item[data-view]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      mostrarView(btn.dataset.view);
+      fecharBandejaMais();
+    })
+  );
+  document.getElementById("btn-bottom-sheet-tema").addEventListener("click", () => document.getElementById("btn-tema").click());
+  document.getElementById("btn-bottom-sheet-sair").addEventListener("click", () => document.getElementById("btn-logout").click());
+
+  document.getElementById("bottom-sheet-mais-overlay").classList.remove("hidden");
+}
+function fecharBandejaMais() {
+  document.getElementById("bottom-sheet-mais-overlay").classList.add("hidden");
+}
+const btnBottomNavMais = document.getElementById("btn-bottom-nav-mais");
+if (btnBottomNavMais) btnBottomNavMais.addEventListener("click", abrirBandejaMais);
+document.getElementById("btn-fechar-bottom-sheet-mais").addEventListener("click", fecharBandejaMais);
+document.getElementById("bottom-sheet-mais-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "bottom-sheet-mais-overlay") fecharBandejaMais();
+});
 
 // ---------- dashboard ----------
 let chartAcuraciaDia, chartCausas, chartTendencia, chartMom;
@@ -5275,14 +5327,21 @@ function _atlasEscolherVoz() {
     }
   }
 
-  const preferida = vozesPt.find((v) => _NOMES_VOZ_PREFERIDOS.some((nome) => v.name.toLowerCase().includes(nome)));
-  if (preferida) return preferida;
+  // (13/08/2026) reordenado pra priorizar SEMPRE uma voz LOCAL primeiro -
+  // é a única forma de o ajuste de pitch (tom mais grave, ver
+  // falarResumoModulo) realmente funcionar; nas vozes DE REDE do Google o
+  // Chrome ignora "pitch" por completo, então escolher uma delas mesmo que
+  // o nome combine (ex: "Google português - Ricardo") não ajuda em nada.
+  const combina = (v) => _NOMES_VOZ_PREFERIDOS.some((nome) => v.name.toLowerCase().includes(nome));
 
-  // sem nome-alvo encontrado: se houver mais de uma voz pt, prefere uma
-  // voz LOCAL do sistema (localService) - essas costumam respeitar
-  // pitch/rate de verdade, ao contrário das vozes de rede do Google.
+  const localComNome = vozesPt.find((v) => v.localService && combina(v));
+  if (localComNome) return localComNome;
+
   const local = vozesPt.find((v) => v.localService);
   if (local) return local;
+
+  const redeComNome = vozesPt.find(combina);
+  if (redeComNome) return redeComNome;
 
   return vozesPt[0];
 }
@@ -5388,11 +5447,14 @@ function falarResumoModulo(texto) {
     // já "pitch" costuma ser IGNORADO pelo Chrome nas vozes de rede do
     // Google (a mais comum de existir em português) - por isso o ajuste
     // de tom sozinho não bastava pra sair do clima "Exterminador". Cadência
-    // um pouco mais lenta e composta (rate < 1), tom levemente mais grave
-    // (pitch < 1, aplicado quando a voz escolhida respeitar o parâmetro) -
-    // clima de mordomo educado, não de robô apressado.
-    fala.rate = 0.92;
-    fala.pitch = 0.94;
+    // um pouco mais lenta e composta (rate < 1), tom BEM mais grave (pitch
+    // 0.75 - o mínimo que ainda soa natural sem virar caricatura; só tem
+    // efeito de verdade quando a voz escolhida for uma voz LOCAL do sistema,
+    // por isso _atlasEscolherVoz() acima prioriza achar uma - ver o aviso no
+    // console (F12) se a voz do seu navegador for só de rede) - clima de
+    // mordomo educado e grave, não de robô apressado.
+    fala.rate = 0.9;
+    fala.pitch = 0.75;
     const voz = _atlasEscolherVoz();
     if (voz) fala.voice = voz;
     window.speechSynthesis.speak(fala);
@@ -5734,6 +5796,19 @@ function configurarComandoDeVoz() {
 }
 
 configurarComandoDeVoz();
+
+// ---------- PWA: registro do service worker (13/08/2026) ----------
+// Só isso já é o suficiente pra Chrome/Android considerar o Atlas
+// "instalável" (mostra o banner de instalação sozinho) - no Safari/iPhone
+// não existe banner automático, mas o app funciona igual via "Compartilhar"
+// → "Adicionar à Tela de Início" (o manifest.json/ícones cuidam da parte
+// visual disso). Registra só depois do "load" pra não competir com o
+// carregamento inicial da tela por rede/CPU.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((e) => console.warn("Atlas: falha ao registrar o service worker (app não fica instalável, mas continua funcionando normalmente):", e));
+  });
+}
 
 // ---------- inicialização ----------
 inicializarSessao();

@@ -2,9 +2,23 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Atlas — Controle Operacional de Estoques</title>
-<link rel="stylesheet" href="style.css?v=64">
+
+<!-- PWA (13/08/2026): permite "Instalar" o Atlas no celular (Android/Chrome
+     mostra o banner de instalação sozinho; no iPhone/Safari é "Compartilhar"
+     → "Adicionar à Tela de Início") - vira um app com ícone próprio, abre em
+     tela cheia (sem barra de endereço), sem precisar de loja de aplicativo. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#12181b">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Atlas">
+<meta name="mobile-web-app-capable" content="yes">
+
+<link rel="stylesheet" href="style.css?v=65">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -83,6 +97,48 @@
       <button id="btn-logout" class="btn-logout">Sair</button>
     </div>
   </aside>
+
+  <!-- Barra inferior mobile (13/08/2026): atalhos pros indicadores
+       principais, no estilo de app nativo - só aparece em telas estreitas
+       (a barra lateral ".rail" vira ela nesse breakpoint, ver style.css).
+       "Mais" abre uma bandeja com o resto dos módulos do menu lateral. -->
+  <nav class="bottom-nav" id="bottom-nav">
+    <button class="bottom-nav-item" data-view="hub">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 3"/></svg></span>
+      <span class="bottom-nav-label">Início</span>
+    </button>
+    <button class="bottom-nav-item" data-view="dashboard">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></span>
+      <span class="bottom-nav-label">Painel</span>
+    </button>
+    <button class="bottom-nav-item" data-view="fechamento-dashboard">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+      <span class="bottom-nav-label">Inventário</span>
+    </button>
+    <button class="bottom-nav-item" data-view="acuracia-ponderada">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0l-3-6zM18 8l-3 6a3 3 0 0 0 6 0l-3-6zM6 8h12"/></svg></span>
+      <span class="bottom-nav-label">Acurácia</span>
+    </button>
+    <button class="bottom-nav-item" data-view="mapeamento-passivos">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8a6 6 0 0 1-6.7 6.7"/><path d="M13 2.05A10 10 0 1 0 21.95 11H13z"/></svg></span>
+      <span class="bottom-nav-label">Passivos</span>
+    </button>
+    <button class="bottom-nav-item" id="btn-bottom-nav-mais">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span>
+      <span class="bottom-nav-label">Mais</span>
+    </button>
+  </nav>
+
+  <div class="bottom-sheet-overlay hidden" id="bottom-sheet-mais-overlay">
+    <div class="bottom-sheet">
+      <div class="bottom-sheet-handle"></div>
+      <div class="bottom-sheet-header">
+        <span>Mais módulos</span>
+        <button id="btn-fechar-bottom-sheet-mais" class="btn-secundario">Fechar ✕</button>
+      </div>
+      <div class="bottom-sheet-lista" id="bottom-sheet-mais-lista"></div>
+    </div>
+  </div>
 
   <main class="content">
 
@@ -1408,6 +1464,6 @@
   </div>
 </div>
 
-<script src="app.js?v=70"></script>
+<script src="app.js?v=72"></script>
 </body>
 </html>

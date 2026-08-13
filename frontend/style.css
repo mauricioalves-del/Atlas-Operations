@@ -740,4 +740,62 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
   .shell{flex-direction:column}
   .rail{width:100%; flex:none; flex-direction:row; align-items:center; padding:12px 16px}
   .rail-footer{display:none}
+
+  /* Barra inferior mobile (13/08/2026): a navegação em si passa a viver na
+     ".bottom-nav" (estilo app nativo, sempre visível/fixa embaixo) - a
+     ".rail" continua só como uma faixa fina no topo com a marca (o menu de
+     módulos dela fica redundante e ocupa espaço demais numa tela de
+     celular). */
+  .rail-nav, .rail-toggle{display:none}
+  .content{padding:20px 16px calc(84px + env(safe-area-inset-bottom, 0px)) 16px}
+}
+
+/* ---- barra inferior mobile (estilo app nativo) ---- */
+.bottom-nav{
+  display:none; /* só aparece no breakpoint acima - no desktop a navegação é a .rail */
+  position:fixed; left:0; right:0; bottom:0; z-index:60;
+  background:var(--rail-bg); border-top:1px solid var(--border);
+  padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px)) 4px;
+  justify-content:space-around; align-items:stretch;
+}
+.bottom-nav-item{
+  flex:1; min-width:0; background:none; border:none; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  padding:6px 2px; color:var(--rail-text-muted); font-family:var(--sans);
+  border-radius:var(--radius-input);
+}
+.bottom-nav-item.active{color:var(--rail-text)}
+.bottom-nav-icon{width:22px; height:22px; display:flex; align-items:center; justify-content:center}
+.bottom-nav-icon svg{width:20px; height:20px}
+.bottom-nav-item.active .bottom-nav-icon{color:var(--accent); filter:drop-shadow(var(--glow-soft))}
+.bottom-nav-label{font-size:9.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%}
+
+/* ---- bandeja "Mais" (lista o resto dos módulos + tema/sair, em telas estreitas) ---- */
+.bottom-sheet-overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100;
+  display:flex; align-items:flex-end; justify-content:center;
+}
+.bottom-sheet{
+  width:100%; max-height:78vh; overflow-y:auto;
+  background:var(--panel); border-radius:20px 20px 0 0;
+  border:1px solid var(--border); border-bottom:none;
+  padding:10px 18px calc(18px + env(safe-area-inset-bottom, 0px)) 18px;
+  box-shadow:var(--shadow-card);
+}
+.bottom-sheet-handle{width:40px; height:4px; border-radius:2px; background:var(--border); margin:0 auto 14px auto}
+.bottom-sheet-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; font-family:var(--display); font-weight:600}
+.bottom-sheet-lista{display:flex; flex-direction:column; gap:2px}
+.bottom-sheet-item{
+  display:flex; align-items:center; gap:12px; background:none; border:none; cursor:pointer;
+  padding:12px 6px; color:var(--text); font-family:var(--sans); font-size:14px; text-align:left;
+  border-bottom:1px solid var(--border);
+}
+.bottom-sheet-item:last-child{border-bottom:none}
+.bottom-sheet-item .bottom-nav-icon{color:var(--muted)}
+
+/* essa regra precisa vir DEPOIS da definição base ".bottom-nav{display:none}"
+   acima (mesma especificidade - quem vem por último no arquivo vence) pra
+   realmente conseguir reativar a barra dentro do breakpoint mobile. */
+@media (max-width: 900px){
+  .bottom-nav{display:flex}
 }
