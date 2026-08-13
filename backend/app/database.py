@@ -189,6 +189,17 @@ def garantir_colunas_novas():
     if inspecao.has_table("baixas_operacionais"):
         _remover_duplicatas_status_baixa_operacional()
 
+    # justificativas_ajuste_inventario existia só pra ajustes de inventário -
+    # 13/08/2026, passou a cobrir também linhas de Passivo (Top 10 Maiores
+    # Movimentações do Mapeamento de Passivos), então precisa de uma segunda
+    # referência opcional pra baixa_operacional (ver models.py).
+    if inspecao.has_table("justificativas_ajuste_inventario"):
+        colunas_justificativas = {c["name"] for c in inspecao.get_columns("justificativas_ajuste_inventario")}
+        if "baixa_operacional_id" not in colunas_justificativas:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE justificativas_ajuste_inventario ADD COLUMN baixa_operacional_id INTEGER"))
+                conn.commit()
+
 
 def _backfill_lotes_ajuste_inventario_legado():
     """Roda uma única vez, imediatamente depois da migração que criou a

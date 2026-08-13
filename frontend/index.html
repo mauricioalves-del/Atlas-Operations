@@ -437,6 +437,28 @@
       </div>
 
       <div class="panel">
+        <div class="panel-title-row">
+          <h2>Top 10 Maiores Movimentações do Período</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button id="btn-ver-todos-passivos" class="btn-secundario">Ver todos os Passivos →</button>
+            <button id="btn-ver-todos-inventario" class="btn-secundario">Ver todos os Ajustes de Inventário →</button>
+          </div>
+        </div>
+        <p class="panel-sub">Passivos aprovados e Ajustes de Inventário juntos, ordenados por valor absoluto — clique numa linha (ou no botão "Justificar") pra abrir/editar a justificativa daquele item</p>
+        <div class="tabela-scroll">
+          <table class="tabela" id="mp-tabela-top-10-movimentos">
+            <thead>
+              <tr>
+                <th>Tipo</th><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th>
+                <th>Detalhe</th><th>Quantidade</th><th>Valor</th><th>Justificativa</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
         <h2>Resumo por Motivo — Quantidade e Custo Total</h2>
         <p class="panel-sub">Sem contar Inventário Mensal (esse fluxo já tem o painel dedicado acima) · Clique numa linha pra ver as baixas daquele motivo</p>
         <table class="tabela" id="mp-tabela-motivos-resumo">
@@ -471,11 +493,11 @@
       </div>
 
       <div class="panel">
-        <h2>Justificativas de Ajustes de Inventário</h2>
-        <p class="panel-sub">Justificativas registradas a partir do fluxo de inventário (aba "Fluxo de Inventário" acima) — clique numa linha para reabrir e editar</p>
+        <h2>Justificativas — Ajustes de Inventário e Passivos</h2>
+        <p class="panel-sub">Justificativas abertas a partir do Fluxo de Inventário, do Top 10 Maiores Movimentações ou das listas completas de Passivos/Inventário — clique numa linha para reabrir e editar</p>
         <div class="tabela-scroll">
           <table class="tabela" id="mp-tabela-justificativas">
-            <thead><tr><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
+            <thead><tr><th>Tipo</th><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -1451,8 +1473,14 @@
         <canvas id="modal-justificativa-chart-historico" height="140"></canvas>
         <div id="modal-justificativa-linha-do-tempo"></div>
 
-        <h3 style="margin-top:20px">Qtd. Sistema × Qtd. Contagem × Diferença</h3>
-        <canvas id="modal-justificativa-chart-comparativo" height="140"></canvas>
+        <div id="modal-justificativa-comparativo-inventario">
+          <h3 style="margin-top:20px">Qtd. Sistema × Qtd. Contagem × Diferença</h3>
+          <canvas id="modal-justificativa-chart-comparativo" height="140"></canvas>
+        </div>
+        <div id="modal-justificativa-comparativo-passivo" class="hidden">
+          <h3 style="margin-top:20px">Dados da baixa (Passivo)</h3>
+          <div id="modal-justificativa-resumo-passivo" class="kpi-row-modal"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1474,6 +1502,6 @@
   </div>
 </div>
 
-<script src="app.js?v=75"></script>
+<script src="app.js?v=76"></script>
 </body>
 </html>

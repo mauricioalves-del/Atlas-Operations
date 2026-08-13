@@ -522,18 +522,21 @@ class AjusteInventarioOficial(Base):
 
 
 class JustificativaAjusteInventario(Base):
-    """Justificativa de um ajuste de inventário específico (ver
-    AjusteInventarioOficial) - por que aquele ajuste aconteceu e qual
-    solução foi aplicada. Espelha AcaoPosInventario (mesma ideia de
-    responsável/prazo/status/checklist), mas focada num ajuste individual
-    já conciliado na tabela oficial (Ace4), não num item de fechamento
-    bruto. Guarda os dados do ajuste "congelados" no momento da criação
-    (sku, qtd_sistema, qtd_contagem etc.) pra continuar fazendo sentido
-    mesmo se o lote de origem for excluído depois - é registro de uma
-    decisão já tomada, não deveria desaparecer junto com o dado bruto."""
+    """Justificativa de um ajuste de inventário OU de uma baixa operacional
+    (passivo) específica - por que aquilo aconteceu e qual solução foi
+    aplicada. Espelha AcaoPosInventario (mesma ideia de responsável/prazo/
+    status/checklist). Exatamente um entre ajuste_id/baixa_operacional_id é
+    preenchido, dependendo de onde a justificativa foi aberta (linha do
+    Fluxo de Inventário ou linha de Passivo, ambos hoje reunidos no Top 10
+    Maiores Movimentações do Mapeamento de Passivos - 13/08/2026). Guarda
+    os dados do item "congelados" no momento da criação (sku, qtd_sistema,
+    qtd_contagem etc.) pra continuar fazendo sentido mesmo se o lote/baixa
+    de origem for excluído depois - é registro de uma decisão já tomada,
+    não deveria desaparecer junto com o dado bruto."""
     __tablename__ = "justificativas_ajuste_inventario"
     id = Column(Integer, primary_key=True, autoincrement=True)
     ajuste_id = Column(Integer, ForeignKey("ajustes_inventario_oficial.id"), nullable=True, index=True)
+    baixa_operacional_id = Column(Integer, ForeignKey("baixas_operacionais.id"), nullable=True, index=True)
     sku = Column(String, index=True)
     descricao_produto = Column(String, nullable=True)
     almoxarifado = Column(String, nullable=True)

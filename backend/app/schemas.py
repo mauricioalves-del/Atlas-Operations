@@ -151,6 +151,7 @@ class AcoesLoteAtualizar(BaseModel):
 class JustificativaAjusteInventarioOut(BaseModel):
     id: int
     ajuste_id: Optional[int] = None
+    baixa_operacional_id: Optional[int] = None
     sku: str
     descricao_produto: Optional[str] = None
     almoxarifado: Optional[str] = None
@@ -175,6 +176,7 @@ class JustificativaAjusteInventarioOut(BaseModel):
 
 class JustificativaAjusteInventarioCreate(BaseModel):
     ajuste_id: Optional[int] = None
+    baixa_operacional_id: Optional[int] = None
     sku: str
     descricao_produto: Optional[str] = None
     almoxarifado: Optional[str] = None

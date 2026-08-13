@@ -366,19 +366,24 @@ def excluir_lote_ajuste_inventario(
 def listar_justificativas(
     status: str | None = None,
     ajuste_id: int | None = None,
+    baixa_operacional_id: int | None = Query(None, description="filtra justificativas abertas a partir de uma linha de Passivo (não de um ajuste de inventário)"),
     sku: str | None = None,
     usuario: models.Usuario = Depends(obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    """Lista justificativas de ajuste de inventário - alimenta a tabela
-    "Justificativas de Ajustes de Inventário" no Mapeamento de Passivos, e
-    também é usada pelo pop de justificativa pra achar se já existe uma
-    justificativa em aberto pra aquele ajuste (filtro por ajuste_id)."""
+    """Lista justificativas de ajuste de inventário e de passivo - alimenta
+    a tabela "Justificativas de Ajustes de Inventário" no Mapeamento de
+    Passivos, e também é usada pelo pop de justificativa pra achar se já
+    existe uma justificativa em aberto pra aquele item (filtro por
+    ajuste_id OU baixa_operacional_id, dependendo de onde foi aberta -
+    13/08/2026: antes só cobria ajuste_id)."""
     q = db.query(models.JustificativaAjusteInventario)
     if status:
         q = q.filter(models.JustificativaAjusteInventario.status == status)
     if ajuste_id:
         q = q.filter(models.JustificativaAjusteInventario.ajuste_id == ajuste_id)
+    if baixa_operacional_id:
+        q = q.filter(models.JustificativaAjusteInventario.baixa_operacional_id == baixa_operacional_id)
     if sku:
         q = q.filter(models.JustificativaAjusteInventario.sku == sku)
     return q.order_by(models.JustificativaAjusteInventario.criado_em.desc()).all()
