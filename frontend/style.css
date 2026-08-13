@@ -336,6 +336,15 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 }
 .checklist-item.concluido span{text-decoration:line-through; color:var(--muted)}
 .checklist-item button{background:none; border:none; color:var(--critico); cursor:pointer; margin-left:auto; font-size:12px}
+.anexo-item{
+  display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--panel-2);
+  border-radius:8px; margin-bottom:6px; font-size:13px;
+}
+.anexo-item.anexo-pendente{border:1px dashed var(--border)}
+.anexo-nome{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:220px}
+.anexo-tamanho{color:var(--muted); font-size:11px; font-family:var(--mono); flex-shrink:0}
+.anexo-item .btn-secundario{padding:4px 10px; font-size:12px; margin-left:auto}
+.anexo-excluir, .anexo-remover-pendente{background:none; border:none; color:var(--critico); cursor:pointer; font-size:12px; flex-shrink:0}
 .linha-tempo-item{
   display:flex; justify-content:space-between; padding:5px 8px; font-size:11px; font-family:var(--mono);
   border-bottom:1px solid var(--border);

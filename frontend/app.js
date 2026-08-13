@@ -4856,6 +4856,13 @@ let justificativaModalAoSalvar = null;
 let checklistJustificativaModalAtual = [];
 let chartJustificativaModalHistorico;
 let chartJustificativaModalComparativo;
+// Anexos da justificativa (14/08/2026) - existentesModalJustificativa vem do servidor (metadados,
+// sem o binário) quando a justificativa já tem id; pendentes são File[] escolhidos no <input
+// type=file> que ainda não foram enviados - só sobem de fato no clique de "Salvar" (ver
+// btn-salvar-modal-justificativa), porque uma justificativa nova só ganha id depois de salva.
+let anexosExistentesModalJustificativa = [];
+let anexosPendentesModalJustificativa = [];
+const MAX_ANEXO_BYTES_FRONT = 15 * 1024 * 1024;
 
 // `tipo` distingue de onde a justificativa foi aberta - "inventario" (linha de um ajuste
 // oficial, ver AjusteInventarioOficial) ou "passivo" (linha de uma baixa aprovada, ver
@@ -4911,6 +4918,20 @@ function abrirModalComJustificativa(justificativa, aoSalvar) {
   renderChecklistModalJustificativa();
   renderComparativoModalJustificativa(justificativa, ehPassivo);
 
+  anexosPendentesModalJustificativa = [];
+  anexosExistentesModalJustificativa = [];
+  renderAnexosModalJustificativa();
+  if (justificativa.id) {
+    (async () => {
+      try {
+        anexosExistentesModalJustificativa = await apiFetch(`${API}/ajustes-inventario/justificativas/${justificativa.id}/anexos`).then((r) => r.json());
+      } catch (erro) {
+        console.error("Falha ao carregar anexos da justificativa:", erro);
+      }
+      renderAnexosModalJustificativa();
+    })();
+  }
+
   document.getElementById("modal-justificativa-overlay").classList.remove("hidden");
 
   document.getElementById("modal-justificativa-acompanhamento-kpis").innerHTML = `<p class="hint" style="grid-column:1/-1">Carregando...</p>`;
@@ -4959,6 +4980,92 @@ document.getElementById("btn-add-checklist-justificativa").addEventListener("cli
   input.value = "";
   renderChecklistModalJustificativa();
 });
+
+function formatarTamanhoArquivo(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAnexosModalJustificativa() {
+  const wrap = document.getElementById("modal-justificativa-anexos-lista");
+  const linhasExistentes = anexosExistentesModalJustificativa
+    .map(
+      (a) => `<div class="anexo-item">
+        <span class="anexo-nome" title="${a.nome_arquivo}">${a.nome_arquivo}</span>
+        <span class="anexo-tamanho">${formatarTamanhoArquivo(a.tamanho_bytes)}</span>
+        <button class="btn-secundario anexo-baixar" data-anexo-id="${a.id}" data-anexo-nome="${a.nome_arquivo}">Baixar</button>
+        <button class="anexo-excluir" data-anexo-id="${a.id}">remover</button>
+      </div>`
+    )
+    .join("");
+  const linhasPendentes = anexosPendentesModalJustificativa
+    .map(
+      (f, idx) => `<div class="anexo-item anexo-pendente">
+        <span class="anexo-nome" title="${f.name}">${f.name}</span>
+        <span class="anexo-tamanho">${formatarTamanhoArquivo(f.size)}</span>
+        <span class="badge badge-nao" style="margin-left:auto" title='Só sobe de fato ao clicar em "Salvar"'>Não enviado</span>
+        <button class="anexo-remover-pendente" data-idx="${idx}">remover</button>
+      </div>`
+    )
+    .join("");
+  wrap.innerHTML = linhasExistentes + linhasPendentes || "<p class='hint'>Nenhum anexo ainda.</p>";
+
+  document.querySelectorAll(".anexo-baixar").forEach((btn) =>
+    btn.addEventListener("click", () => baixarAnexoJustificativa(parseInt(btn.dataset.anexoId), btn.dataset.anexoNome))
+  );
+  document.querySelectorAll(".anexo-excluir").forEach((btn) =>
+    btn.addEventListener("click", () => excluirAnexoJustificativaExistente(parseInt(btn.dataset.anexoId)))
+  );
+  document.querySelectorAll(".anexo-remover-pendente").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      anexosPendentesModalJustificativa.splice(parseInt(btn.dataset.idx), 1);
+      renderAnexosModalJustificativa();
+    })
+  );
+}
+
+document.getElementById("modal-justificativa-anexo-input").addEventListener("change", (ev) => {
+  const arquivos = Array.from(ev.target.files || []);
+  const grandesDemais = arquivos.filter((f) => f.size > MAX_ANEXO_BYTES_FRONT);
+  const validos = arquivos.filter((f) => f.size <= MAX_ANEXO_BYTES_FRONT);
+  if (grandesDemais.length) {
+    alert(`${grandesDemais.length} arquivo(s) maiores que 15 MB não foram adicionados: ${grandesDemais.map((f) => f.name).join(", ")}`);
+  }
+  anexosPendentesModalJustificativa.push(...validos);
+  ev.target.value = ""; // permite selecionar o mesmo arquivo de novo depois, se remover e quiser readicionar
+  renderAnexosModalJustificativa();
+});
+
+async function baixarAnexoJustificativa(anexoId, nomeArquivo) {
+  try {
+    const resp = await apiFetch(`${API}/ajustes-inventario/justificativas/anexos/${anexoId}/download`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nomeArquivo || "anexo";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (erro) {
+    alert("Não consegui baixar o anexo: " + erro.message);
+  }
+}
+
+async function excluirAnexoJustificativaExistente(anexoId) {
+  if (!confirm("Excluir este anexo?")) return;
+  const res = await apiFetch(`${API}/ajustes-inventario/justificativas/anexos/${anexoId}`, { method: "DELETE" });
+  if (!res.ok) {
+    alert("Não foi possível excluir o anexo.");
+    return;
+  }
+  anexosExistentesModalJustificativa = anexosExistentesModalJustificativa.filter((a) => a.id !== anexoId);
+  renderAnexosModalJustificativa();
+}
 
 function renderAcompanhamentoModalJustificativa(historico) {
   const kpis = [
@@ -5086,12 +5193,40 @@ document.getElementById("btn-salvar-modal-justificativa").addEventListener("clic
     // a criação (POST) já aceita status/checklist direto no payload (diferente da Ação
     // Pós-Inventário, que só aceita os campos básicos) - não precisa de um PATCH complementar.
   }
-  if (res.ok) {
-    document.getElementById("modal-justificativa-overlay").classList.add("hidden");
-    if (justificativaModalAoSalvar) justificativaModalAoSalvar();
-  } else {
+  if (!res.ok) {
     alert("Não foi possível salvar a justificativa.");
+    return;
   }
+  const justificativaSalva = await res.json();
+
+  // Sobe os anexos escolhidos antes de salvar (uma justificativa nova só ganha id agora) - se
+  // algum falhar, avisa mas não desfaz a justificativa (que já foi salva com sucesso).
+  if (anexosPendentesModalJustificativa.length) {
+    const btnSalvar = document.getElementById("btn-salvar-modal-justificativa");
+    const textoOriginalBtn = btnSalvar.textContent;
+    btnSalvar.disabled = true;
+    let falhas = 0;
+    for (const arquivo of anexosPendentesModalJustificativa) {
+      btnSalvar.textContent = `Enviando ${arquivo.name}...`;
+      const formData = new FormData();
+      formData.append("arquivo", arquivo);
+      try {
+        const respAnexo = await apiFetch(`${API}/ajustes-inventario/justificativas/${justificativaSalva.id}/anexos`, {
+          method: "POST", body: formData,
+        });
+        if (!respAnexo.ok) falhas++;
+      } catch (erro) {
+        falhas++;
+      }
+    }
+    btnSalvar.disabled = false;
+    btnSalvar.textContent = textoOriginalBtn;
+    anexosPendentesModalJustificativa = [];
+    if (falhas) alert(`A justificativa foi salva, mas ${falhas} anexo(s) não foram enviados. Abra a justificativa de novo pra tentar reenviar.`);
+  }
+
+  document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+  if (justificativaModalAoSalvar) justificativaModalAoSalvar();
 });
 
 async function carregarJustificativasAjusteInventario() {

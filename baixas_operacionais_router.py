@@ -1174,7 +1174,11 @@ def dashboard_top_10_movimentos(
         itens.append({
             "tipo": "passivo", "id": b.id, "sku": b.sku, "descricao_produto": descricoes.get(b.sku),
             "almoxarifado": b.almoxarifado, "data": str(b.data_baixa) if b.data_baixa else None,
-            "quantidade": b.quantidade, "valor": round(abs(b.valor_total or 0), 2), "valor_com_sinal": round(b.valor_total or 0, 2),
+            # Passivo sempre entra como valor NEGATIVO nesta tabela - diferente do Ajuste de
+            # Inventário (que pode ser entrada ou saída), um Passivo aprovado é sempre uma perda
+            # que reduz o resultado do período, então o sinal aqui não depende de como o
+            # valor_total foi gravado (pode vir positivo do Lovable).
+            "quantidade": b.quantidade, "valor": round(abs(b.valor_total or 0), 2), "valor_com_sinal": round(-abs(b.valor_total or 0), 2),
             "motivo": b.motivo_baixa_bruto, "status_fluxo": b.status_fluxo,
             "divergencia_vinculada_id": b.divergencia_vinculada_id,
             "id_lote": None, "qtd_sistema": None, "qtd_contagem": None, "direcao": None,

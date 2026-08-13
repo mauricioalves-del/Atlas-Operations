@@ -12,7 +12,7 @@ encontrados nas versões no-code anteriores):
 """
 from sqlalchemy import (
     Column, String, Float, Date, DateTime, Boolean, Integer,
-    ForeignKey, UniqueConstraint, JSON, Text
+    ForeignKey, UniqueConstraint, JSON, Text, LargeBinary
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -554,6 +554,24 @@ class JustificativaAjusteInventario(Base):
     criado_por = Column(String, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
     concluido_em = Column(DateTime, nullable=True)
+
+
+class AnexoJustificativa(Base):
+    """Arquivo anexado a uma justificativa (ex: foto do produto avariado,
+    laudo, nota fiscal) - evidência de apoio pra quem revisar depois
+    (14/08/2026). Guardado como BLOB direto no banco (não em disco): assim
+    funciona igual rodando local (SQLite, o caso de uso principal hoje) ou
+    num Postgres gerenciado na nuvem, sem depender de um volume de disco
+    persistente separado que teria que ser configurado à parte."""
+    __tablename__ = "anexos_justificativa"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    justificativa_id = Column(Integer, ForeignKey("justificativas_ajuste_inventario.id"), nullable=False, index=True)
+    nome_arquivo = Column(String, nullable=False)
+    tipo_conteudo = Column(String, nullable=True)
+    tamanho_bytes = Column(Integer, nullable=True)
+    conteudo = Column(LargeBinary, nullable=False)
+    enviado_por = Column(String, nullable=True)
+    enviado_em = Column(DateTime, default=datetime.utcnow)
 
 
 class LoteShelfLife(Base):

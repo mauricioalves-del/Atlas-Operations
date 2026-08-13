@@ -200,6 +200,19 @@ class JustificativaAjusteInventarioAtualizar(BaseModel):
     checklist: Optional[list] = None
 
 
+class AnexoJustificativaOut(BaseModel):
+    id: int
+    justificativa_id: int
+    nome_arquivo: str
+    tipo_conteudo: Optional[str] = None
+    tamanho_bytes: Optional[int] = None
+    enviado_por: Optional[str] = None
+    enviado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ConciliacaoCienciaCreate(BaseModel):
     observacao: Optional[str] = None
     papel_assinatura: str  # "Diretor_Operacoes" ou "Coordenador_Financeiro"

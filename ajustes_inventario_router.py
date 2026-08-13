@@ -26,7 +26,7 @@ automaticamente, mesmo sem a coluna "Inventário" preenchida ou marcada
 "Não" (Maurício confirmou: entrada e saída contam igual)."""
 import io
 from datetime import date, datetime
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 import openpyxl
 
@@ -436,5 +436,93 @@ def excluir_justificativa(justificativa_id: int, usuario: models.Usuario = Depen
     if not justificativa:
         raise HTTPException(404, "Justificativa não encontrada.")
     db.delete(justificativa)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Anexos de justificativa - arquivo de apoio (foto, PDF, laudo, nota fiscal)
+# ligado a uma justificativa já existente (14/08/2026). Guardado como BLOB no
+# próprio banco (ver AnexoJustificativa em models.py) - funciona igual local
+# (SQLite) ou em nuvem (Postgres), sem exigir um disco persistente à parte.
+# ---------------------------------------------------------------------------
+
+MAX_ANEXO_BYTES = 15 * 1024 * 1024  # 15 MB por arquivo - dá pra foto/PDF de sobra sem inchar o banco
+
+
+@router.post("/justificativas/{justificativa_id}/anexos", response_model=schemas.AnexoJustificativaOut)
+async def anexar_arquivo_justificativa(
+    justificativa_id: int,
+    arquivo: UploadFile = File(...),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Anexa um arquivo a uma justificativa já existente (precisa ter sido
+    salva antes - o front cria/salva a justificativa primeiro pra ter um
+    id, depois sobe os anexos selecionados). Uma justificativa pode ter
+    vários anexos; cada chamada aqui soma mais um, não substitui os
+    anteriores."""
+    justificativa = db.query(models.JustificativaAjusteInventario).get(justificativa_id)
+    if not justificativa:
+        raise HTTPException(404, "Justificativa não encontrada.")
+    conteudo = await arquivo.read()
+    if not conteudo:
+        raise HTTPException(400, "Arquivo vazio.")
+    if len(conteudo) > MAX_ANEXO_BYTES:
+        raise HTTPException(400, f"Arquivo muito grande ({len(conteudo) / (1024 * 1024):.1f} MB) - o limite por anexo é {MAX_ANEXO_BYTES // (1024 * 1024)} MB.")
+    anexo = models.AnexoJustificativa(
+        justificativa_id=justificativa_id,
+        nome_arquivo=arquivo.filename or "anexo",
+        tipo_conteudo=arquivo.content_type,
+        tamanho_bytes=len(conteudo),
+        conteudo=conteudo,
+        enviado_por=usuario.username,
+    )
+    db.add(anexo)
+    db.commit()
+    db.refresh(anexo)
+    return anexo
+
+
+@router.get("/justificativas/{justificativa_id}/anexos", response_model=list[schemas.AnexoJustificativaOut])
+def listar_anexos_justificativa(
+    justificativa_id: int,
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(models.AnexoJustificativa)
+        .filter(models.AnexoJustificativa.justificativa_id == justificativa_id)
+        .order_by(models.AnexoJustificativa.enviado_em.desc())
+        .all()
+    )
+
+
+@router.get("/justificativas/anexos/{anexo_id}/download")
+def baixar_anexo_justificativa(
+    anexo_id: int,
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    anexo = db.query(models.AnexoJustificativa).get(anexo_id)
+    if not anexo:
+        raise HTTPException(404, "Anexo não encontrado.")
+    return Response(
+        content=anexo.conteudo,
+        media_type=anexo.tipo_conteudo or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{anexo.nome_arquivo}"'},
+    )
+
+
+@router.delete("/justificativas/anexos/{anexo_id}")
+def excluir_anexo_justificativa(
+    anexo_id: int,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    anexo = db.query(models.AnexoJustificativa).get(anexo_id)
+    if not anexo:
+        raise HTTPException(404, "Anexo não encontrado.")
+    db.delete(anexo)
     db.commit()
     return {"ok": True}
