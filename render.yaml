@@ -23,15 +23,19 @@ services:
     # "playwright install chromium" baixa só o BINÁRIO do Chromium (sem
     # --with-deps) porque o plano "free"/runtime "python" do Render não dá
     # acesso a root/apt-get durante o build - "--with-deps" tentaria rodar
-    # apt-get e quebraria o build inteiro. Isso resolve o erro "Executable
-    # doesn't exist at .../chromium.../chrome" (ver "Gerar MBR" em
-    # Auditoria). Se depois de redeployar o erro mudar para algo como
-    # "error while loading shared libraries: libnss3.so" (biblioteca do
-    # sistema faltando, não o binário em si), esse plano "python" nativo do
-    # Render não tem como resolver sozinho - nesse caso a saída seria migrar
-    # este serviço pra um deploy via Docker (Dockerfile com apt-get install
-    # das libs que faltam), o que é uma mudança maior; volte à conversa com o
-    # Claude se chegar nesse ponto.
+    # apt-get e quebraria o build inteiro.
+    #
+    # PLAYWRIGHT_BROWSERS_PATH=0 (nos envVars abaixo) é o que faz esse
+    # Chromium baixado realmente sobreviver até a hora de rodar (não só até
+    # o fim do build): sem essa variável, o Playwright baixa o navegador em
+    # ~/.cache/ms-playwright, uma pasta de cache do "build" que o Render
+    # não carrega pro container que efetivamente roda o serviço depois -
+    # o build "via bem" (o log mostra o download 100% concluído), mas o
+    # Chromium some assim que o serviço sobe, e o botão "Gerar MBR" (tela
+    # Auditoria) falha com "Executable doesn't exist". Com valor "0", o
+    # Playwright instala o navegador DENTRO da própria pasta de instalação
+    # do pacote (site-packages/.venv), que faz parte do que o Render
+    # preserva do build pro deploy - resolve o problema na raiz.
     buildCommand: "pip install -r backend/requirements.txt -r backend/requirements-cloud.txt && playwright install chromium"
     startCommand: "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
@@ -43,3 +47,5 @@ services:
         generateValue: true
       - key: PYTHON_VERSION
         value: 3.12.3
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
