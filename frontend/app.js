@@ -4249,6 +4249,7 @@ document.getElementById("btn-reinvestigar-falhas").addEventListener("click", asy
 async function carregarAuditoria(pagina = 1) {
   carregarStatusBackup();
   carregarStatusMl();
+  popularFiltroMesMbr();
   const resposta = await apiFetch(`${API}/auditoria?pagina=${pagina}&tamanho_pagina=50`).then((r) => r.json());
   document.querySelector("#tabela-auditoria tbody").innerHTML = resposta.itens
     .map(
@@ -4271,6 +4272,59 @@ async function carregarAuditoria(pagina = 1) {
   if (btnAnt) btnAnt.addEventListener("click", () => carregarAuditoria(resposta.pagina - 1));
   if (btnProx) btnProx.addEventListener("click", () => carregarAuditoria(resposta.pagina + 1));
 }
+
+// ---------- Gerar MBR (Monthly Business Review) - PPTX com prints reais das telas (19/08/2026) ----------
+// O usuário escolhe o mês (decisão explícita, sem cálculo automático de
+// "último mês fechado") - a lista de meses aqui é só gerada a partir da
+// data de hoje (últimos 24 meses), não depende de já existir dado pra esse
+// mês: quem decide se o mês escolhido faz sentido é a própria pessoa.
+let mbrFiltroMesCarregado = false;
+function popularFiltroMesMbr() {
+  if (mbrFiltroMesCarregado) return;
+  const sel = document.getElementById("mbr-filtro-mes");
+  const hoje = new Date();
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    const valor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const opt = document.createElement("option");
+    opt.value = valor;
+    opt.textContent = valor;
+    sel.appendChild(opt);
+  }
+  mbrFiltroMesCarregado = true;
+}
+
+document.getElementById("btn-gerar-mbr").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-gerar-mbr");
+  const status = document.getElementById("mbr-status");
+  const mes = document.getElementById("mbr-filtro-mes").value;
+  if (!mes) return;
+  btn.disabled = true;
+  btn.textContent = "Gerando...";
+  status.textContent = "Capturando as telas do Atlas... isso pode levar cerca de um minuto.";
+  try {
+    const res = await apiFetch(`${API}/auditoria/gerar-mbr?mes=${encodeURIComponent(mes)}`, { method: "POST" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      status.textContent = `Erro: ${data.detail || "não foi possível gerar o MBR."}`;
+    } else {
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `MBR_Atlas_${mes}.pptx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      status.textContent = `MBR de ${mes} gerado e baixado com sucesso.`;
+    }
+  } catch (erro) {
+    status.textContent = "Falha ao gerar o MBR: " + erro.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "Gerar MBR";
+});
 
 // ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
 function badgeStatusBaixa(statusFluxo) {

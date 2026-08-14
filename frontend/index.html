@@ -859,6 +859,20 @@
       </div>
 
       <div class="panel">
+        <h2>Gerar MBR</h2>
+        <p class="hint">
+          Gera uma apresentação (.pptx) com prints reais das telas do Atlas para o mês escolhido: Painel de Inventário,
+          Acurácia Ponderada, Mapeamento de Passivos, Shelf Life, Controle de Movimentados e FEFO. Pode levar cerca de
+          um minuto - o sistema navega pelas próprias telas em segundo plano para capturar cada painel.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px">
+          <select id="mbr-filtro-mes" class="select-filtro"></select>
+          <button id="btn-gerar-mbr" class="btn-primario">Gerar MBR</button>
+        </div>
+        <p class="hint" id="mbr-status" style="margin-top:10px"></p>
+      </div>
+
+      <div class="panel">
         <table class="tabela" id="tabela-auditoria">
           <thead><tr><th>Data/hora</th><th>Usuário</th><th>Ação</th><th>Entidade</th><th>Detalhes</th></tr></thead>
           <tbody></tbody>
@@ -1698,6 +1712,6 @@
   </div>
 </div>
 
-<script src="app.js?v=91"></script>
+<script src="app.js?v=92"></script>
 </body>
 </html>

@@ -1,8 +1,10 @@
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..audit import registrar_log
 from ..database import get_db
 from ..deps import requer_papel
 
@@ -38,3 +40,46 @@ def listar(
         "pagina": pagina,
         "paginas": max(1, -(-total // tamanho_pagina)),
     }
+
+
+@router.post("/gerar-mbr")
+async def gerar_mbr(
+    mes: str = Query(..., description='Mês no formato "AAAA-MM" - escolhido pelo usuário na tela (decisão explícita: sem cálculo automático de "mês fechado").'),
+    usuario: models.Usuario = Depends(requer_papel("admin")),
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(None),
+):
+    """Gera o MBR (Monthly Business Review) em PPTX com capturas de tela REAIS
+    das telas do Atlas (ver app/mbr_generator.py) - restrito a admin porque
+    abre um navegador Chromium headless dentro do próprio processo do
+    servidor, reaproveitando o token de quem pediu (nunca gera nem guarda
+    credencial nova). Só cobre os módulos que já têm tela própria no Atlas
+    (decisão do usuário, 19/08/2026) - Testes de Inovação e o antigo
+    "Controle de Movimentados" (itens analisados/divergência) ficam de fora
+    por enquanto."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sessão inválida ou expirada - faça login de novo antes de gerar o MBR.")
+    token = authorization.removeprefix("Bearer ").strip()
+
+    from ..mbr_generator import capturar_telas_mbr, montar_pptx_mbr
+
+    try:
+        secoes = await capturar_telas_mbr(token, mes)
+    except Exception as e:
+        raise HTTPException(
+            500,
+            "Não foi possível gerar o MBR: falha ao capturar as telas do Atlas "
+            f"(Playwright/Chromium). Detalhe técnico: {e}",
+        )
+
+    pptx_bytes = montar_pptx_mbr(secoes, mes)
+
+    registrar_log(db, usuario.username, "gerar_mbr", detalhes={"mes": mes})
+    db.commit()
+
+    nome_arquivo = f"MBR_Atlas_{mes}.pptx"
+    return Response(
+        content=pptx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )
