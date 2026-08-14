@@ -283,8 +283,23 @@ def listar_fechamentos(almoxarifado: str | None = None, mes: str | None = None, 
 
 # ==================== Dashboard de acompanhamento ====================
 
+def _limite_mes_completo():
+    """Primeiro dia do mês corrente - usado pra excluir o mês em andamento dos dois
+    painéis analíticos de Fechamento (Painel de Inventário e Acurácia Ponderada), pedido
+    explícito do usuário (18/08/2026): o mês corrente sempre aparecia com poucos
+    fechamentos ainda feitos, distorcendo pra baixo qualquer "Evolução Mensal" ou média -
+    não é um caso de divergência real, é só o mês ainda não ter terminado. Dinâmico de
+    propósito (não fixo num mês) - vira Setembro sozinho quando agosto acabar, sem
+    precisar tocar no código de novo. Só vale pra esses dois painéis, não pra tela de
+    "Fechamentos anteriores" (listar_fechamentos) nem pro resto do sistema."""
+    from datetime import date
+    hoje = date.today()
+    return date(hoje.year, hoje.month, 1)
+
+
 def _query_itens_filtrados(db: Session, almoxarifado: str | None, mes: str | None, usuario: models.Usuario | None = None):
     q = db.query(models.ItemFechamento).join(models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id)
+    q = q.filter(models.FechamentoInventario.data_fechamento < _limite_mes_completo())
     # "Parâmetro de visualização" por almoxarifado (18/08/2026) - ponto único, já que
     # essa função alimenta praticamente todo o painel de Acurácia Ponderada. usuario=None
     # (chamadas internas antigas que não repassam o usuário) mantém o comportamento de
@@ -392,7 +407,9 @@ def dashboard_ranking_financeiro(almoxarifado: str | None = None, mes: str | Non
 def dashboard_top_recorrentes(almoxarifado: str | None = None, limite: int = 10, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """Top SKUs que mais vezes apareceram divergentes, somando todos os
     fechamentos já importados - o que você chamaria de 'always suspects'."""
-    q = db.query(models.ItemFechamento).filter(models.ItemFechamento.divergente.is_(True))
+    q = db.query(models.ItemFechamento).join(
+        models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id
+    ).filter(models.ItemFechamento.divergente.is_(True), models.FechamentoInventario.data_fechamento < _limite_mes_completo())
     q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
     from collections import defaultdict
@@ -417,8 +434,11 @@ def dashboard_top_impacto_financeiro(almoxarifado: str | None = None, limite: in
     FALTAS (divergencia_qtd < 0, ou seja, perda/déficit real), não
     sobras. Diferente de 'top-recorrentes': aqui o que importa é o
     tamanho do prejuízo, não quantas vezes o item apareceu."""
-    q = db.query(models.ItemFechamento).filter(
-        models.ItemFechamento.divergente.is_(True), models.ItemFechamento.divergencia_qtd < 0
+    q = db.query(models.ItemFechamento).join(
+        models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id
+    ).filter(
+        models.ItemFechamento.divergente.is_(True), models.ItemFechamento.divergencia_qtd < 0,
+        models.FechamentoInventario.data_fechamento < _limite_mes_completo(),
     )
     q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
@@ -443,7 +463,7 @@ def dashboard_evolucao_mensal(almoxarifado: str | None = None, usuario: models.U
     """MoM: acurácia por mês + quantas fechamentos/almoxarifados foram
     avaliados naquele mês - pra não confundir queda de % com aumento de
     cobertura (mais almoxarifados auditados no período)."""
-    q_fech = db.query(models.FechamentoInventario)
+    q_fech = db.query(models.FechamentoInventario).filter(models.FechamentoInventario.data_fechamento < _limite_mes_completo())
     q_fech = filtrar_por_almoxarifado_permitido(q_fech, models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
     fechamentos = q_fech.all()
 
@@ -478,7 +498,8 @@ def dashboard_evolucao_mensal(almoxarifado: str | None = None, usuario: models.U
 
 @router.get("/dashboard/evolucao-por-almox-mensal")
 def dashboard_evolucao_por_almox_mensal(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    fechamentos = filtrar_por_almoxarifado_permitido(db.query(models.FechamentoInventario), models.FechamentoInventario.almoxarifado, usuario, None).all()
+    q_fech = db.query(models.FechamentoInventario).filter(models.FechamentoInventario.data_fechamento < _limite_mes_completo())
+    fechamentos = filtrar_por_almoxarifado_permitido(q_fech, models.FechamentoInventario.almoxarifado, usuario, None).all()
     from collections import defaultdict
     por_mes_almox = defaultdict(lambda: defaultdict(lambda: {"total": 0, "sem_divergencia": 0}))
     for f in fechamentos:
@@ -970,7 +991,8 @@ def dashboard_evolucao_ponderada_mensal(almoxarifado: str | None = None, usuario
     falta juntos como positivo) - um jeito de olhar evolução/involução em
     R$, não em %, já que 100% de acurácia com R$ 50 mil em jogo é uma
     leitura bem diferente de 100% com R$ 500."""
-    q_fech = filtrar_por_almoxarifado_permitido(db.query(models.FechamentoInventario), models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
+    q_fech = db.query(models.FechamentoInventario).filter(models.FechamentoInventario.data_fechamento < _limite_mes_completo())
+    q_fech = filtrar_por_almoxarifado_permitido(q_fech, models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
     fechamentos = q_fech.all()
 
     meses = sorted({f.data_fechamento.strftime("%Y-%m") for f in fechamentos})
