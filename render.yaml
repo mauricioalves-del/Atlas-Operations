@@ -20,7 +20,19 @@ services:
     name: atlas
     runtime: python
     plan: free
-    buildCommand: "pip install -r backend/requirements.txt -r backend/requirements-cloud.txt"
+    # "playwright install chromium" baixa só o BINÁRIO do Chromium (sem
+    # --with-deps) porque o plano "free"/runtime "python" do Render não dá
+    # acesso a root/apt-get durante o build - "--with-deps" tentaria rodar
+    # apt-get e quebraria o build inteiro. Isso resolve o erro "Executable
+    # doesn't exist at .../chromium.../chrome" (ver "Gerar MBR" em
+    # Auditoria). Se depois de redeployar o erro mudar para algo como
+    # "error while loading shared libraries: libnss3.so" (biblioteca do
+    # sistema faltando, não o binário em si), esse plano "python" nativo do
+    # Render não tem como resolver sozinho - nesse caso a saída seria migrar
+    # este serviço pra um deploy via Docker (Dockerfile com apt-get install
+    # das libs que faltam), o que é uma mudança maior; volte à conversa com o
+    # Claude se chegar nesse ponto.
+    buildCommand: "pip install -r backend/requirements.txt -r backend/requirements-cloud.txt && playwright install chromium"
     startCommand: "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: DATABASE_URL
