@@ -64,15 +64,36 @@ def _base_url() -> str:
     return os.environ.get("ATLAS_MBR_BASE_URL", f"http://127.0.0.1:{porta}")
 
 
+async def _capturar_com_retentativa(elemento, titulo: str):
+    """Tira o print de uma seção com tolerância a instabilidade de layout -
+    o plano "free" do Render (0.1 CPU/512MB) é lento o bastante pra
+    gráficos/tabelas ainda estarem se ajustando quando o Playwright tenta
+    tirar o print, e o "element is not stable" do Playwright fica tentando
+    de novo até estourar o timeout padrão (30s). "animations=disabled"
+    resolve a causa mais comum (transição CSS/animação de gráfico que nunca
+    "para" de vez); o timeout maior (45s, com uma segunda tentativa até 75s)
+    cobre o resto. Se mesmo assim não der, NÃO derruba o MBR inteiro - essa
+    seção entra como "não disponível" (ver _adicionar_slide_secao) e as
+    outras 5 seções continuam normalmente."""
+    for tentativa, timeout_ms in enumerate((45000, 75000), start=1):
+        try:
+            return await elemento.screenshot(timeout=timeout_ms, animations="disabled")
+        except Exception as e:
+            print(f"Atlas MBR: falha ao capturar '{titulo}' (tentativa {tentativa}): {e}")
+    return None
+
+
 async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict]:
     """Abre um Chromium headless, autentica reaproveitando o MESMO token
     de quem pediu a geração (lido do header Authorization da requisição -
     não gera nem guarda nenhuma credencial nova), navega por cada seção de
     SECOES_MBR aplicando o filtro de mês quando existir, e tira um print
-    de cada uma. Retorna [{titulo, png_bytes}]. Faz import do Playwright
-    dentro da função (não no topo do módulo) de propósito: se o Chromium
-    não estiver instalado nesse ambiente, o erro só aparece quando alguém
-    realmente tenta gerar um MBR, não impede o resto do Atlas de subir."""
+    de cada uma. Retorna [{titulo, png_bytes}] (png_bytes pode vir None se
+    aquela seção específica não deu tempo de capturar - ver
+    _capturar_com_retentativa). Faz import do Playwright dentro da função
+    (não no topo do módulo) de propósito: se o Chromium não estiver
+    instalado nesse ambiente, o erro só aparece quando alguém realmente
+    tenta gerar um MBR, não impede o resto do Atlas de subir."""
     from playwright.async_api import async_playwright
 
     base_url = _base_url()
@@ -82,6 +103,12 @@ async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         try:
             page = await browser.new_page(viewport={"width": 1600, "height": 1000})
+            # Timeouts padrão mais folgados que o default do Playwright (30s) -
+            # o plano "free" do Render pode levar 50s+ só pra acordar de um
+            # spin-down por inatividade (aviso do próprio Render), fora o
+            # tempo de fato processando os dashboards com 0.1 CPU.
+            page.set_default_timeout(45000)
+            page.set_default_navigation_timeout(60000)
 
             # primeira navegação só pra existir um "origin" válido -
             # localStorage não pode ser setado antes de a página carregar
@@ -92,11 +119,13 @@ async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict
                 token,
             )
             await page.reload(wait_until="networkidle")
-            await page.wait_for_selector("#shell-app:not(.hidden)", timeout=20000)
+            await page.wait_for_selector("#shell-app:not(.hidden)", timeout=30000)
 
             for secao in SECOES_MBR:
                 await page.evaluate("(v) => mostrarView(v)", secao["chave"])
-                await page.wait_for_timeout(700)  # tempo pro fetch inicial da view carregar
+                await page.wait_for_timeout(1200)  # tempo pro fetch inicial da view carregar - mais folga
+                # que no sandbox de teste porque o plano "free" do Render roda com só 0.1 CPU/512MB,
+                # bem mais lento que qualquer ambiente de desenvolvimento pra abrir gráficos/tabelas.
 
                 if secao["filtro_mes_id"] and mes:
                     seletor = f"#{secao['filtro_mes_id']}"
@@ -104,12 +133,15 @@ async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict
                         valores = await page.eval_on_selector_all(f"{seletor} option", "opts => opts.map(o => o.value)")
                         if mes in valores:
                             await page.select_option(seletor, mes)
-                            await page.wait_for_timeout(900)  # tempo pro dashboard recarregar com o filtro novo
+                            await page.wait_for_timeout(1500)  # tempo pro dashboard recarregar com o filtro novo
 
-                await page.wait_for_timeout(500)
+                await page.wait_for_timeout(1000)
                 elemento = page.locator(f"#view-{secao['chave']}")
-                png_bytes = await elemento.screenshot()
-                resultados.append({"titulo": secao["titulo"], "png_bytes": png_bytes})
+                png_bytes = await _capturar_com_retentativa(elemento, secao["titulo"])
+                if png_bytes is not None:
+                    resultados.append({"titulo": secao["titulo"], "png_bytes": png_bytes})
+                else:
+                    resultados.append({"titulo": secao["titulo"], "png_bytes": None})
         finally:
             await browser.close()
 
@@ -135,7 +167,7 @@ def _adicionar_slide_titulo(prs: Presentation, mes: str):
     p2.font.color.rgb = COR_CINZA_TEXTO
 
 
-def _adicionar_slide_secao(prs: Presentation, titulo: str, png_bytes: bytes):
+def _adicionar_slide_secao(prs: Presentation, titulo: str, png_bytes: Optional[bytes]):
     layout_branco = prs.slide_layouts[6]
     slide = prs.slides.add_slide(layout_branco)
 
@@ -145,6 +177,18 @@ def _adicionar_slide_secao(prs: Presentation, titulo: str, png_bytes: bytes):
     p.font.size = Pt(24)
     p.font.bold = True
     p.font.color.rgb = COR_AZUL_ATLAS
+
+    # Essa seção específica não deu tempo de capturar (ver
+    # _capturar_com_retentativa) - em vez de derrubar o MBR inteiro, entra
+    # um aviso no lugar do print e o restante do PPTX segue normal.
+    if png_bytes is None:
+        aviso_box = slide.shapes.add_textbox(Inches(0.5), Inches(3.2), Inches(12.3), Inches(1.5))
+        p_aviso = aviso_box.text_frame.paragraphs[0]
+        p_aviso.text = "Não foi possível capturar esta tela a tempo (servidor lento no momento da geração). Tente gerar o MBR de novo."
+        p_aviso.font.size = Pt(18)
+        p_aviso.font.color.rgb = COR_CINZA_TEXTO
+        p_aviso.alignment = PP_ALIGN.CENTER
+        return
 
     img_stream = BytesIO(png_bytes)
     img = Image.open(img_stream)
