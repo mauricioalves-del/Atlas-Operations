@@ -100,7 +100,26 @@ async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict
     resultados = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        # Flags pra reduzir o consumo de memória do Chromium - importante
+        # porque no plano "free" do Render (512MB no total) esse mesmo
+        # processo já compartilha RAM com o resto do Atlas (pandas,
+        # scikit-learn com o modelo carregado, FastAPI). "--single-process"
+        # NÃO entra aqui de propósito - reduziria um pouco mais, mas deixa o
+        # Chromium instável (mais chance de crash no meio da captura).
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--mute-audio",
+                "--js-flags=--max-old-space-size=256",
+            ],
+        )
         try:
             page = await browser.new_page(viewport={"width": 1600, "height": 1000})
             # Timeouts padrão mais folgados que o default do Playwright (30s) -
@@ -110,18 +129,31 @@ async def capturar_telas_mbr(token: str, mes: Optional[str] = None) -> list[dict
             page.set_default_timeout(45000)
             page.set_default_navigation_timeout(60000)
 
-            # primeira navegação só pra existir um "origin" válido -
-            # localStorage não pode ser setado antes de a página carregar
-            # ao menos uma vez nesse domínio.
-            await page.goto(base_url, wait_until="networkidle")
-            await page.evaluate(
-                "(token) => { localStorage.setItem('atlas_token', token); localStorage.setItem('atlas_user', '{}'); }",
-                token,
-            )
-            await page.reload(wait_until="networkidle")
-            await page.wait_for_selector("#shell-app:not(.hidden)", timeout=30000)
+            async def _autenticar_e_recarregar():
+                """Recarrega a página do zero e reaplica o token - usado
+                antes de CADA seção (não só uma vez no início) porque o
+                Atlas é uma SPA cujo roteiro (mostrarView) só ESCONDE a
+                tela anterior, nunca desmonta o DOM/gráficos dela. Sem
+                recarregar a cada seção, depois de passar pelas 6 telas o
+                Chromium estaria com o Painel de Inventário + Acurácia
+                Ponderada + ... todos ainda vivos em memória ao mesmo tempo
+                - foi isso (mais o resto do Atlas já usando boa parte dos
+                512MB) que estourou o limite de memória do plano "free" e
+                derrubou a instância. Recarregar entre seções mantém o
+                Chromium sempre com só UMA tela carregada por vez."""
+                await page.goto(base_url, wait_until="networkidle")
+                await page.evaluate(
+                    "(token) => { localStorage.setItem('atlas_token', token); localStorage.setItem('atlas_user', '{}'); }",
+                    token,
+                )
+                await page.reload(wait_until="networkidle")
+                await page.wait_for_selector("#shell-app:not(.hidden)", timeout=30000)
+
+            await _autenticar_e_recarregar()
 
             for secao in SECOES_MBR:
+                if secao is not SECOES_MBR[0]:
+                    await _autenticar_e_recarregar()  # zera a memória acumulada da seção anterior
                 await page.evaluate("(v) => mostrarView(v)", secao["chave"])
                 await page.wait_for_timeout(1200)  # tempo pro fetch inicial da view carregar - mais folga
                 # que no sandbox de teste porque o plano "free" do Render roda com só 0.1 CPU/512MB,
