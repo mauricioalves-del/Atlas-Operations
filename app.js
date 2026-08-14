@@ -2304,6 +2304,19 @@ function renderApPareto(p) {
     },
     options: {
       plugins: { legend: { position: "bottom", labels: { color: "#8ca0a3", font: { size: 10 } } } },
+      // clique em qualquer ponto da coluna (barra OU o ponto da linha acima dela) abre o
+      // resumo completo do item - 17/08/2026. interaction "index"+intersect:false garante
+      // que o clique funciona em qualquer lugar da coluna correspondente àquele SKU, não só
+      // exatamente sobre a barrinha ou o ponto.
+      interaction: { mode: "index", intersect: false },
+      onHover: (evt, elementos) => {
+        evt.native.target.style.cursor = elementos.length ? "pointer" : "default";
+      },
+      onClick: (evt, elementos) => {
+        if (!elementos.length) return;
+        const item = itens[elementos[0].index];
+        if (item) abrirModalResumoItemPareto(item);
+      },
       scales: {
         x: { ticks: { color: "#8ca0a3", font: { size: 9 } }, grid: { display: false } },
         y: { position: "left", ticks: { color: "#8ca0a3", font: { size: 9 } }, grid: { color: "#2e3a40" } },
@@ -2326,6 +2339,56 @@ function renderApPareto(p) {
     })
   );
 }
+
+// Resumo com todas as infos do item ao clicar numa coluna da curva de Pareto (17/08/2026) -
+// só leitura (diferente do modal de Ação de acompanhamento) + atalho "Investigar" pra abrir o
+// diagnóstico completo da divergência quando ela existir (nem todo item divergente do
+// fechamento tem uma Divergencia linkada - ver ItemFechamento.divergencia_id).
+function abrirModalResumoItemPareto(item) {
+  document.getElementById("modal-resumo-item-titulo").textContent = `${item.sku} — ${item.descricao || "sem descrição"}`;
+
+  document.getElementById("modal-resumo-item-kpis").innerHTML = [
+    { rotulo: "Valor", valor: formatarMoeda(item.valor) },
+    { rotulo: "Divergência (qtd)", valor: item.divergencia_qtd ?? "—" },
+    { rotulo: "% acum. do valor", valor: `${item.pct_valor_acumulado}%` },
+    { rotulo: "Posição no ranking", valor: `#${item.posicao}` },
+  ]
+    .map((k) => `<div class="kpi-mini"><div class="valor">${k.valor}</div><div class="rotulo">${k.rotulo}</div></div>`)
+    .join("");
+
+  const linhas = [
+    `<strong>Almoxarifado:</strong> ${item.almoxarifado || "—"}`,
+    item.categoria_produto ? `<strong>Categoria:</strong> ${item.categoria_produto}` : null,
+    `<strong>Qtd. sistema / contagem:</strong> ${item.qtd_sistema ?? "—"} / ${item.qtd_contagem ?? "—"}`,
+    item.data_fechamento ? `<strong>Fechamento:</strong> ${formatarDataCurta(item.data_fechamento)}` : null,
+    item.destaque_recorrente ? `<strong>⭐ Recorrente:</strong> já divergiu ${item.recorrencias_anteriores} vez(es) antes` : null,
+    item.resumo_planilha ? `<strong>Resumo da planilha:</strong> ${item.resumo_planilha}` : null,
+    item.observacao_pos_inventario ? `<strong>Observação pós-inventário:</strong> ${item.observacao_pos_inventario}` : null,
+  ].filter(Boolean);
+  document.getElementById("modal-resumo-item-corpo").innerHTML = linhas.map((l) => `<p style="margin:4px 0">${l}</p>`).join("");
+
+  const btnInvestigar = document.getElementById("btn-investigar-resumo-item");
+  const avisoSemDivergencia = document.getElementById("modal-resumo-item-sem-divergencia");
+  if (item.divergencia_id) {
+    btnInvestigar.classList.remove("hidden");
+    avisoSemDivergencia.textContent = "";
+    btnInvestigar.onclick = () => {
+      document.getElementById("modal-resumo-item-overlay").classList.add("hidden");
+      abrirDetalhe(item.divergencia_id);
+    };
+  } else {
+    btnInvestigar.classList.add("hidden");
+    avisoSemDivergencia.textContent = "Esse item não tem uma divergência específica linkada pra investigar diretamente.";
+  }
+
+  document.getElementById("modal-resumo-item-overlay").classList.remove("hidden");
+}
+document.getElementById("btn-fechar-modal-resumo-item").addEventListener("click", () => {
+  document.getElementById("modal-resumo-item-overlay").classList.add("hidden");
+});
+document.getElementById("modal-resumo-item-overlay").addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-resumo-item-overlay") document.getElementById("modal-resumo-item-overlay").classList.add("hidden");
+});
 
 function renderApMagnitude(m) {
   const ctx = document.getElementById("ap-chart-magnitude");

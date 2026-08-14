@@ -767,6 +767,17 @@ def dashboard_concentracao_valor(almoxarifado: str | None = None, mes: str | Non
     ordenados = sorted(divergentes, key=valor_atual, reverse=True)
     valor_total = sum(valor_atual(i) for i in ordenados)
 
+    # data do fechamento de cada item (17/08/2026) - não tem relationship ORM entre
+    # ItemFechamento e FechamentoInventario neste projeto (só a FK), então busca à parte;
+    # só dos itens que de fato vão pro gráfico (curva[:50]), não da lista divergente inteira.
+    ids_fechamento_curva = {i.fechamento_id for i in ordenados[:50]}
+    datas_fechamento = {
+        f.id: f.data_fechamento
+        for f in db.query(models.FechamentoInventario.id, models.FechamentoInventario.data_fechamento)
+        .filter(models.FechamentoInventario.id.in_(ids_fechamento_curva))
+        .all()
+    }
+
     curva = []
     acumulado = 0.0
     for idx, item in enumerate(ordenados, start=1):
@@ -776,6 +787,15 @@ def dashboard_concentracao_valor(almoxarifado: str | None = None, mes: str | Non
             "valor": round(valor_atual(item), 2),
             "pct_itens_acumulado": round(idx / len(ordenados) * 100, 1),
             "pct_valor_acumulado": round(acumulado / valor_total * 100, 1) if valor_total else 0,
+            # campos extras só pra alimentar o "resumo do item" quando se clica na barra do
+            # gráfico (17/08/2026) - o essencial (posicao/sku/descricao/valor/% acumulado)
+            # já bastava pro gráfico em si, isso é o que falta pra um resumo completo + Investigar.
+            "categoria_produto": item.categoria_produto,
+            "qtd_sistema": item.qtd_sistema, "qtd_contagem": item.qtd_contagem, "divergencia_qtd": item.divergencia_qtd,
+            "destaque_recorrente": item.destaque_recorrente, "recorrencias_anteriores": item.recorrencias_anteriores,
+            "resumo_planilha": item.resumo_planilha, "observacao_pos_inventario": item.observacao_pos_inventario,
+            "divergencia_id": item.divergencia_id, "fechamento_id": item.fechamento_id,
+            "data_fechamento": str(datas_fechamento[item.fechamento_id]) if item.fechamento_id in datas_fechamento else None,
         })
 
     top_n_valor = sum(valor_atual(i) for i in ordenados[:top_n])

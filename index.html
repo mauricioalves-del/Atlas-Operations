@@ -1471,6 +1471,26 @@
   </div>
 </div>
 
+<!-- Resumo de item ao clicar numa barra de gráfico (ex: curva de Pareto da Acurácia Ponderada,
+     17/08/2026) - todas as informações do produto naquele ponto + atalho pra abrir a
+     investigação completa da divergência (quando existir uma linkada). -->
+<div id="modal-resumo-item-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(560px, 94vw)">
+    <div class="modal-header">
+      <h2 id="modal-resumo-item-titulo">Resumo do item</h2>
+      <button id="btn-fechar-modal-resumo-item" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <div id="modal-resumo-item-kpis" class="kpi-row-modal"></div>
+      <div id="modal-resumo-item-corpo" class="hint" style="line-height:1.7"></div>
+      <div style="margin-top:18px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <button id="btn-investigar-resumo-item" class="btn-primario">🔍 Investigar</button>
+        <span id="modal-resumo-item-sem-divergencia" class="hint" style="margin:0"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="modal-justificativa-overlay" class="modal-overlay hidden">
   <div class="modal-card">
     <div class="modal-header">
@@ -1549,6 +1569,6 @@
   </div>
 </div>
 
-<script src="app.js?v=86"></script>
+<script src="app.js?v=87"></script>
 </body>
 </html>
