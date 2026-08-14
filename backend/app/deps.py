@@ -42,6 +42,32 @@ def verificar_chave_integracao(x_atlas_chave: str | None = Header(None, alias="X
         raise HTTPException(401, "Chave de integração inválida ou ausente (header X-Atlas-Chave).")
 
 
+def filtrar_por_almoxarifado_permitido(query, coluna_almoxarifado, usuario: models.Usuario, almoxarifado_solicitado: str | None):
+    """Aplica o "parâmetro de visualização" por almoxarifado (18/08/2026) - a
+    restrição em si vive em Usuario.almoxarifados_permitidos (lista de códigos,
+    JSON; None/[] = sem restrição, continua vendo tudo como sempre viu). Ponto
+    único de aplicação pra não repetir essa lógica em cada endpoint que filtra
+    por almoxarifado - troca a chamada de
+        if almoxarifado: query = query.filter(Coluna == almoxarifado)
+    por
+        query = filtrar_por_almoxarifado_permitido(query, Coluna, usuario, almoxarifado)
+    e cobre os dois casos: usuário pediu um almoxarifado específico (intersecta
+    com o que ele pode ver - fora da lista permitida vira filtro impossível, sem
+    lançar erro) e usuário não pediu nenhum, ou seja "quero ver tudo" (se tem
+    restrição, "tudo" passa a significar "tudo que eu posso ver", não o banco
+    inteiro)."""
+    permitidos = getattr(usuario, "almoxarifados_permitidos", None) or None
+    if not permitidos:
+        if almoxarifado_solicitado:
+            query = query.filter(coluna_almoxarifado == almoxarifado_solicitado)
+        return query
+    if almoxarifado_solicitado:
+        if almoxarifado_solicitado in permitidos:
+            return query.filter(coluna_almoxarifado == almoxarifado_solicitado)
+        return query.filter(coluna_almoxarifado.in_([]))  # pediu um fora do escopo - devolve vazio, sem erro
+    return query.filter(coluna_almoxarifado.in_(permitidos))
+
+
 def requer_papel(*papeis_permitidos: str):
     """Uso: Depends(requer_papel("admin", "analista")) numa rota - só
     deixa passar se o usuário logado tiver um desses papéis."""

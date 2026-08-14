@@ -90,6 +90,10 @@ def garantir_colunas_novas():
             conn.execute(text("ALTER TABLE usuarios ADD COLUMN tentativas_falhas INTEGER DEFAULT 0"))
             conn.execute(text("ALTER TABLE usuarios ADD COLUMN bloqueado_ate TIMESTAMP"))
             conn.commit()
+    if "almoxarifados_permitidos" not in colunas_usuarios:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE usuarios ADD COLUMN almoxarifados_permitidos JSON"))
+            conn.commit()
 
     # log_auditoria é uma tabela nova - Base.metadata.create_all já cria
     # se ainda não existir, sem precisar de ALTER TABLE aqui.

@@ -24,9 +24,13 @@ def criar(payload: schemas.UsuarioCreate, usuario: models.Usuario = Depends(requ
     novo = models.Usuario(
         username=payload.username, nome_exibicao=payload.nome_exibicao,
         senha_hash=hash_senha(payload.senha), papel=payload.papel, ativo=True,
+        almoxarifados_permitidos=payload.almoxarifados_permitidos or None,
     )
     db.add(novo)
-    registrar_log(db, usuario.username, "criar_usuario", entidade="usuario", entidade_id=payload.username, detalhes={"papel": payload.papel})
+    registrar_log(
+        db, usuario.username, "criar_usuario", entidade="usuario", entidade_id=payload.username,
+        detalhes={"papel": payload.papel, "almoxarifados_permitidos": payload.almoxarifados_permitidos},
+    )
     db.commit()
     db.refresh(novo)
     return novo
@@ -52,6 +56,11 @@ def atualizar(usuario_id: int, payload: schemas.UsuarioAtualizar, usuario_logado
             alvo.bloqueado_ate = None
     if payload.nova_senha:
         alvo.senha_hash = hash_senha(payload.nova_senha)
+    # "almoxarifados_permitidos" in payload.model_fields_set distingue "campo não veio no
+    # payload" (não tocar) de "veio uma lista vazia de propósito" ([] = remove a restrição e
+    # passa a ver tudo) - por isso não dá pra só checar `is not None` aqui como nos outros campos.
+    if "almoxarifados_permitidos" in payload.model_fields_set:
+        alvo.almoxarifados_permitidos = payload.almoxarifados_permitidos or None
     registrar_log(db, usuario_logado.username, "atualizar_usuario", entidade="usuario", entidade_id=alvo.username, detalhes=payload.model_dump(exclude={"nova_senha"}))
     db.commit()
     db.refresh(alvo)

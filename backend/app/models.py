@@ -26,6 +26,12 @@ class Usuario(Base):
     nome_exibicao = Column(String, nullable=True)
     senha_hash = Column(String, nullable=False)
     papel = Column(String, nullable=False, default="leitura")  # admin | analista | leitura
+    # "Parâmetro de visualização" (18/08/2026): lista de códigos de Almoxarifado que este
+    # usuário pode ver - None/[] = sem restrição (continua vendo tudo, comportamento de
+    # sempre). Ver deps.filtrar_por_almoxarifado_permitido pra como isso é aplicado nas
+    # queries. Guardado como JSON (lista de strings) em vez de tabela de associação
+    # separada porque é só uma lista simples de códigos, sem atributo próprio por vínculo.
+    almoxarifados_permitidos = Column(JSON, nullable=True)
     ativo = Column(Boolean, default=True)
     tentativas_falhas = Column(Integer, default=0)
     bloqueado_ate = Column(DateTime, nullable=True)
