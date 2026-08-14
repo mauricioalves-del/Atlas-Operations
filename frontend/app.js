@@ -757,6 +757,8 @@ function mostrarView(nome) {
   if (nome === "acuracia-ponderada") carregarAcuraciaPonderada();
   if (nome === "compras") carregarPedidosCompra();
   if (nome === "pos-inventario") carregarAcoesPosInventario();
+  if (nome === "rotinas") carregarRotinas();
+  if (nome === "fefo") carregarFefo();
 }
 
 // ---------- barra inferior mobile (13/08/2026) ----------
@@ -5879,6 +5881,9 @@ document.getElementById("btn-criar-lote-shelf-life").addEventListener("click", a
   carregarShelfLife();
 });
 
+// Importador de "Lote de Validade (Shelf Life)" - vive na tela "Importar", dentro da
+// tabela "Dados de contexto" (foi movido de dentro da tela Shelf Life a pedido do
+// usuário em 14/08/2026, pra concentrar todos os imports de planilha num único lugar).
 document.getElementById("btn-importar-shelf-life").addEventListener("click", async () => {
   const input = document.getElementById("sl-input-arquivo");
   const resultado = document.getElementById("sl-resultado-importacao");
@@ -5894,11 +5899,16 @@ document.getElementById("btn-importar-shelf-life").addEventListener("click", asy
     const res = await apiFetch(`${API}/shelf-life/importar-planilha`, { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) {
-      resultado.textContent = `Erro (${res.status}): ${data.detail || JSON.stringify(data)}`;
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
       return;
     }
-    resultado.textContent = JSON.stringify(data, null, 2);
-    carregarShelfLife();
+    resultado.textContent = `${data.criados} novo(s) · ${data.atualizados} atualizado(s)${
+      data.ignorados_sem_sku ? " · " + data.ignorados_sem_sku + " sem SKU" : ""
+    }${data.almoxarifados_nao_mapeados && data.almoxarifados_nao_mapeados.length ? " · não mapeados: " + data.almoxarifados_nao_mapeados.join(", ") : ""}`;
+    // se a tela Shelf Life já foi carregada nesta sessão, atualiza os dados dela também
+    if (typeof carregarShelfLife === "function" && document.getElementById("tabela-shelf-life")) {
+      carregarShelfLife();
+    }
   } catch (erro) {
     resultado.textContent = "Falha ao importar: " + erro.message;
   }
@@ -6744,6 +6754,191 @@ function configurarComandoDeVoz() {
 }
 
 configurarComandoDeVoz();
+
+// ---------- Diário de Bordo (Rotinas) (18/08/2026) ----------
+function _rtPeriodoPadrao() {
+  // ultimos 7 dias corridos, terminando hoje - suficiente pra checklist do
+  // dia sem sobrecarregar a tela na primeira carga; o usuário ajusta os
+  // filtros de data se quiser ver mais.
+  const hoje = new Date();
+  const inicio = new Date(hoje);
+  inicio.setDate(hoje.getDate() - 6);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  return { inicio: fmt(inicio), fim: fmt(hoje) };
+}
+
+async function carregarRotinas() {
+  const inicioInput = document.getElementById("rt-filtro-data-inicio");
+  const fimInput = document.getElementById("rt-filtro-data-fim");
+  if (!inicioInput.value || !fimInput.value) {
+    const padrao = _rtPeriodoPadrao();
+    inicioInput.value = inicioInput.value || padrao.inicio;
+    fimInput.value = fimInput.value || padrao.fim;
+  }
+  const dataInicio = inicioInput.value;
+  const dataFim = fimInput.value;
+  const setor = document.getElementById("rt-filtro-setor").value;
+  const qsPeriodo = new URLSearchParams({ data_inicio: dataInicio, data_fim: dataFim });
+  if (setor) qsPeriodo.set("setor", setor);
+
+  const [rotinas, dashboard, execucoes] = await Promise.all([
+    apiFetch(`${API}/rotinas?incluir_inativas=true`).then((r) => r.json()),
+    apiFetch(`${API}/rotinas/dashboard/cumprimento?${qsPeriodo.toString()}`).then((r) => r.json()),
+    apiFetch(`${API}/rotinas/execucoes?${qsPeriodo.toString()}`).then((r) => r.json()),
+  ]);
+
+  // popula o filtro de setor com os setores já cadastrados, sem perder a seleção atual
+  const setorAtual = document.getElementById("rt-filtro-setor").value;
+  const setores = Array.from(new Set(rotinas.map((r) => r.setor).filter(Boolean))).sort();
+  document.getElementById("rt-filtro-setor").innerHTML =
+    `<option value="">Todos os setores</option>` + setores.map((s) => `<option value="${s}" ${s === setorAtual ? "selected" : ""}>${s}</option>`).join("");
+
+  document.getElementById("rt-kpi-row").innerHTML = [
+    { label: "Cumprimento geral", value: dashboard.cumprimento_geral_pct != null ? dashboard.cumprimento_geral_pct + "%" : "—", accent: true },
+    { label: "Concluídas", value: dashboard.total_concluidas, cor: "var(--sucesso, #2e7d32)" },
+    { label: "Atrasadas", value: dashboard.total_atrasadas, cor: "var(--critico)" },
+    { label: "Pendentes", value: dashboard.total_pendentes, cor: "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value ${c.accent ? "accent" : ""}" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  document.querySelector("#tabela-rotinas-por-setor tbody").innerHTML = dashboard.por_setor.length
+    ? dashboard.por_setor
+        .map(
+          (s) =>
+            `<tr><td>${s.setor}</td><td>${s.concluidas}</td><td>${s.atrasadas}</td><td>${s.pendentes}</td><td>${s.cumprimento_pct != null ? s.cumprimento_pct + "%" : "—"}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5" style="color:var(--muted)">Sem execuções esperadas nesse período.</td></tr>`;
+
+  document.querySelector("#tabela-rotinas tbody").innerHTML = rotinas.length
+    ? rotinas
+        .map(
+          (r) => `<tr data-id="${r.id}">
+            <td>${r.nome}</td><td>${r.setor || "—"}</td><td>${r.frequencia}</td><td>${r.responsavel_padrao || "—"}</td>
+            <td>${r.ativo ? "Sim" : "Não"}</td>
+            <td><button class="btn-secundario btn-alternar-rotina" data-id="${r.id}" data-ativo="${r.ativo}" style="padding:4px 10px">${r.ativo ? "Desativar" : "Ativar"}</button></td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="6" style="color:var(--muted)">Nenhuma rotina cadastrada ainda.</td></tr>`;
+
+  document.querySelectorAll(".btn-alternar-rotina").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const ativo = btn.dataset.ativo === "true";
+      await apiFetch(`${API}/rotinas/${btn.dataset.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ativo: !ativo }),
+      });
+      carregarRotinas();
+    })
+  );
+
+  const OPCOES_STATUS = ["Pendente", "Concluida", "Atrasada", "Nao_Aplicavel"];
+  document.querySelector("#tabela-execucoes-rotina tbody").innerHTML = execucoes.length
+    ? execucoes
+        .map(
+          (e) => `<tr data-rotina-id="${e.rotina_id}" data-data="${e.data_referencia}">
+            <td>${formatarDataCurta(e.data_referencia)}</td><td>${e.rotina_nome || "—"}</td><td>${e.rotina_setor || "—"}</td>
+            <td>
+              <select class="select-status-execucao" data-rotina-id="${e.rotina_id}" data-data="${e.data_referencia}" style="${e.status === "Atrasada" ? "color:var(--critico)" : e.status === "Concluida" ? "color:var(--sucesso, #2e7d32)" : ""}">
+                ${OPCOES_STATUS.map((s) => `<option value="${s}" ${s === e.status ? "selected" : ""}>${s.replace("_", " ")}</option>`).join("")}
+              </select>
+            </td>
+            <td>${e.concluido_por || "—"}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5" style="color:var(--muted)">Nenhuma rotina diária ativa no período selecionado.</td></tr>`;
+
+  document.querySelectorAll(".select-status-execucao").forEach((sel) =>
+    sel.addEventListener("change", async () => {
+      const res = await apiFetch(`${API}/rotinas/${sel.dataset.rotinaId}/execucoes/${sel.dataset.data}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: sel.value }),
+      });
+      if (!res.ok) { alert("Erro ao marcar execução."); return; }
+      carregarRotinas();
+    })
+  );
+}
+
+document.getElementById("rt-filtro-data-inicio").addEventListener("change", carregarRotinas);
+document.getElementById("rt-filtro-data-fim").addEventListener("change", carregarRotinas);
+document.getElementById("rt-filtro-setor").addEventListener("change", carregarRotinas);
+
+document.getElementById("btn-criar-rotina").addEventListener("click", async () => {
+  const msg = document.getElementById("rt-msg");
+  const payload = {
+    nome: document.getElementById("rt-nome").value.trim(),
+    setor: document.getElementById("rt-setor").value.trim() || null,
+    frequencia: document.getElementById("rt-frequencia").value,
+    responsavel_padrao: document.getElementById("rt-responsavel").value.trim() || null,
+  };
+  if (!payload.nome) { msg.textContent = "Informe o nome da rotina."; return; }
+  const res = await apiFetch(`${API}/rotinas`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) { msg.textContent = data.detail || "Erro ao criar rotina."; return; }
+  msg.textContent = "Rotina adicionada.";
+  ["rt-nome", "rt-setor", "rt-responsavel"].forEach((id) => (document.getElementById(id).value = ""));
+  carregarRotinas();
+});
+
+// ---------- FEFO (18/08/2026) ----------
+async function carregarFefo() {
+  const resultado = document.getElementById("fefo-filtro-resultado").value;
+  const qs = resultado ? "?" + new URLSearchParams({ resultado }).toString() : "";
+
+  const [dashboard, checagens] = await Promise.all([
+    apiFetch(`${API}/fefo/dashboard/resumo`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/checagens${qs}`).then((r) => r.json()),
+  ]);
+
+  document.getElementById("fefo-kpi-row").innerHTML = [
+    { label: "Transferências avaliadas", value: dashboard.total_transferencias_avaliadas },
+    { label: "Quebras de FEFO", value: dashboard.total_quebras_fefo, cor: "var(--critico)" },
+    { label: "Taxa de quebra", value: dashboard.taxa_quebra_pct != null ? dashboard.taxa_quebra_pct + "%" : "—", cor: "var(--critico)" },
+    { label: "Dentro do critério", value: dashboard.total_dentro_do_criterio, cor: "var(--sucesso, #2e7d32)" },
+    { label: "Sem dado suficiente", value: dashboard.total_sem_dado_suficiente, cor: "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  document.querySelector("#tabela-fefo-top-skus tbody").innerHTML = dashboard.top_skus_com_quebra.length
+    ? dashboard.top_skus_com_quebra.map((s) => `<tr><td>${s.sku}</td><td>${s.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  const corResultado = { Quebra_Fefo: "var(--critico)", Dentro_Do_Criterio: "var(--sucesso, #2e7d32)", Sem_Dado_Suficiente: "var(--muted)" };
+  document.querySelector("#tabela-fefo-checagens tbody").innerHTML = checagens.length
+    ? checagens
+        .map(
+          (c) => `<tr>
+            <td>${c.sku}</td><td class="col-descricao">${c.descricao_produto || "—"}</td><td>${c.almoxarifado_destino || "—"}</td>
+            <td>${c.data_saida ? formatarDataCurta(c.data_saida) : "—"}</td><td>${c.quantidade_transferida ?? "—"}</td>
+            <td>${c.lote_mais_antigo_sku || "—"}</td><td>${c.validade_lote_mais_antigo ? formatarDataCurta(c.validade_lote_mais_antigo) : "—"}</td>
+            <td>${c.dias_uteis_em_aberto ?? "—"}</td>
+            <td style="color:${corResultado[c.resultado] || "inherit"}">${c.resultado.replace(/_/g, " ")}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="9" style="color:var(--muted)">Nenhuma checagem calculada ainda - clique em "Recalcular".</td></tr>`;
+}
+
+document.getElementById("fefo-filtro-resultado").addEventListener("change", carregarFefo);
+document.getElementById("btn-recalcular-fefo").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-recalcular-fefo");
+  btn.disabled = true;
+  btn.textContent = "Recalculando...";
+  try {
+    const res = await apiFetch(`${API}/fefo/recalcular`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) { alert(data.detail || "Erro ao recalcular."); return; }
+    await carregarFefo();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ Recalcular";
+  }
+});
 
 // ---------- PWA: registro do service worker (13/08/2026) ----------
 // Só isso já é o suficiente pra Chrome/Android considerar o Atlas

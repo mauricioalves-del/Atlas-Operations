@@ -643,3 +643,85 @@ class CasoMLFeedback(Base):
     data_deteccao = Column(Date)
     hipotese_confirmada = Column(String)
     criado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class Rotina(Base):
+    """Diário de Bordo (18/08/2026): cadastro de uma rotina recorrente de
+    gestão (ex: "Conferência de câmara fria", "Checklist de abertura") -
+    a definição em si, não as execuções. Cada Rotina gera uma
+    ExecucaoRotina esperada por dia (ou pela frequência configurada), e o
+    % de cumprimento do MBR ("395 de 485 rotinas, 81%") é a razão entre
+    ExecucaoRotina concluídas no prazo e o total esperado no período.
+    Módulo novo - não existia nenhum controle estruturado disso antes
+    (confirmado com o usuário), então o histórico começa do zero a partir
+    de quando isso for cadastrado."""
+    __tablename__ = "rotinas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String, nullable=False)
+    descricao = Column(String, nullable=True)
+    setor = Column(String, index=True, nullable=True)  # ex: Geral, Qualidade, Fábrica, Loja - agrupa o % por setor
+    frequencia = Column(String, default="diaria")  # diaria | semanal | mensal
+    responsavel_padrao = Column(String, nullable=True)
+    ativo = Column(Boolean, default=True)
+    criado_por = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class ExecucaoRotina(Base):
+    """Um registro concreto de execução (ou falta de execução) de uma
+    Rotina numa data específica - a unidade que alimenta o % de
+    cumprimento. `status` distingue "ainda não chegou o prazo"
+    (Pendente) de "passou do prazo sem ser concluída" (Atrasada), pra o
+    % de cumprimento não contar um dia ainda em andamento como se já
+    tivesse falhado."""
+    __tablename__ = "execucoes_rotina"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rotina_id = Column(Integer, ForeignKey("rotinas.id"), nullable=False, index=True)
+    data_referencia = Column(Date, nullable=False, index=True)  # o dia (ou período) que essa execução cobre
+    status = Column(String, default="Pendente")  # Pendente | Concluida | Atrasada | Nao_Aplicavel
+    concluido_em = Column(DateTime, nullable=True)
+    concluido_por = Column(String, nullable=True)
+    observacao = Column(String, nullable=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("rotina_id", "data_referencia", name="uq_execucao_rotina_dia"),)
+
+
+class ChecagemFefo(Base):
+    """Resultado calculado (não importado) de uma checagem de FEFO
+    (First-Expired-First-Out) sobre uma Transferencia que saiu do
+    almoxarifado de Fábrica pra outro almoxarifado (18/08/2026).
+
+    Regra implementada (documentada pra validação/ajuste com o usuário -
+    ver conversa de 18/08/2026 sobre a lógica de FEFO): pra cada
+    Transferencia com origem = Fábrica, olha em LoteShelfLife todos os
+    lotes do mesmo SKU que estavam na Fábrica com data_validade ANTERIOR
+    à do lote mais provável de ter sido movido (não é possível saber com
+    certeza QUAL lote fisicamente saiu, porque a importação diária de
+    Movimentados não registra o lote da transferência - só
+    sku/quantidade/origem/destino/data). Se existe um lote mais antigo
+    (validade menor) do mesmo SKU que ainda aparece com quantidade > 0 na
+    Fábrica depois da transferência, e essa situação persiste por mais
+    de 5 dias úteis (a janela operacional mencionada pelo usuário), isso
+    é registrado como quebra. Guardar o resultado calculado (em vez de
+    calcular on-the-fly a cada carregamento de tela) porque o cálculo
+    depende do estado do LoteShelfLife NO MOMENTO da checagem - se a
+    planilha de lotes for reimportada depois, o resultado histórico não
+    deve mudar retroativamente."""
+    __tablename__ = "checagens_fefo"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    transferencia_id = Column(Integer, ForeignKey("transferencias.id"), nullable=False, index=True)
+    sku = Column(String, index=True)
+    descricao_produto = Column(String, nullable=True)
+    almoxarifado_origem = Column(String, index=True)
+    almoxarifado_destino = Column(String, index=True)
+    data_saida = Column(Date, index=True)
+    quantidade_transferida = Column(Float, nullable=True)
+    lote_mais_antigo_sku = Column(String, nullable=True)  # o lote que deveria ter saído primeiro, se houve quebra
+    validade_lote_mais_antigo = Column(Date, nullable=True)
+    quantidade_remanescente_lote_antigo = Column(Float, nullable=True)
+    dias_uteis_em_aberto = Column(Integer, nullable=True)  # dias úteis que o lote mais antigo ficou parado após a transferência
+    resultado = Column(String, index=True)  # Dentro_Do_Criterio | Quebra_Fefo | Sem_Dado_Suficiente
+    calculado_em = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("transferencia_id", name="uq_checagem_fefo_transferencia"),)

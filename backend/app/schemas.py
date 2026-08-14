@@ -439,3 +439,72 @@ class HipoteseAtualizar(BaseModel):
     descricao: Optional[str] = None
     peso_padrao: Optional[float] = None
     ativo: Optional[bool] = None
+
+
+class RotinaOut(BaseModel):
+    id: int
+    nome: str
+    descricao: Optional[str] = None
+    setor: Optional[str] = None
+    frequencia: str
+    responsavel_padrao: Optional[str] = None
+    ativo: bool
+
+    class Config:
+        from_attributes = True
+
+
+class RotinaCreate(BaseModel):
+    nome: str
+    descricao: Optional[str] = None
+    setor: Optional[str] = None
+    frequencia: str = "diaria"
+    responsavel_padrao: Optional[str] = None
+
+
+class RotinaAtualizar(BaseModel):
+    nome: Optional[str] = None
+    descricao: Optional[str] = None
+    setor: Optional[str] = None
+    frequencia: Optional[str] = None
+    responsavel_padrao: Optional[str] = None
+    ativo: Optional[bool] = None
+
+
+class ExecucaoRotinaOut(BaseModel):
+    id: Optional[int] = None  # None = ainda não persistida (linha virtual "Pendente"/"Atrasada" - ver listar_execucoes)
+    rotina_id: int
+    rotina_nome: Optional[str] = None
+    rotina_setor: Optional[str] = None
+    data_referencia: date
+    status: str
+    concluido_em: Optional[datetime] = None
+    concluido_por: Optional[str] = None
+    observacao: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ExecucaoRotinaAtualizar(BaseModel):
+    status: str  # Concluida | Atrasada | Nao_Aplicavel | Pendente
+    observacao: Optional[str] = None
+
+
+class ChecagemFefoOut(BaseModel):
+    id: int
+    transferencia_id: int
+    sku: str
+    descricao_produto: Optional[str] = None
+    almoxarifado_origem: str
+    almoxarifado_destino: Optional[str] = None
+    data_saida: Optional[date] = None
+    quantidade_transferida: Optional[float] = None
+    lote_mais_antigo_sku: Optional[str] = None
+    validade_lote_mais_antigo: Optional[date] = None
+    quantidade_remanescente_lote_antigo: Optional[float] = None
+    dias_uteis_em_aberto: Optional[int] = None
+    resultado: str
+
+    class Config:
+        from_attributes = True
