@@ -1284,11 +1284,39 @@ function badge(status) {
 // ---------- lista de divergências ----------
 let paginaAtualLista = 1;
 
+async function preencherFiltroAlmoxarifadoLista() {
+  // Lista completa/oficial de almoxarifados (não só os que aparecem na
+  // página atual) - a lista de Divergências é paginada no servidor, então
+  // diferente dos modais "Ver todos" não dá pra montar esse filtro só com
+  // o que já foi carregado na tela.
+  const sel = document.getElementById("lista-filtro-almoxarifado");
+  if (sel.options.length > 1) return; // já carregado
+  try {
+    const almoxarifados = await apiFetch(`${API}/importar/almoxarifados`).then((r) => r.json());
+    almoxarifados
+      .slice()
+      .sort((a, b) => (a.nome || a.codigo).localeCompare(b.nome || b.codigo))
+      .forEach((a) => {
+        const opt = document.createElement("option");
+        opt.value = a.codigo;
+        opt.textContent = a.nome || a.codigo;
+        sel.appendChild(opt);
+      });
+  } catch (erro) {
+    console.error("Falha ao carregar almoxarifados para o filtro da lista de divergências:", erro);
+  }
+}
+
 async function carregarLista(pagina = 1) {
   paginaAtualLista = pagina;
+  preencherFiltroAlmoxarifadoLista();
   const status = document.getElementById("lista-filtro-status").value;
+  const almoxarifado = document.getElementById("lista-filtro-almoxarifado").value;
+  const busca = document.getElementById("lista-busca").value.trim();
   const params = new URLSearchParams({ pagina, tamanho_pagina: 50 });
   if (status) params.set("status", status);
+  if (almoxarifado) params.set("almoxarifado", almoxarifado);
+  if (busca) params.set("busca", busca);
   const resposta = await apiFetch(`${API}/divergencias?${params.toString()}`).then((r) => r.json());
   const divs = resposta.itens || [];
   const tbody = document.querySelector("#tabela-lista tbody");
@@ -1319,6 +1347,12 @@ async function carregarLista(pagina = 1) {
   }
 }
 document.getElementById("lista-filtro-status").addEventListener("change", () => carregarLista(1));
+document.getElementById("lista-filtro-almoxarifado").addEventListener("change", () => carregarLista(1));
+let debounceListaBusca;
+document.getElementById("lista-busca").addEventListener("input", () => {
+  clearTimeout(debounceListaBusca);
+  debounceListaBusca = setTimeout(() => carregarLista(1), 250);
+});
 
 const btnRecalcularValores = document.getElementById("btn-recalcular-valores");
 if (btnRecalcularValores) {
@@ -5350,7 +5384,8 @@ async function carregarJustificativasAjusteInventario() {
     lista = await apiFetch(`${API}/ajustes-inventario/justificativas`).then((r) => r.json());
   } catch (erro) {
     console.error("Falha ao carregar justificativas de ajuste de inventário:", erro);
-    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">Não foi possível carregar as justificativas agora.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="color:var(--muted)">Não foi possível carregar as justificativas agora.</td></tr>`;
+    definirLinhaTotal("mp-tabela-justificativas", null);
     return;
   }
   tbody.innerHTML = lista
@@ -5359,12 +5394,13 @@ async function carregarJustificativasAjusteInventario() {
         <td>${j.baixa_operacional_id ? "Passivo" : "Inventário"}</td>
         <td>${j.sku}</td><td class="col-descricao">${j.descricao_produto || "—"}</td><td>${j.id_lote || "—"}</td>
         <td>${j.qtd_sistema ?? "—"}</td><td>${j.qtd_contagem ?? "—"}</td><td>${j.divergencia_qtd ?? "—"}</td>
+        <td>${formatarMoeda(j.valor_estimado)}</td>
         <td class="col-descricao">${j.justificativa || "—"}</td><td class="col-descricao">${j.solucao_aplicada || "—"}</td>
         <td><span class="badge-status ${j.status}">${j.status.replace("_", " ")}</span></td>
         <td>${j.responsavel || "—"}</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="11" style="color:var(--muted)">Nenhuma justificativa registrada ainda.</td></tr>`;
+    .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma justificativa registrada ainda.</td></tr>`;
 
   document.querySelectorAll("#mp-tabela-justificativas tbody tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => {
@@ -5372,6 +5408,13 @@ async function carregarJustificativasAjusteInventario() {
       if (!justificativa) return;
       abrirModalComJustificativa(justificativa, () => carregarJustificativasAjusteInventario());
     })
+  );
+
+  definirLinhaTotal(
+    "mp-tabela-justificativas",
+    lista.length
+      ? `<td colspan="7">Total (${lista.length} ${lista.length === 1 ? "justificativa" : "justificativas"})</td><td>${formatarMoeda(lista.reduce((s, j) => s + (j.valor_estimado || 0), 0))}</td><td colspan="4"></td>`
+      : null
   );
 }
 

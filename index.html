@@ -312,6 +312,10 @@
       <header class="view-header">
         <h1>Divergências</h1>
         <div class="filtros">
+          <input id="lista-busca" class="select-filtro" type="text" placeholder="Buscar por SKU ou descrição...">
+          <select id="lista-filtro-almoxarifado" class="select-filtro">
+            <option value="">Todos os almoxarifados</option>
+          </select>
           <button id="btn-recalcular-valores" class="btn-secundario">Recalcular valores</button>
           <select id="lista-filtro-status" class="select-filtro">
             <option value="">Todos os status</option>
@@ -501,8 +505,9 @@
         <p class="panel-sub">Justificativas abertas a partir do Fluxo de Inventário, do Top 10 Maiores Movimentações ou das listas completas de Passivos/Inventário — clique numa linha para reabrir e editar</p>
         <div class="tabela-scroll">
           <table class="tabela" id="mp-tabela-justificativas">
-            <thead><tr><th>Tipo</th><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
+            <thead><tr><th>Tipo</th><th>SKU</th><th>Descrição</th><th>Lote</th><th>Qtd. Sistema</th><th>Qtd. Contagem</th><th>Diferença</th><th>Valor</th><th>Justificativa</th><th>Solução aplicada</th><th>Status</th><th>Responsável</th></tr></thead>
             <tbody></tbody>
+            <tfoot></tfoot>
           </table>
         </div>
       </div>
@@ -1524,6 +1529,6 @@
   </div>
 </div>
 
-<script src="app.js?v=82"></script>
+<script src="app.js?v=84"></script>
 </body>
 </html>
