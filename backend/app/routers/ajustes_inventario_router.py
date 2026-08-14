@@ -435,6 +435,10 @@ def excluir_justificativa(justificativa_id: int, usuario: models.Usuario = Depen
     justificativa = db.query(models.JustificativaAjusteInventario).get(justificativa_id)
     if not justificativa:
         raise HTTPException(404, "Justificativa não encontrada.")
+    # Apaga os anexos primeiro - não há relationship/cascade do ORM entre as duas tabelas (só a FK),
+    # então excluir a justificativa direto deixaria os AnexoJustificativa órfãos no SQLite local e
+    # quebraria com IntegrityError num Postgres que valide a FK (17/08/2026).
+    db.query(models.AnexoJustificativa).filter(models.AnexoJustificativa.justificativa_id == justificativa_id).delete()
     db.delete(justificativa)
     db.commit()
     return {"ok": True}

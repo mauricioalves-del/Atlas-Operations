@@ -200,6 +200,15 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE justificativas_ajuste_inventario ADD COLUMN baixa_operacional_id INTEGER"))
                 conn.commit()
 
+    if inspecao.has_table("fechamentos_inventario"):
+        colunas_fechamentos = {c["name"] for c in inspecao.get_columns("fechamentos_inventario")}
+        if "aprovado_manual" not in colunas_fechamentos:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE fechamentos_inventario ADD COLUMN aprovado_manual BOOLEAN DEFAULT 0"))
+                conn.execute(text("ALTER TABLE fechamentos_inventario ADD COLUMN aprovado_manual_por VARCHAR"))
+                conn.execute(text("ALTER TABLE fechamentos_inventario ADD COLUMN aprovado_manual_em TIMESTAMP"))
+                conn.commit()
+
 
 def _backfill_lotes_ajuste_inventario_legado():
     """Roda uma única vez, imediatamente depois da migração que criou a

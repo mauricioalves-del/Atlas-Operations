@@ -47,7 +47,15 @@ function mostrarApp() {
   document.getElementById("shell-app").classList.remove("hidden");
   aplicarPermissoesNaUI();
   atualizarHipotesesCache();
-  mostrarView("hub");
+  // Link direto pra um fechamento específico (ver btn-compartilhar-fechamento, 17/08/2026) -
+  // ?fechamento=<id> na URL abre direto o detalhe em vez do hub, tanto depois de logar quanto
+  // numa sessão já salva que só recarregou a página.
+  const fechamentoLink = new URLSearchParams(location.search).get("fechamento");
+  if (fechamentoLink) {
+    abrirFechamentoDetalhe(fechamentoLink);
+  } else {
+    mostrarView("hub");
+  }
   window.ativarEscutaAtlasSeNecessario();
 }
 
@@ -2981,6 +2989,11 @@ async function carregarFechamentos() {
         <td>${formatarDataCurta(f.data_fechamento)}</td><td>${f.almoxarifado}</td>
         <td>${f.total_itens}</td><td>${f.total_divergentes}</td><td>${formatarMoeda(f.valor_total_divergente)}</td>
         <td>${f.status_assinatura === "Inventário Fechado" ? `<span style="color:var(--ok)">✅ Inventário Fechado</span>` : `<span style="color:var(--critico)">⏳ Inventário em Aberto</span>`}</td>
+        <td>
+          ${f.aprovado_manual
+            ? `<span title="Aprovado por ${f.aprovado_manual_por || "—"} em ${f.aprovado_manual_em ? new Date(f.aprovado_manual_em).toLocaleString("pt-BR") : "—"}">✅ ${f.aprovado_manual_por || "Aprovado"}</span> <button class="btn-secundario btn-desaprovar-manual" data-id="${f.id}" style="margin-left:4px">Desfazer</button>`
+            : `<button class="btn-secundario btn-aprovar-manual" data-id="${f.id}">Aprovar</button>`}
+        </td>
         <td>&rarr;</td>
         <td>
           <select class="select-corrigir-almox" data-id="${f.id}" style="margin-right:6px">
@@ -2991,10 +3004,10 @@ async function carregarFechamentos() {
         </td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="8" style="color:var(--muted)">Nenhum fechamento importado ainda.</td></tr>`;
+    .join("") || `<tr><td colspan="9" style="color:var(--muted)">Nenhum fechamento importado ainda.</td></tr>`;
   document.querySelectorAll("#tabela-fechamentos tbody tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", (ev) => {
-      if (ev.target.closest(".btn-excluir-fechamento") || ev.target.closest(".select-corrigir-almox")) return;
+      if (ev.target.closest(".btn-excluir-fechamento") || ev.target.closest(".select-corrigir-almox") || ev.target.closest(".btn-aprovar-manual") || ev.target.closest(".btn-desaprovar-manual")) return;
       abrirFechamentoDetalhe(tr.dataset.id);
     })
   );
@@ -3040,7 +3053,47 @@ async function carregarFechamentos() {
       }
     })
   );
+  document.querySelectorAll(".btn-aprovar-manual, .btn-desaprovar-manual").forEach((btn) =>
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const aprovar = btn.classList.contains("btn-aprovar-manual");
+      if (aprovar && !confirm("Marcar este fechamento como \"revisado\"? Isso é só uma marcação manual - não substitui nem conta como nenhuma das assinaturas formais exigidas.")) return;
+      const res = await apiFetch(`${API}/fechamentos/${btn.dataset.id}/aprovacao-manual?aprovado=${aprovar}`, { method: "PATCH" });
+      if (!res.ok) {
+        alert("Não foi possível atualizar a aprovação manual.");
+        return;
+      }
+      carregarFechamentos();
+    })
+  );
 }
+
+document.getElementById("btn-aprovar-lote-fechamentos").addEventListener("click", async () => {
+  const antesDe = document.getElementById("fechamentos-aprovar-lote-data").value;
+  if (!antesDe) {
+    alert("Escolha a partir de qual data considerar (será aprovado tudo com data ANTERIOR a ela).");
+    return;
+  }
+  if (!confirm(`Marcar como "revisado" (aprovação manual, sem assinatura formal) todos os fechamentos com data anterior a ${formatarDataCurta(antesDe)}?`)) return;
+  const btn = document.getElementById("btn-aprovar-lote-fechamentos");
+  btn.disabled = true;
+  btn.textContent = "Aprovando...";
+  try {
+    const res = await apiFetch(`${API}/fechamentos/aprovacao-manual-lote`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ antes_de: antesDe }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || "Não foi possível aprovar em lote.");
+      return;
+    }
+    alert(`${data.atualizados} fechamento(s) marcado(s) como revisado(s).`);
+    carregarFechamentos();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Aprovar em lote";
+  }
+});
 
 document.getElementById("btn-importar-fechamento").addEventListener("click", async () => {
   const input = document.getElementById("input-arquivo-fechamento");
@@ -3146,6 +3199,41 @@ async function carregarLotesAjusteInventario() {
   );
 }
 
+let fechamentoDetalheItensDivergentes = [];
+let fechamentoDetalheItensOk = [];
+
+// Renderiza as duas tabelas (divergentes/ok) do fechamento aplicando o termo de busca por
+// SKU/descrição - os itens já vêm todos de uma vez de abrirFechamentoDetalhe (sem paginação),
+// então o filtro é só em memória, igual ao padrão usado nos modais "Ver todos" (17/08/2026).
+function renderTabelasFechamentoDetalhe(termo) {
+  const termoBusca = (termo || "").trim().toLowerCase();
+  const combina = (item) =>
+    !termoBusca || item.sku.toLowerCase().includes(termoBusca) || (item.descricao_produto || "").toLowerCase().includes(termoBusca);
+
+  const divergentesFiltrados = fechamentoDetalheItensDivergentes.filter(combina);
+  document.querySelector("#tabela-itens-divergentes tbody").innerHTML = divergentesFiltrados
+    .map(
+      (item) => `<tr class="${item.destaque_recorrente ? "linha-recorrente" : ""}" data-div-id="${item.divergencia_id || ""}">
+        <td>${item.destaque_recorrente ? `<span class="estrela-recorrente" title="${item.recorrencias_anteriores} vez(es) anterior(es)">★ ${item.recorrencias_anteriores}</span>` : ""}</td>
+        <td>${item.sku}</td><td class="col-descricao">${item.descricao_produto || "—"}</td>
+        <td>${item.divergencia_qtd}</td><td>${formatarMoeda(item.valor_estimado)}</td>
+        <td>${item.resumo_planilha || "—"}</td><td class="col-descricao">${item.observacao_pos_inventario || "—"}</td>
+        <td>${item.divergencia_id ? `<button class="btn-secundario btn-investigar-item">Investigar</button>` : "—"}</td>
+      </tr>`
+    )
+    .join("") || `<tr><td colspan="8" style="color:var(--muted)">${termoBusca ? "Nenhum item encontrado pra essa busca." : "Nenhuma divergência neste fechamento."}</td></tr>`;
+
+  document.querySelectorAll(".btn-investigar-item").forEach((btn) => {
+    const tr = btn.closest("tr");
+    btn.addEventListener("click", () => abrirDetalhe(tr.dataset.divId));
+  });
+
+  const okFiltrados = fechamentoDetalheItensOk.filter(combina);
+  document.querySelector("#tabela-itens-ok tbody").innerHTML = okFiltrados
+    .map((item) => `<tr><td>${item.sku}</td><td class="col-descricao">${item.descricao_produto || "—"}</td><td>${item.qtd_sistema}</td><td>${item.qtd_contagem}</td></tr>`)
+    .join("") || `<tr><td colspan="4" style="color:var(--muted)">${termoBusca ? "Nenhum item encontrado pra essa busca." : "—"}</td></tr>`;
+}
+
 async function abrirFechamentoDetalhe(id) {
   fechamentoDetalheAtualId = id;
   const [f, divergentes, ok] = await Promise.all([
@@ -3166,34 +3254,41 @@ async function abrirFechamentoDetalhe(id) {
     .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value ${c.accent ? "accent" : ""}">${c.value}</div></div>`)
     .join("");
 
-  document.querySelector("#tabela-itens-divergentes tbody").innerHTML = divergentes
-    .map(
-      (item) => `<tr class="${item.destaque_recorrente ? "linha-recorrente" : ""}" data-div-id="${item.divergencia_id || ""}">
-        <td>${item.destaque_recorrente ? `<span class="estrela-recorrente" title="${item.recorrencias_anteriores} vez(es) anterior(es)">★ ${item.recorrencias_anteriores}</span>` : ""}</td>
-        <td>${item.sku}</td><td class="col-descricao">${item.descricao_produto || "—"}</td>
-        <td>${item.divergencia_qtd}</td><td>${formatarMoeda(item.valor_estimado)}</td>
-        <td>${item.resumo_planilha || "—"}</td><td class="col-descricao">${item.observacao_pos_inventario || "—"}</td>
-        <td>${item.divergencia_id ? `<button class="btn-secundario btn-investigar-item">Investigar</button>` : "—"}</td>
-      </tr>`
-    )
-    .join("") || `<tr><td colspan="8" style="color:var(--muted)">Nenhuma divergência neste fechamento.</td></tr>`;
-
-  document.querySelectorAll(".btn-investigar-item").forEach((btn) => {
-    const tr = btn.closest("tr");
-    btn.addEventListener("click", () => abrirDetalhe(tr.dataset.divId));
-  });
-
-  document.querySelector("#tabela-itens-ok tbody").innerHTML = ok
-    .map((item) => `<tr><td>${item.sku}</td><td class="col-descricao">${item.descricao_produto || "—"}</td><td>${item.qtd_sistema}</td><td>${item.qtd_contagem}</td></tr>`)
-    .join("") || `<tr><td colspan="4" style="color:var(--muted)">—</td></tr>`;
+  fechamentoDetalheItensDivergentes = divergentes;
+  fechamentoDetalheItensOk = ok;
+  const buscaEl = document.getElementById("fechamento-detalhe-busca");
+  buscaEl.value = "";
+  renderTabelasFechamentoDetalhe("");
 
   carregarCiencia(id);
   mostrarView("fechamento-detalhe");
 }
 
 let fechamentoDetalheAtualId = null;
+let debounceFechamentoDetalheBusca;
+document.getElementById("fechamento-detalhe-busca").addEventListener("input", (ev) => {
+  clearTimeout(debounceFechamentoDetalheBusca);
+  const valor = ev.target.value;
+  debounceFechamentoDetalheBusca = setTimeout(() => renderTabelasFechamentoDetalhe(valor), 250);
+});
 
-const ROTULOS_PAPEL_ASSINATURA = { Diretor_Operacoes: "Diretor de Operações", Coordenador_Financeiro: "Coordenador Financeiro" };
+document.getElementById("btn-compartilhar-fechamento").addEventListener("click", async () => {
+  if (!fechamentoDetalheAtualId) return;
+  const url = `${location.origin}${location.pathname}?fechamento=${fechamentoDetalheAtualId}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    alert(`Link copiado! Quem abrir precisa estar logado no Atlas com uma conta que tenha acesso:\n\n${url}`);
+  } catch (erro) {
+    // clipboard pode falhar (ex: sem permissão/http sem TLS) - mostra o link pra copiar na mão
+    prompt("Copie o link abaixo pra compartilhar este fechamento:", url);
+  }
+});
+
+const ROTULOS_PAPEL_ASSINATURA = {
+  Diretor_Operacoes: "Diretor de Operações",
+  Coordenador_Financeiro: "Coordenador Financeiro",
+  Responsavel_Departamento: "Responsável pelo Departamento",
+};
 
 async function carregarCiencia(fechamentoId) {
   const [lista, status] = await Promise.all([
@@ -3203,7 +3298,7 @@ async function carregarCiencia(fechamentoId) {
 
   const resumo = document.getElementById("ciencia-status-resumo");
   if (status.status === "Inventário Fechado") {
-    resumo.innerHTML = `<span style="color:var(--ok); font-weight:600">✅ Inventário Fechado</span> - ambas as assinaturas foram colhidas (${status.papeis_assinados.join(", ")}).`;
+    resumo.innerHTML = `<span style="color:var(--ok); font-weight:600">✅ Inventário Fechado</span> - todas as assinaturas foram colhidas (${status.papeis_assinados.join(", ")}).`;
   } else {
     resumo.innerHTML = `<span style="color:var(--critico); font-weight:600">⏳ Inventário em Aberto</span> - falta assinatura de: ${status.papeis_faltantes.join(", ")}.`;
   }
@@ -3258,7 +3353,7 @@ document.getElementById("btn-gerar-ciencia").addEventListener("click", async () 
   if (!fechamentoDetalheAtualId) return;
   const papel = document.getElementById("ciencia-papel").value;
   if (!papel) {
-    alert("Selecione qual papel está assinando (Diretor de Operações ou Coordenador Financeiro) antes de confirmar.");
+    alert("Selecione qual papel está assinando (Diretor de Operações, Coordenador Financeiro ou Responsável pelo Departamento) antes de confirmar.");
     return;
   }
   const btn = document.getElementById("btn-gerar-ciencia");
@@ -5039,6 +5134,8 @@ function abrirModalComJustificativa(justificativa, aoSalvar) {
 
   document.getElementById("modal-justificativa-titulo").textContent =
     `${justificativa.sku} — ${justificativa.descricao_produto || "sem descrição"}${justificativa.id ? "" : " (nova justificativa)"}${ehPassivo ? " (Passivo)" : " (Ajuste de Inventário)"}`;
+  // só existe algo pra excluir depois que a justificativa já foi salva pelo menos uma vez
+  document.getElementById("btn-excluir-modal-justificativa").classList.toggle("hidden", !justificativa.id);
   document.getElementById("modal-justificativa-texto").value = justificativa.justificativa || "";
   document.getElementById("modal-justificativa-solucao").value = justificativa.solucao_aplicada || "";
   document.getElementById("modal-justificativa-responsavel").value = justificativa.responsavel || "";
@@ -5372,6 +5469,33 @@ document.getElementById("btn-salvar-modal-justificativa").addEventListener("clic
     if (falhas) alert(`A justificativa foi salva, mas ${falhas} anexo(s) não foram enviados. Abra a justificativa de novo pra tentar reenviar.`);
   }
 
+  document.getElementById("modal-justificativa-overlay").classList.add("hidden");
+  if (justificativaModalAoSalvar) justificativaModalAoSalvar();
+});
+
+document.getElementById("btn-excluir-modal-justificativa").addEventListener("click", async () => {
+  if (!justificativaModalAtual || !justificativaModalAtual.id) return;
+  if (!confirm(`Excluir a justificativa do SKU ${justificativaModalAtual.sku}? Isso remove também os anexos ligados a ela e não pode ser desfeito.`)) return;
+  const btnExcluir = document.getElementById("btn-excluir-modal-justificativa");
+  const textoOriginal = btnExcluir.textContent;
+  btnExcluir.disabled = true;
+  btnExcluir.textContent = "Excluindo...";
+  try {
+    const res = await apiFetch(`${API}/ajustes-inventario/justificativas/${justificativaModalAtual.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      alert("Não foi possível excluir a justificativa.");
+      btnExcluir.disabled = false;
+      btnExcluir.textContent = textoOriginal;
+      return;
+    }
+  } catch (erro) {
+    alert("Não foi possível excluir a justificativa.");
+    btnExcluir.disabled = false;
+    btnExcluir.textContent = textoOriginal;
+    return;
+  }
+  btnExcluir.disabled = false;
+  btnExcluir.textContent = textoOriginal;
   document.getElementById("modal-justificativa-overlay").classList.add("hidden");
   if (justificativaModalAoSalvar) justificativaModalAoSalvar();
 });

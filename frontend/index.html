@@ -1189,8 +1189,18 @@
 
       <div class="panel">
         <h2>Fechamentos anteriores</h2>
+        <p class="hint">
+          "Aprovação manual" é só uma marcação de "revisado" pra fechamentos antigos que não vão receber as assinaturas
+          formais - não conta como nenhuma delas e não gera PDF (a ciência de verdade continua sendo feita dentro de cada
+          fechamento).
+        </p>
+        <div class="filtros" style="margin-bottom:10px">
+          <span class="hint" style="margin:0">Aprovar (marcação manual) tudo com data anterior a</span>
+          <input id="fechamentos-aprovar-lote-data" type="date" class="select-filtro" style="min-width:160px">
+          <button id="btn-aprovar-lote-fechamentos" class="btn-secundario">Aprovar em lote</button>
+        </div>
         <table class="tabela" id="tabela-fechamentos">
-          <thead><tr><th>Data</th><th>Almoxarifado</th><th>Itens</th><th>Divergentes</th><th>Valor em risco</th><th>Status</th><th></th><th></th></tr></thead>
+          <thead><tr><th>Data</th><th>Almoxarifado</th><th>Itens</th><th>Divergentes</th><th>Valor em risco</th><th>Status</th><th>Aprovação manual</th><th></th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1199,15 +1209,47 @@
     <section id="view-fechamento-detalhe" class="view hidden">
       <header class="view-header">
         <button class="btn-voltar" id="btn-voltar-fechamento">&larr; voltar</button>
-        <h1 id="fechamento-detalhe-titulo">Fechamento</h1>
+        <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap">
+          <h1 id="fechamento-detalhe-titulo">Fechamento</h1>
+          <button id="btn-compartilhar-fechamento" class="btn-secundario">🔗 Compartilhar</button>
+        </div>
       </header>
 
       <div class="kpi-row" id="fechamento-kpi-row"></div>
 
       <div class="panel">
         <div class="panel-title-row">
+          <h2>Ciência da conciliação</h2>
+        </div>
+        <p class="hint">
+          Exige três assinaturas pra fechar o inventário: Diretor de Operações, Coordenador Financeiro e Responsável pelo
+          Departamento. Cada confirmação é autenticada (usuário logado + data/hora) e gera um PDF com a lista de itens
+          divergentes, congelada no momento da confirmação.
+        </p>
+        <p id="ciencia-status-resumo" class="hint" style="margin-bottom:12px"></p>
+        <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap">
+          <select id="ciencia-papel" class="select-filtro" style="min-width:220px">
+            <option value="">Assinando como...</option>
+            <option value="Diretor_Operacoes">Diretor de Operações</option>
+            <option value="Coordenador_Financeiro">Coordenador Financeiro</option>
+            <option value="Responsavel_Departamento">Responsável pelo Departamento</option>
+          </select>
+          <button id="btn-gerar-ciencia" class="btn-primario" style="margin:0">📝 Confirmar ciência e gerar documento</button>
+        </div>
+        <textarea id="ciencia-observacao" rows="2" placeholder="Observação opcional..." style="width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--radius-input); color:var(--text); padding:8px 10px; font-family:var(--sans); font-size:13px; margin-bottom:10px"></textarea>
+        <table class="tabela" id="tabela-ciencia">
+          <thead><tr><th>Data/hora</th><th>Papel</th><th>Gestor</th><th>Itens divergentes</th><th>Valor total</th><th>Observação</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
           <h2>Divergências deste fechamento</h2>
           <span class="hint" style="margin:0">⭐ = já divergiu em fechamento(s) anterior(es) deste mesmo item</span>
+        </div>
+        <div class="filtros" style="margin-bottom:10px">
+          <input id="fechamento-detalhe-busca" class="select-filtro" type="text" placeholder="Buscar por SKU ou descrição...">
         </div>
         <table class="tabela" id="tabela-itens-divergentes">
           <thead><tr><th></th><th>SKU</th><th>Descrição</th><th>Divergência</th><th>Valor</th><th>Resumo</th><th>Obs. pós-inventário</th><th></th></tr></thead>
@@ -1219,31 +1261,6 @@
         <h2>Itens sem divergência</h2>
         <table class="tabela" id="tabela-itens-ok">
           <thead><tr><th>SKU</th><th>Descrição</th><th>Qtd. sistema</th><th>Qtd. contagem</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title-row">
-          <h2>Ciência da conciliação</h2>
-        </div>
-        <p class="hint">
-          Exige duas assinaturas pra fechar o inventário: Diretor de Operações e Coordenador Financeiro. Cada confirmação
-          é autenticada (usuário logado + data/hora) e gera um PDF com a lista de itens divergentes, congelada no momento
-          da confirmação.
-        </p>
-        <p id="ciencia-status-resumo" class="hint" style="margin-bottom:12px"></p>
-        <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap">
-          <select id="ciencia-papel" class="select-filtro" style="min-width:220px">
-            <option value="">Assinando como...</option>
-            <option value="Diretor_Operacoes">Diretor de Operações</option>
-            <option value="Coordenador_Financeiro">Coordenador Financeiro</option>
-          </select>
-          <button id="btn-gerar-ciencia" class="btn-primario" style="margin:0">📝 Confirmar ciência e gerar documento</button>
-        </div>
-        <textarea id="ciencia-observacao" rows="2" placeholder="Observação opcional..." style="width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--radius-input); color:var(--text); padding:8px 10px; font-family:var(--sans); font-size:13px; margin-bottom:10px"></textarea>
-        <table class="tabela" id="tabela-ciencia">
-          <thead><tr><th>Data/hora</th><th>Papel</th><th>Gestor</th><th>Itens divergentes</th><th>Valor total</th><th>Observação</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1492,7 +1509,10 @@
           <p class="hint" style="margin-top:4px">Fotos, PDF, planilhas etc. Até 15 MB por arquivo. Os arquivos selecionados sobem de fato ao clicar em "Salvar".</p>
         </div>
 
-        <button id="btn-salvar-modal-justificativa" class="btn-primario" style="margin-top:18px">Salvar</button>
+        <div style="margin-top:18px; display:flex; gap:8px">
+          <button id="btn-salvar-modal-justificativa" class="btn-primario">Salvar</button>
+          <button id="btn-excluir-modal-justificativa" class="btn-secundario hidden" style="color:var(--critico)">Excluir justificativa</button>
+        </div>
       </div>
       <div class="modal-coluna modal-coluna-lateral">
         <h3>Acompanhamento do item</h3>
@@ -1529,6 +1549,6 @@
   </div>
 </div>
 
-<script src="app.js?v=84"></script>
+<script src="app.js?v=86"></script>
 </body>
 </html>

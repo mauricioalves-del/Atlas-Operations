@@ -95,6 +95,9 @@ class FechamentoOut(BaseModel):
     total_divergentes: int
     valor_total_divergente: float
     status_assinatura: Optional[str] = None
+    aprovado_manual: bool = False
+    aprovado_manual_por: Optional[str] = None
+    aprovado_manual_em: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -215,7 +218,11 @@ class AnexoJustificativaOut(BaseModel):
 
 class ConciliacaoCienciaCreate(BaseModel):
     observacao: Optional[str] = None
-    papel_assinatura: str  # "Diretor_Operacoes" ou "Coordenador_Financeiro"
+    papel_assinatura: str  # "Diretor_Operacoes", "Coordenador_Financeiro" ou "Responsavel_Departamento"
+
+
+class AprovacaoManualLoteRequest(BaseModel):
+    antes_de: date  # aprova (marcação simples, sem assinatura formal) todo fechamento com data_fechamento < antes_de
 
 
 class FornecedorOut(BaseModel):

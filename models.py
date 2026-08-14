@@ -254,6 +254,16 @@ class FechamentoInventario(Base):
     total_itens = Column(Integer, default=0)
     total_divergentes = Column(Integer, default=0)
     valor_total_divergente = Column(Float, default=0)
+    # Marcação simples de "revisado/aprovado" pra fechamentos antigos que nunca vão
+    # passar pelo fluxo formal de assinatura (Diretor de Operações/Coordenador
+    # Financeiro/Responsável pelo Departamento) - não conta como nenhuma das
+    # assinaturas obrigatórias, não gera PDF, é só um jeito de tirar o fechamento
+    # da fila de "em aberto" sem fabricar uma ciência que ninguém de fato assinou
+    # (17/08/2026 - decisão explícita do Maurício ao pedir aprovação em massa dos
+    # fechamentos anteriores a uma certa data).
+    aprovado_manual = Column(Boolean, default=False)
+    aprovado_manual_por = Column(String, nullable=True)
+    aprovado_manual_em = Column(DateTime, nullable=True)
 
 
 class ItemFechamento(Base):

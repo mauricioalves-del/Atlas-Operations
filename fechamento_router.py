@@ -1094,14 +1094,19 @@ def listar_itens_fechamento(
     return q.order_by(models.ItemFechamento.destaque_recorrente.desc(), models.ItemFechamento.valor_estimado.desc()).all()
 
 
-PAPEIS_ASSINATURA_VALIDOS = {"Diretor_Operacoes": "Diretor de Operações", "Coordenador_Financeiro": "Coordenador Financeiro"}
+PAPEIS_ASSINATURA_VALIDOS = {
+    "Diretor_Operacoes": "Diretor de Operações",
+    "Coordenador_Financeiro": "Coordenador Financeiro",
+    "Responsavel_Departamento": "Responsável pelo Departamento",  # 17/08/2026 - terceira assinatura obrigatória
+}
 
 
 def status_assinatura_fechamento(db: Session, fechamento_id: int) -> dict:
-    """Status de fechamento em relação às duas assinaturas obrigatórias
-    (Diretor de Operações + Coordenador Financeiro) - "Inventário
-    Fechado" só quando os dois papéis já assinaram pelo menos uma vez;
-    "Inventário em Aberto" enquanto faltar algum."""
+    """Status de fechamento em relação às três assinaturas obrigatórias
+    (Diretor de Operações + Coordenador Financeiro + Responsável pelo
+    Departamento) - "Inventário Fechado" só quando os três papéis já
+    assinaram pelo menos uma vez; "Inventário em Aberto" enquanto faltar
+    algum."""
     papeis_assinados = {
         r[0] for r in db.query(models.ConciliacaoCiencia.papel_assinatura)
         .filter(models.ConciliacaoCiencia.fechamento_id == fechamento_id, models.ConciliacaoCiencia.papel_assinatura.isnot(None))
@@ -1122,9 +1127,9 @@ def gerar_ciencia(fechamento_id: int, payload: schemas.ConciliacaoCienciaCreate,
     - a 'assinatura' aqui é o usuário logado + timestamp, não uma
     assinatura manuscrita. Congela os itens divergentes ATUAIS num
     snapshot, pra o documento gerado nunca mudar depois. Exige um papel
-    de assinatura válido (Diretor de Operações ou Coordenador
-    Financeiro) - o fechamento só passa a "Inventário Fechado" quando os
-    dois papéis já tiverem assinado."""
+    de assinatura válido (Diretor de Operações, Coordenador Financeiro ou
+    Responsável pelo Departamento) - o fechamento só passa a "Inventário
+    Fechado" quando os três papéis já tiverem assinado."""
     if payload.papel_assinatura not in PAPEIS_ASSINATURA_VALIDOS:
         raise HTTPException(400, f"Papel de assinatura inválido. Use um de: {list(PAPEIS_ASSINATURA_VALIDOS)}")
 
@@ -1164,6 +1169,53 @@ def listar_ciencia(fechamento_id: int, usuario: models.Usuario = Depends(obter_u
 @router.get("/{fechamento_id}/status-assinatura")
 def obter_status_assinatura(fechamento_id: int, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     return status_assinatura_fechamento(db, fechamento_id)
+
+
+@router.post("/aprovacao-manual-lote")
+def aprovar_manual_lote(
+    payload: schemas.AprovacaoManualLoteRequest,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Marcação simples de "revisado" em lote pra fechamentos antigos que
+    nunca vão ganhar as assinaturas formais (17/08/2026) - decisão
+    explícita do Maurício: isso NÃO conta como nenhuma das assinaturas
+    obrigatórias (não altera status_assinatura, não gera PDF de ciência),
+    é só um jeito de tirar o item da fila visual de "em aberto" pra
+    fechamentos antigos demais pra valer a pena assinar formalmente."""
+    fechamentos = (
+        db.query(models.FechamentoInventario)
+        .filter(models.FechamentoInventario.data_fechamento < payload.antes_de, models.FechamentoInventario.aprovado_manual.isnot(True))
+        .all()
+    )
+    agora = datetime.utcnow()
+    for f in fechamentos:
+        f.aprovado_manual = True
+        f.aprovado_manual_por = usuario.nome_exibicao or usuario.username
+        f.aprovado_manual_em = agora
+    registrar_log(db, usuario.username, "aprovar_manual_lote_fechamentos", detalhes={"antes_de": str(payload.antes_de), "quantidade": len(fechamentos)})
+    db.commit()
+    return {"atualizados": len(fechamentos)}
+
+
+@router.patch("/{fechamento_id}/aprovacao-manual")
+def definir_aprovacao_manual(
+    fechamento_id: int,
+    aprovado: bool,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Liga/desliga a marcação simples de "revisado" (ver
+    aprovar_manual_lote) num único fechamento."""
+    f = db.query(models.FechamentoInventario).get(fechamento_id)
+    if not f:
+        raise HTTPException(404, "Fechamento não encontrado.")
+    f.aprovado_manual = aprovado
+    f.aprovado_manual_por = (usuario.nome_exibicao or usuario.username) if aprovado else None
+    f.aprovado_manual_em = datetime.utcnow() if aprovado else None
+    db.commit()
+    db.refresh(f)
+    return f
 
 
 @router.patch("/{fechamento_id}/corrigir-almoxarifado")
