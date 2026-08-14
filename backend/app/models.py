@@ -725,3 +725,62 @@ class ChecagemFefo(Base):
     calculado_em = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (UniqueConstraint("transferencia_id", name="uq_checagem_fefo_transferencia"),)
+
+
+class ResumoMovimentacaoMensal(Base):
+    """Snapshot mensal (persistido) dos indicadores de 'Controle de
+    Movimentados' - itens analisados / sem divergência / com divergência,
+    por mês e por almoxarifado (almoxarifado = None é o total geral do
+    mês) (19/08/2026).
+
+    Existe como tabela separada, em vez do dashboard consultar
+    MovimentacaoHistorico/Divergencia direto a cada carregamento, porque
+    essas duas tabelas não são uma fonte estável no longo prazo: o
+    livro-caixa bruto (de onde a investigação parte) é SUBSTITUÍDO por
+    completo a cada reimportação de um almoxarifado (ver
+    import_router.py - delete-then-reinsert por almoxarifado). Sem esse
+    snapshot, o gráfico de "Evolução Mensal" perderia meses antigos
+    silenciosamente assim que a planilha fosse reimportada.
+
+    Esta tabela é atualizada (upsert por mês+almoxarifado) a cada
+    carregamento do dashboard - o valor mais recente calculado pra um mês
+    fica guardado aqui pra sempre, mesmo que o dado bruto de origem depois
+    mude ou seja substituído (idêntico em espírito ao ChecagemFefo:
+    resultado calculado e guardado, não recalculado on-the-fly)."""
+    __tablename__ = "resumos_movimentacao_mensal"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mes = Column(String, index=True)  # "YYYY-MM"
+    almoxarifado = Column(String, nullable=True, index=True)  # None = total geral do mês (todos os almoxarifados)
+    itens_analisados = Column(Integer, default=0)
+    itens_sem_divergencia = Column(Integer, default=0)
+    itens_com_divergencia = Column(Integer, default=0)
+    pct_acuracia = Column(Float, nullable=True)
+    valor_total_divergencias = Column(Float, default=0)
+    atualizado_em = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("mes", "almoxarifado", name="uq_resumo_mov_mensal_mes_almox"),)
+
+
+class ResumoTransferenciasMensal(Base):
+    """Snapshot mensal (persistido) de Transferências entre almoxarifados,
+    já cruzado com a checagem de FEFO nas que saem da Fábrica (19/08/2026)
+    - alimenta o Dashboard de Acompanhamento (o usuário definiu
+    "movimentação" == Transferências, com o critério de que toda saída da
+    Fábrica precisa respeitar FEFO).
+
+    Guardado à parte de Transferencia/ChecagemFefo porque a importação
+    manual da planilha de Transferências ('Transferências.xlsx') APAGA e
+    recria TODAS as linhas de Transferencia a cada envio (ver
+    import_router.py: 'db.query(models.Transferencia).delete()') - sem
+    esse snapshot, o histórico mensal de volume e de quebra de FEFO se
+    perderia justamente nesse momento. Atualizado (upsert por mês) a cada
+    carregamento do dashboard."""
+    __tablename__ = "resumos_transferencias_mensal"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mes = Column(String, index=True, unique=True)  # "YYYY-MM" - baseado em Transferencia.data_saida
+    total_transferencias = Column(Integer, default=0)
+    quantidade_total = Column(Float, default=0)
+    transferencias_fabrica_avaliadas = Column(Integer, default=0)  # saíram da Fábrica E têm checagem de FEFO calculada (exclui Sem_Dado_Suficiente)
+    quebras_fefo = Column(Integer, default=0)
+    taxa_quebra_fefo_pct = Column(Float, nullable=True)
+    atualizado_em = Column(DateTime, default=datetime.utcnow)

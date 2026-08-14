@@ -10,7 +10,7 @@ from .routers import (
     usuarios_router, auditoria_router, cadastros_router, fechamento_router,
     backup_router, ml_router, compras_router, voz_router,
     baixas_operacionais_router, integracoes_router, shelf_life_router,
-    ajustes_inventario_router, rotinas_router, producao_router, movimentados_router,
+    ajustes_inventario_router, producao_router, movimentados_router,
     fefo_router,
 )
 from . import models
@@ -97,7 +97,6 @@ app.include_router(baixas_operacionais_router.router, prefix="/api")
 app.include_router(integracoes_router.router, prefix="/api")
 app.include_router(shelf_life_router.router, prefix="/api")
 app.include_router(ajustes_inventario_router.router, prefix="/api")
-app.include_router(rotinas_router.router, prefix="/api")
 app.include_router(producao_router.router, prefix="/api")
 app.include_router(movimentados_router.router, prefix="/api")
 app.include_router(fefo_router.router, prefix="/api")

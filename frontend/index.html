@@ -81,7 +81,7 @@
       <button class="rail-item" data-view="compras"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg></span><span class="rail-label">Controle de Compras</span></button>
       <button class="rail-item" data-view="fechamentos"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span class="rail-label">Fechamento Inventário</span></button>
       <button class="rail-item" data-view="pos-inventario"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14l2 2 4-4"/></svg></span><span class="rail-label">Pós-Inventário</span></button>
-      <button class="rail-item" data-view="rotinas"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span><span class="rail-label">Diário de Bordo</span></button>
+      <button class="rail-item" data-view="movimentados"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span><span class="rail-label">Controle de Movimentados</span></button>
       <button class="rail-item" data-view="fefo"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span class="rail-label">FEFO</span></button>
       <button class="rail-item hidden" id="nav-cadastros" data-view="cadastros"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span><span class="rail-label">Cadastros</span></button>
       <button class="rail-item hidden" id="nav-auditoria" data-view="auditoria"><span class="rail-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="rail-label">Auditoria</span></button>
@@ -1271,63 +1271,47 @@
       </div>
     </section>
 
-    <section id="view-rotinas" class="view hidden">
+    <section id="view-movimentados" class="view hidden">
       <header class="view-header">
-        <h1>Diário de Bordo — Rotinas</h1>
+        <h1>Controle de Movimentados</h1>
         <div class="filtros">
-          <input type="date" id="rt-filtro-data-inicio" class="select-filtro">
-          <input type="date" id="rt-filtro-data-fim" class="select-filtro">
-          <select id="rt-filtro-setor" class="select-filtro"><option value="">Todos os setores</option></select>
+          <select id="mv-filtro-almoxarifado" class="select-filtro"><option value="">Todos os almoxarifados</option></select>
+          <button id="btn-atualizar-historico-movimentados" class="btn-secundario">↻ Atualizar histórico</button>
         </div>
       </header>
       <p class="hint">
-        Controle de cumprimento das rotinas operacionais recorrentes — cada execução marcada aqui vira o indicador
-        "Cumprimento Geral de Rotinas" do MBR. Hoje só rotinas de frequência <strong>Diária</strong> geram cobrança de
-        execução por dia; Semanal/Mensal ainda entram só como cadastro informativo.
+        Indicador "Controle de Movimentados" do MBR: qualidade da reconciliação diária de movimentação (saídas/
+        entradas do livro-caixa bruto), separado da contagem física periódica (Painel de Inventário). O histórico
+        mensal fica guardado permanentemente (tabela própria) pra não se perder quando a planilha de movimentação
+        for reimportada — cada visita a esta tela já atualiza esse histórico automaticamente.
       </p>
 
-      <div class="kpi-row" id="rt-kpi-row"></div>
+      <div class="kpi-row" id="mv-kpi-row"></div>
 
-      <div class="panel">
-        <h2>Cumprimento por setor</h2>
-        <table class="tabela" id="tabela-rotinas-por-setor">
-          <thead><tr><th>Setor</th><th>Concluídas</th><th>Atrasadas</th><th>Pendentes</th><th>% Cumprimento</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="panel">
-        <h2>Cadastrar rotina</h2>
-        <div class="form-novo-usuario" style="grid-template-columns:repeat(4,1fr)">
-          <div><label>Nome</label><input id="rt-nome" type="text"></div>
-          <div><label>Setor</label><input id="rt-setor" type="text"></div>
-          <div>
-            <label>Frequência</label>
-            <select id="rt-frequencia">
-              <option value="diaria">Diária</option>
-              <option value="semanal">Semanal</option>
-              <option value="mensal">Mensal</option>
-            </select>
-          </div>
-          <div><label>Responsável padrão</label><input id="rt-responsavel" type="text"></div>
+      <div class="panel" style="border:1px solid var(--critico); background:linear-gradient(180deg, color-mix(in srgb, var(--critico) 8%, var(--panel)) 0%, var(--panel) 100%)">
+        <div class="panel-title-row">
+          <h2>⚠ Critério FEFO — saídas da Fábrica</h2>
         </div>
-        <button id="btn-criar-rotina" class="btn-primario" style="margin-top:14px">Adicionar rotina</button>
-        <p id="rt-msg" class="hint"></p>
+        <p class="hint">
+          Toda transferência que sai do almoxarifado Fábrica precisa respeitar a ordem "primeiro que vence, primeiro
+          que sai" (FEFO) — lote mais antigo não pode ficar parado por mais de 5 dias úteis enquanto um lote mais
+          novo é transferido no lugar dele.
+        </p>
+        <div class="kpi-row" id="mv-fefo-kpi-row"></div>
+        <button class="btn-secundario" id="btn-ver-fefo-detalhe" style="margin-top:10px">Ver checagens detalhadas →</button>
       </div>
 
       <div class="panel">
-        <h2>Rotinas cadastradas</h2>
-        <table class="tabela" id="tabela-rotinas">
-          <thead><tr><th>Nome</th><th>Setor</th><th>Frequência</th><th>Responsável</th><th>Ativa</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <h2>Evolução mensal</h2>
+        <p class="hint">Guardado permanentemente por mês — meses antigos não são perdidos numa reimportação futura.</p>
+        <canvas id="mv-chart-evolucao" height="90"></canvas>
       </div>
 
       <div class="panel">
-        <h2>Execuções do período</h2>
-        <p class="hint">Dias passados sem marcação aparecem como "Atrasada" automaticamente; hoje/futuro aparecem como "Pendente" até serem marcados.</p>
-        <table class="tabela" id="tabela-execucoes-rotina">
-          <thead><tr><th>Data</th><th>Rotina</th><th>Setor</th><th>Status</th><th>Concluído por</th></tr></thead>
+        <h2>Histórico mensal detalhado</h2>
+        <p class="hint">Guardado permanentemente por mês — não some se a planilha de Transferências for reimportada.</p>
+        <table class="tabela" id="tabela-movimentados-por-almox">
+          <thead><tr><th>Mês</th><th>Transferências</th><th>Volume</th><th>Taxa de quebra de FEFO</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1714,6 +1698,6 @@
   </div>
 </div>
 
-<script src="app.js?v=90"></script>
+<script src="app.js?v=91"></script>
 </body>
 </html>

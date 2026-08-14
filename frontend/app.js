@@ -757,7 +757,7 @@ function mostrarView(nome) {
   if (nome === "acuracia-ponderada") carregarAcuraciaPonderada();
   if (nome === "compras") carregarPedidosCompra();
   if (nome === "pos-inventario") carregarAcoesPosInventario();
-  if (nome === "rotinas") carregarRotinas();
+  if (nome === "movimentados") carregarMovimentados();
   if (nome === "fefo") carregarFefo();
 }
 
@@ -6755,134 +6755,100 @@ function configurarComandoDeVoz() {
 
 configurarComandoDeVoz();
 
-// ---------- Diário de Bordo (Rotinas) (18/08/2026) ----------
-function _rtPeriodoPadrao() {
-  // ultimos 7 dias corridos, terminando hoje - suficiente pra checklist do
-  // dia sem sobrecarregar a tela na primeira carga; o usuário ajusta os
-  // filtros de data se quiser ver mais.
-  const hoje = new Date();
-  const inicio = new Date(hoje);
-  inicio.setDate(hoje.getDate() - 6);
-  const fmt = (d) => d.toISOString().slice(0, 10);
-  return { inicio: fmt(inicio), fim: fmt(hoje) };
-}
+// ---------- Dashboard de Acompanhamento - Controle de Movimentados (19/08/2026) ----------
+// "Movimentação" aqui é Transferência entre almoxarifados (esclarecido pelo
+// usuário) - o dashboard cruza volume de transferências com o critério de
+// FEFO nas que saem da Fábrica, e guarda o histórico mensal permanentemente
+// (ver ResumoTransferenciasMensal no backend) pra sobreviver a reimportações
+// futuras da planilha de Transferências.
+let chartMovimentadosFefo;
 
-async function carregarRotinas() {
-  const inicioInput = document.getElementById("rt-filtro-data-inicio");
-  const fimInput = document.getElementById("rt-filtro-data-fim");
-  if (!inicioInput.value || !fimInput.value) {
-    const padrao = _rtPeriodoPadrao();
-    inicioInput.value = inicioInput.value || padrao.inicio;
-    fimInput.value = fimInput.value || padrao.fim;
-  }
-  const dataInicio = inicioInput.value;
-  const dataFim = fimInput.value;
-  const setor = document.getElementById("rt-filtro-setor").value;
-  const qsPeriodo = new URLSearchParams({ data_inicio: dataInicio, data_fim: dataFim });
-  if (setor) qsPeriodo.set("setor", setor);
-
-  const [rotinas, dashboard, execucoes] = await Promise.all([
-    apiFetch(`${API}/rotinas?incluir_inativas=true`).then((r) => r.json()),
-    apiFetch(`${API}/rotinas/dashboard/cumprimento?${qsPeriodo.toString()}`).then((r) => r.json()),
-    apiFetch(`${API}/rotinas/execucoes?${qsPeriodo.toString()}`).then((r) => r.json()),
+async function carregarMovimentados() {
+  const [resumo, fefoResumo, evolucao] = await Promise.all([
+    apiFetch(`${API}/movimentados/dashboard/transferencias-resumo`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/dashboard/resumo`).then((r) => r.json()),
+    apiFetch(`${API}/movimentados/dashboard/transferencias-evolucao-mensal`).then((r) => r.json()),
   ]);
 
-  // popula o filtro de setor com os setores já cadastrados, sem perder a seleção atual
-  const setorAtual = document.getElementById("rt-filtro-setor").value;
-  const setores = Array.from(new Set(rotinas.map((r) => r.setor).filter(Boolean))).sort();
-  document.getElementById("rt-filtro-setor").innerHTML =
-    `<option value="">Todos os setores</option>` + setores.map((s) => `<option value="${s}" ${s === setorAtual ? "selected" : ""}>${s}</option>`).join("");
-
-  document.getElementById("rt-kpi-row").innerHTML = [
-    { label: "Cumprimento geral", value: dashboard.cumprimento_geral_pct != null ? dashboard.cumprimento_geral_pct + "%" : "—", accent: true },
-    { label: "Concluídas", value: dashboard.total_concluidas, cor: "var(--sucesso, #2e7d32)" },
-    { label: "Atrasadas", value: dashboard.total_atrasadas, cor: "var(--critico)" },
-    { label: "Pendentes", value: dashboard.total_pendentes, cor: "var(--muted)" },
+  document.getElementById("mv-kpi-row").innerHTML = [
+    { label: "Total de transferências", value: resumo.total_transferencias },
+    { label: "Volume transferido", value: resumo.quantidade_total },
+    { label: "Saídas da Fábrica", value: resumo.transferencias_da_fabrica },
   ]
-    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value ${c.accent ? "accent" : ""}" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value">${c.value}</div></div>`)
     .join("");
 
-  document.querySelector("#tabela-rotinas-por-setor tbody").innerHTML = dashboard.por_setor.length
-    ? dashboard.por_setor
-        .map(
-          (s) =>
-            `<tr><td>${s.setor}</td><td>${s.concluidas}</td><td>${s.atrasadas}</td><td>${s.pendentes}</td><td>${s.cumprimento_pct != null ? s.cumprimento_pct + "%" : "—"}</td></tr>`
-        )
-        .join("")
-    : `<tr><td colspan="5" style="color:var(--muted)">Sem execuções esperadas nesse período.</td></tr>`;
+  document.getElementById("mv-fefo-kpi-row").innerHTML = [
+    { label: "Avaliadas p/ FEFO", value: fefoResumo.total_quebras_fefo + fefoResumo.total_dentro_do_criterio },
+    { label: "Quebras de FEFO", value: fefoResumo.total_quebras_fefo, cor: "var(--critico)" },
+    { label: "Taxa de quebra", value: fefoResumo.taxa_quebra_pct != null ? fefoResumo.taxa_quebra_pct + "%" : "—", cor: fefoResumo.taxa_quebra_pct ? "var(--critico)" : "var(--sucesso, #2e7d32)" },
+    { label: "Dentro do critério", value: fefoResumo.total_dentro_do_criterio, cor: "var(--sucesso, #2e7d32)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
 
-  document.querySelector("#tabela-rotinas tbody").innerHTML = rotinas.length
-    ? rotinas
+  const ctx = document.getElementById("mv-chart-evolucao");
+  if (chartMovimentadosFefo) chartMovimentadosFefo.destroy();
+  chartMovimentadosFefo = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: evolucao.map((e) => e.mes),
+      datasets: [
+        {
+          label: "Taxa de quebra de FEFO (%)",
+          data: evolucao.map((e) => e.taxa_quebra_fefo_pct),
+          backgroundColor: evolucao.map((e) => (e.taxa_quebra_fefo_pct == null ? "#8ca0a3" : e.taxa_quebra_fefo_pct > 0 ? "#e5534b" : "#4caf50")),
+          borderRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const e = evolucao[c.dataIndex];
+              return e.taxa_quebra_fefo_pct == null
+                ? "Sem transferências da Fábrica avaliadas nesse mês"
+                : `${e.taxa_quebra_fefo_pct}% de quebra (${e.quebras_fefo}/${e.transferencias_fabrica_avaliadas} avaliadas) · ${e.total_transferencias} transferência(s) no total`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { color: "#2e3a40" }, title: { display: true, text: "% de quebra de FEFO", color: "#8ca0a3", font: { size: 10 } } },
+      },
+    },
+  });
+
+  document.querySelector("#tabela-movimentados-por-almox tbody").innerHTML = evolucao.length
+    ? evolucao
         .map(
-          (r) => `<tr data-id="${r.id}">
-            <td>${r.nome}</td><td>${r.setor || "—"}</td><td>${r.frequencia}</td><td>${r.responsavel_padrao || "—"}</td>
-            <td>${r.ativo ? "Sim" : "Não"}</td>
-            <td><button class="btn-secundario btn-alternar-rotina" data-id="${r.id}" data-ativo="${r.ativo}" style="padding:4px 10px">${r.ativo ? "Desativar" : "Ativar"}</button></td>
+          (e) => `<tr>
+            <td>${e.mes}</td><td>${e.total_transferencias}</td><td>${e.quantidade_total}</td>
+            <td style="color:${e.taxa_quebra_fefo_pct ? "var(--critico)" : "inherit"}">${e.taxa_quebra_fefo_pct != null ? e.taxa_quebra_fefo_pct + "%" : "—"} ${e.transferencias_fabrica_avaliadas ? `(${e.quebras_fefo}/${e.transferencias_fabrica_avaliadas})` : ""}</td>
           </tr>`
         )
         .join("")
-    : `<tr><td colspan="6" style="color:var(--muted)">Nenhuma rotina cadastrada ainda.</td></tr>`;
-
-  document.querySelectorAll(".btn-alternar-rotina").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const ativo = btn.dataset.ativo === "true";
-      await apiFetch(`${API}/rotinas/${btn.dataset.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ativo: !ativo }),
-      });
-      carregarRotinas();
-    })
-  );
-
-  const OPCOES_STATUS = ["Pendente", "Concluida", "Atrasada", "Nao_Aplicavel"];
-  document.querySelector("#tabela-execucoes-rotina tbody").innerHTML = execucoes.length
-    ? execucoes
-        .map(
-          (e) => `<tr data-rotina-id="${e.rotina_id}" data-data="${e.data_referencia}">
-            <td>${formatarDataCurta(e.data_referencia)}</td><td>${e.rotina_nome || "—"}</td><td>${e.rotina_setor || "—"}</td>
-            <td>
-              <select class="select-status-execucao" data-rotina-id="${e.rotina_id}" data-data="${e.data_referencia}" style="${e.status === "Atrasada" ? "color:var(--critico)" : e.status === "Concluida" ? "color:var(--sucesso, #2e7d32)" : ""}">
-                ${OPCOES_STATUS.map((s) => `<option value="${s}" ${s === e.status ? "selected" : ""}>${s.replace("_", " ")}</option>`).join("")}
-              </select>
-            </td>
-            <td>${e.concluido_por || "—"}</td>
-          </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="5" style="color:var(--muted)">Nenhuma rotina diária ativa no período selecionado.</td></tr>`;
-
-  document.querySelectorAll(".select-status-execucao").forEach((sel) =>
-    sel.addEventListener("change", async () => {
-      const res = await apiFetch(`${API}/rotinas/${sel.dataset.rotinaId}/execucoes/${sel.dataset.data}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: sel.value }),
-      });
-      if (!res.ok) { alert("Erro ao marcar execução."); return; }
-      carregarRotinas();
-    })
-  );
+    : `<tr><td colspan="4" style="color:var(--muted)">Nenhuma transferência registrada ainda.</td></tr>`;
 }
 
-document.getElementById("rt-filtro-data-inicio").addEventListener("change", carregarRotinas);
-document.getElementById("rt-filtro-data-fim").addEventListener("change", carregarRotinas);
-document.getElementById("rt-filtro-setor").addEventListener("change", carregarRotinas);
-
-document.getElementById("btn-criar-rotina").addEventListener("click", async () => {
-  const msg = document.getElementById("rt-msg");
-  const payload = {
-    nome: document.getElementById("rt-nome").value.trim(),
-    setor: document.getElementById("rt-setor").value.trim() || null,
-    frequencia: document.getElementById("rt-frequencia").value,
-    responsavel_padrao: document.getElementById("rt-responsavel").value.trim() || null,
-  };
-  if (!payload.nome) { msg.textContent = "Informe o nome da rotina."; return; }
-  const res = await apiFetch(`${API}/rotinas`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  if (!res.ok) { msg.textContent = data.detail || "Erro ao criar rotina."; return; }
-  msg.textContent = "Rotina adicionada.";
-  ["rt-nome", "rt-setor", "rt-responsavel"].forEach((id) => (document.getElementById(id).value = ""));
-  carregarRotinas();
+document.getElementById("btn-atualizar-historico-movimentados").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-atualizar-historico-movimentados");
+  btn.disabled = true;
+  btn.textContent = "Atualizando...";
+  try {
+    await apiFetch(`${API}/movimentados/snapshot-transferencias`, { method: "POST" });
+    await carregarMovimentados();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ Atualizar histórico";
+  }
 });
+
+document.getElementById("btn-ver-fefo-detalhe").addEventListener("click", () => mostrarView("fefo"));
 
 // ---------- FEFO (18/08/2026) ----------
 async function carregarFefo() {
