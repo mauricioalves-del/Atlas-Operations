@@ -1873,7 +1873,41 @@ async function carregarLotesImportacao() {
 }
 
 // ---------- gestão de usuários (admin) ----------
+let usuariosAlmoxarifadosCache = null; // [{codigo, nome}] - carregado uma vez, reaproveitado no form "Novo usuário" e no modal "Editar usuário"
+let usuarioEmEdicaoId = null;
+
+async function obterListaAlmoxarifadosParaUsuarios() {
+  if (!usuariosAlmoxarifadosCache) {
+    usuariosAlmoxarifadosCache = await apiFetch(`${API}/importar/almoxarifados`).then((r) => r.json());
+  }
+  return usuariosAlmoxarifadosCache;
+}
+
+// Monta a lista de checkboxes de "almoxarifados permitidos" (parâmetro de visualização,
+// 18/08/2026) num container - reaproveitado pelo form "Novo usuário" e pelo modal "Editar
+// usuário". `selecionados` vazio/null = sem restrição (nenhum checkbox marcado).
+async function renderizarChecklistAlmoxarifadosPermitidos(containerId, selecionados) {
+  const container = document.getElementById(containerId);
+  const almoxarifados = await obterListaAlmoxarifadosParaUsuarios();
+  const marcados = new Set(selecionados || []);
+  container.innerHTML = almoxarifados
+    .map(
+      (a) => `<label><input type="checkbox" value="${a.codigo}" ${marcados.has(a.codigo) ? "checked" : ""}> ${a.nome} (${a.codigo})</label>`
+    )
+    .join("") || `<span class="hint">Nenhum almoxarifado cadastrado ainda.</span>`;
+}
+
+function lerChecklistAlmoxarifadosPermitidos(containerId) {
+  return Array.from(document.querySelectorAll(`#${containerId} input[type="checkbox"]:checked`)).map((cb) => cb.value);
+}
+
+function badgesAlmoxarifadosPermitidos(lista) {
+  if (!lista || !lista.length) return `<span class="badge-sem-restricao">Todos (sem restrição)</span>`;
+  return lista.map((a) => `<span class="badge-almoxarifado">${a}</span>`).join("");
+}
+
 async function carregarUsuarios() {
+  renderizarChecklistAlmoxarifadosPermitidos("novo-usuario-almoxarifados", []);
   const res = await apiFetch(`${API}/usuarios`);
   const usuarios = await res.json();
   const tbody = document.querySelector("#tabela-usuarios tbody");
@@ -1883,22 +1917,87 @@ async function carregarUsuarios() {
         <td>${u.username}</td><td>${u.nome_exibicao || "—"}</td>
         <td><span class="badge-papel badge-${u.papel}">${u.papel}</span></td>
         <td>${u.ativo ? "Ativo" : "Desativado"}</td>
-        <td><button class="btn-secundario btn-toggle-usuario" data-id="${u.id}" data-ativo="${u.ativo}">${u.ativo ? "Desativar" : "Ativar"}</button></td>
+        <td>${badgesAlmoxarifadosPermitidos(u.almoxarifados_permitidos)}</td>
+        <td style="display:flex; gap:6px; flex-wrap:wrap">
+          <button class="btn-secundario btn-editar-usuario" data-id="${u.id}">Editar</button>
+          <button class="btn-secundario btn-toggle-usuario" data-id="${u.id}" data-ativo="${u.ativo}">${u.ativo ? "Desativar" : "Ativar"}</button>
+          <button class="btn-secundario btn-excluir-usuario" data-id="${u.id}" data-username="${u.username}" style="color:var(--critico)">Excluir</button>
+        </td>
       </tr>`
     )
     .join("");
+
+  const usuariosPorId = Object.fromEntries(usuarios.map((u) => [u.id, u]));
+
   tbody.querySelectorAll(".btn-toggle-usuario").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const ativo = btn.dataset.ativo === "true";
-      await apiFetch(`${API}/usuarios/${btn.dataset.id}`, {
+      const res2 = await apiFetch(`${API}/usuarios/${btn.dataset.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ativo: !ativo }),
       });
+      const data2 = await res2.json();
+      if (!res2.ok) { alert(data2.detail || "Não foi possível alterar o status do usuário."); return; }
+      carregarUsuarios();
+    });
+  });
+
+  tbody.querySelectorAll(".btn-editar-usuario").forEach((btn) => {
+    btn.addEventListener("click", () => abrirModalUsuario(usuariosPorId[btn.dataset.id]));
+  });
+
+  tbody.querySelectorAll(".btn-excluir-usuario").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(`Excluir o usuário '${btn.dataset.username}'? Essa ação não pode ser desfeita.`)) return;
+      const res2 = await apiFetch(`${API}/usuarios/${btn.dataset.id}`, { method: "DELETE" });
+      const data2 = await res2.json();
+      if (!res2.ok) { alert(data2.detail || "Não foi possível excluir o usuário."); return; }
       carregarUsuarios();
     });
   });
 }
+
+async function abrirModalUsuario(usuario) {
+  usuarioEmEdicaoId = usuario.id;
+  document.getElementById("modal-usuario-titulo").textContent = `Editar usuário - ${usuario.username}`;
+  document.getElementById("modal-usuario-nome").value = usuario.nome_exibicao || "";
+  document.getElementById("modal-usuario-papel").value = usuario.papel;
+  document.getElementById("modal-usuario-nova-senha").value = "";
+  document.getElementById("modal-usuario-msg").textContent = "";
+  await renderizarChecklistAlmoxarifadosPermitidos("modal-usuario-almoxarifados", usuario.almoxarifados_permitidos);
+  document.getElementById("modal-usuario-overlay").classList.remove("hidden");
+}
+
+document.getElementById("btn-fechar-modal-usuario").addEventListener("click", () => {
+  document.getElementById("modal-usuario-overlay").classList.add("hidden");
+  usuarioEmEdicaoId = null;
+});
+
+document.getElementById("btn-salvar-modal-usuario").addEventListener("click", async () => {
+  if (!usuarioEmEdicaoId) return;
+  const msg = document.getElementById("modal-usuario-msg");
+  const novaSenha = document.getElementById("modal-usuario-nova-senha").value;
+  const payload = {
+    nome_exibicao: document.getElementById("modal-usuario-nome").value.trim() || null,
+    papel: document.getElementById("modal-usuario-papel").value,
+    almoxarifados_permitidos: lerChecklistAlmoxarifadosPermitidos("modal-usuario-almoxarifados"),
+  };
+  if (novaSenha) payload.nova_senha = novaSenha;
+  const res = await apiFetch(`${API}/usuarios/${usuarioEmEdicaoId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    msg.textContent = data.detail || "Erro ao salvar alterações.";
+    return;
+  }
+  document.getElementById("modal-usuario-overlay").classList.add("hidden");
+  usuarioEmEdicaoId = null;
+  carregarUsuarios();
+});
 
 document.getElementById("btn-criar-usuario").addEventListener("click", async () => {
   const msg = document.getElementById("usuario-msg");
@@ -1907,6 +2006,7 @@ document.getElementById("btn-criar-usuario").addEventListener("click", async () 
     senha: document.getElementById("novo-usuario-senha").value,
     nome_exibicao: document.getElementById("novo-usuario-nome").value.trim() || null,
     papel: document.getElementById("novo-usuario-papel").value,
+    almoxarifados_permitidos: lerChecklistAlmoxarifadosPermitidos("novo-usuario-almoxarifados"),
   };
   if (!payload.username || !payload.senha) {
     msg.textContent = "Preencha username e senha.";
@@ -1926,6 +2026,7 @@ document.getElementById("btn-criar-usuario").addEventListener("click", async () 
   document.getElementById("novo-usuario-username").value = "";
   document.getElementById("novo-usuario-senha").value = "";
   document.getElementById("novo-usuario-nome").value = "";
+  renderizarChecklistAlmoxarifadosPermitidos("novo-usuario-almoxarifados", []);
   carregarUsuarios();
 });
 

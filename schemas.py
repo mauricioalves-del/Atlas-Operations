@@ -340,6 +340,7 @@ class UsuarioOut(BaseModel):
     nome_exibicao: Optional[str] = None
     papel: str
     ativo: bool
+    almoxarifados_permitidos: Optional[List[str]] = None
 
     class Config:
         from_attributes = True
@@ -350,6 +351,7 @@ class UsuarioCreate(BaseModel):
     senha: str
     nome_exibicao: Optional[str] = None
     papel: str = "leitura"
+    almoxarifados_permitidos: Optional[List[str]] = None
 
 
 class UsuarioAtualizar(BaseModel):
@@ -357,6 +359,12 @@ class UsuarioAtualizar(BaseModel):
     papel: Optional[str] = None
     ativo: Optional[bool] = None
     nova_senha: Optional[str] = None
+    # None = não tocar no campo (padrão do PATCH); [] = remove a restrição explicitamente
+    # e passa a ver tudo; lista não-vazia = define o novo conjunto de almoxarifados
+    # permitidos. Distinguir "não veio no payload" de "veio uma lista vazia de propósito"
+    # é por isso que o router usa `"almoxarifados_permitidos" in payload.model_fields_set`
+    # em vez de só checar `is not None`.
+    almoxarifados_permitidos: Optional[List[str]] = None
 
 
 class ProdutoOut(BaseModel):

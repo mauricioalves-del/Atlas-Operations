@@ -10,7 +10,7 @@ from ..csv_utils import parse_sku, parse_data, parse_decimal, limpar_texto
 from ..hipoteses_config import normalizar_almoxarifado, buscar_evidencias_texto
 from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
-from ..deps import requer_papel, obter_usuario_atual
+from ..deps import requer_papel, obter_usuario_atual, filtrar_por_almoxarifado_permitido
 from ..audit import registrar_log
 
 router = APIRouter(prefix="/fechamentos", tags=["fechamento_inventario"])
@@ -258,8 +258,7 @@ async def importar_fechamento(
 @router.get("", response_model=list[schemas.FechamentoOut])
 def listar_fechamentos(almoxarifado: str | None = None, mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     q = db.query(models.FechamentoInventario)
-    if almoxarifado:
-        q = q.filter(models.FechamentoInventario.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
     if mes:
         from sqlalchemy import extract
         ano, mes_num = mes.split("-")
@@ -284,9 +283,15 @@ def listar_fechamentos(almoxarifado: str | None = None, mes: str | None = None, 
 
 # ==================== Dashboard de acompanhamento ====================
 
-def _query_itens_filtrados(db: Session, almoxarifado: str | None, mes: str | None):
+def _query_itens_filtrados(db: Session, almoxarifado: str | None, mes: str | None, usuario: models.Usuario | None = None):
     q = db.query(models.ItemFechamento).join(models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id)
-    if almoxarifado:
+    # "Parâmetro de visualização" por almoxarifado (18/08/2026) - ponto único, já que
+    # essa função alimenta praticamente todo o painel de Acurácia Ponderada. usuario=None
+    # (chamadas internas antigas que não repassam o usuário) mantém o comportamento de
+    # sempre, sem restrição - só filtra quando o chamador de fato passa o usuário logado.
+    if usuario is not None:
+        q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
+    elif almoxarifado:
         q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
     if mes:
         from sqlalchemy import extract
@@ -298,7 +303,7 @@ def _query_itens_filtrados(db: Session, almoxarifado: str | None, mes: str | Non
 
 @router.get("/dashboard/kpis")
 def dashboard_kpis(almoxarifado: str | None = None, mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     total = len(itens)
     divergentes = [i for i in itens if i.divergente]
     sem_divergencia = total - len(divergentes)
@@ -324,7 +329,7 @@ def dashboard_kpis(almoxarifado: str | None = None, mes: str | None = None, usua
 
 @router.get("/dashboard/por-grupo")
 def dashboard_por_grupo(almoxarifado: str | None = None, mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     from collections import defaultdict
     por_grupo = defaultdict(lambda: {"total": 0, "sem_divergencia": 0, "com_pct": 0, "acima_95": 0})
     for i in itens:
@@ -350,7 +355,7 @@ def dashboard_por_grupo(almoxarifado: str | None = None, mes: str | None = None,
 
 @router.get("/dashboard/por-almoxarifado")
 def dashboard_por_almoxarifado(mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    itens = _query_itens_filtrados(db, None, mes).all()
+    itens = _query_itens_filtrados(db, None, mes, usuario).all()
     from collections import defaultdict
     por_almox = defaultdict(lambda: {"total": 0, "sem_divergencia": 0})
     for i in itens:
@@ -366,7 +371,7 @@ def dashboard_por_almoxarifado(mes: str | None = None, usuario: models.Usuario =
 
 @router.get("/dashboard/ranking-financeiro")
 def dashboard_ranking_financeiro(almoxarifado: str | None = None, mes: str | None = None, limite: int = 10, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    itens = _query_itens_filtrados(db, almoxarifado, mes).filter(models.ItemFechamento.divergente.is_(True)).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).filter(models.ItemFechamento.divergente.is_(True)).all()
     from collections import defaultdict
     por_sku = defaultdict(lambda: {"descricao": None, "valor": 0.0, "qtd": 0.0})
     for i in itens:
@@ -388,8 +393,7 @@ def dashboard_top_recorrentes(almoxarifado: str | None = None, limite: int = 10,
     """Top SKUs que mais vezes apareceram divergentes, somando todos os
     fechamentos já importados - o que você chamaria de 'always suspects'."""
     q = db.query(models.ItemFechamento).filter(models.ItemFechamento.divergente.is_(True))
-    if almoxarifado:
-        q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
     from collections import defaultdict
     por_sku = defaultdict(lambda: {"descricao": None, "almoxarifado": None, "ocorrencias": 0, "valor_total": 0.0, "ultima_data": None})
@@ -416,8 +420,7 @@ def dashboard_top_impacto_financeiro(almoxarifado: str | None = None, limite: in
     q = db.query(models.ItemFechamento).filter(
         models.ItemFechamento.divergente.is_(True), models.ItemFechamento.divergencia_qtd < 0
     )
-    if almoxarifado:
-        q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
     from collections import defaultdict
     por_sku = defaultdict(lambda: {"descricao": None, "almoxarifado": None, "ocorrencias": 0, "valor_total": 0.0, "ultima_data": None})
@@ -441,8 +444,7 @@ def dashboard_evolucao_mensal(almoxarifado: str | None = None, usuario: models.U
     avaliados naquele mês - pra não confundir queda de % com aumento de
     cobertura (mais almoxarifados auditados no período)."""
     q_fech = db.query(models.FechamentoInventario)
-    if almoxarifado:
-        q_fech = q_fech.filter(models.FechamentoInventario.almoxarifado == almoxarifado)
+    q_fech = filtrar_por_almoxarifado_permitido(q_fech, models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
     fechamentos = q_fech.all()
 
     from collections import defaultdict
@@ -476,7 +478,7 @@ def dashboard_evolucao_mensal(almoxarifado: str | None = None, usuario: models.U
 
 @router.get("/dashboard/evolucao-por-almox-mensal")
 def dashboard_evolucao_por_almox_mensal(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    fechamentos = db.query(models.FechamentoInventario).all()
+    fechamentos = filtrar_por_almoxarifado_permitido(db.query(models.FechamentoInventario), models.FechamentoInventario.almoxarifado, usuario, None).all()
     from collections import defaultdict
     por_mes_almox = defaultdict(lambda: defaultdict(lambda: {"total": 0, "sem_divergencia": 0}))
     for f in fechamentos:
@@ -566,8 +568,7 @@ def historico_sku_fechamento(sku: str, almoxarifado: str | None = None, usuario:
     q = db.query(models.ItemFechamento).join(
         models.FechamentoInventario, models.ItemFechamento.fechamento_id == models.FechamentoInventario.id
     ).filter(models.ItemFechamento.sku == sku)
-    if almoxarifado:
-        q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
 
     pontos = []
@@ -634,7 +635,7 @@ def dashboard_iap(almoxarifado: str | None = None, mes: str | None = None, usuar
     ou importado via 'Custos por SKU' / 'Custos (tabela de preço)') -
     cobertura parcial é normal e fica explícita no retorno, não afeta o
     resto do sistema."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     if not itens:
         return {"iap_pct": None, "cobertura_custo_pct": None, "itens_avaliados_com_custo": 0, "itens_total": 0, "valor_portfolio_avaliado": 0, "valor_divergente": 0}
 
@@ -673,8 +674,7 @@ def dashboard_top_recorrentes_risco(almoxarifado: str | None = None, limite: int
     que difere 'recorrência que é só ruído operacional' de 'recorrência
     que é risco real de negócio'."""
     q = db.query(models.ItemFechamento).filter(models.ItemFechamento.divergente.is_(True))
-    if almoxarifado:
-        q = q.filter(models.ItemFechamento.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.ItemFechamento.almoxarifado, usuario, almoxarifado)
     itens = q.all()
 
     from collections import defaultdict
@@ -714,7 +714,7 @@ def dashboard_iaq(almoxarifado: str | None = None, mes: str | None = None, usuar
     cadastrado (por isso funciona sempre, mesmo com 0% de cobertura de
     custo) - serve de indicador de transição enquanto o cadastro de custo
     não está completo, e de checagem cruzada do IAP quando já está."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     if not itens:
         return {"iaq_pct": None, "qtd_sistema_total": 0, "qtd_divergente_total": 0}
     qtd_sistema_total = sum(abs(i.qtd_sistema or 0) for i in itens)
@@ -750,7 +750,7 @@ def dashboard_concentracao_valor(almoxarifado: str | None = None, mes: str | Non
     nos itens de maior impacto. Isso é a prova visual de que 'tratar
     tudo igual' (modelo item a item) ignora que poucos SKUs concentram
     quase todo o risco financeiro real."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     divergentes = [i for i in itens if i.divergente]
     if not divergentes:
         return {"itens": [], "top_n_pct_do_valor": None, "top_n": top_n, "total_itens_divergentes": 0}
@@ -813,7 +813,7 @@ def dashboard_distribuicao_magnitude(almoxarifado: str | None = None, mes: str |
     """Quantas divergências são 'pequenas' (pouco impacto real) vs
     'grandes' - isso é a prova visual da segunda distorção: a métrica
     item a item trata as duas categorias como se fossem a mesma coisa."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     divergentes = [i for i in itens if i.divergente]
 
     skus = {i.sku for i in divergentes}
@@ -854,7 +854,7 @@ def dashboard_itens_por_magnitude(faixa_idx: int, almoxarifado: str | None = Non
         raise HTTPException(400, f"faixa_idx deve estar entre 0 e {len(FAIXAS_MAGNITUDE) - 1}")
     minimo, maximo = FAIXAS_MAGNITUDE[faixa_idx]
 
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     divergentes = [i for i in itens if i.divergente and minimo <= abs(i.divergencia_qtd or 0) < maximo]
 
     skus = {i.sku for i in divergentes}
@@ -919,7 +919,7 @@ def _tres_modelos(itens: list) -> dict:
 def dashboard_comparativo_por_grupo(almoxarifado: str | None = None, mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """Os 3 modelos (item a item, IAQ, IAP) lado a lado, por categoria de
     produto - pra ver em qual grupo a distorção é maior."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
     from collections import defaultdict
     por_grupo = defaultdict(list)
     for i in itens:
@@ -932,7 +932,7 @@ def dashboard_comparativo_por_grupo(almoxarifado: str | None = None, mes: str | 
 @router.get("/dashboard/comparativo-por-almoxarifado")
 def dashboard_comparativo_por_almoxarifado(mes: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     """Os 3 modelos lado a lado, por almoxarifado."""
-    itens = _query_itens_filtrados(db, None, mes).all()
+    itens = _query_itens_filtrados(db, None, mes, usuario).all()
     from collections import defaultdict
     por_almox = defaultdict(list)
     for i in itens:
@@ -942,14 +942,14 @@ def dashboard_comparativo_por_almoxarifado(mes: str | None = None, usuario: mode
     return sorted(resultado, key=lambda x: x["item_a_item_pct"] or 0, reverse=True)
 
 
-def _valor_mod_mensal(db: Session, almoxarifado: str | None, mes: str) -> float:
+def _valor_mod_mensal(db: Session, almoxarifado: str | None, mes: str, usuario: models.Usuario | None = None) -> float:
     """Soma o valor de TODAS as divergências do mês (sobra e falta como
     positivo, sem se cancelarem) - é o "Valor Mod" (valor modificado/
     absoluto): quanto de dinheiro esteve em jogo naquele mês, não o saldo
     líquido entre sobra e falta. Usa custo real quando disponível, mesmo
     padrão de recálculo já usado no IAP/Pareto (evita depender do
     valor_estimado gravado na importação, que pode estar desatualizado)."""
-    itens = _query_itens_filtrados(db, almoxarifado, mes).filter(models.ItemFechamento.divergente.is_(True)).all()
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).filter(models.ItemFechamento.divergente.is_(True)).all()
     if not itens:
         return 0.0
     skus = {i.sku for i in itens}
@@ -970,9 +970,8 @@ def dashboard_evolucao_ponderada_mensal(almoxarifado: str | None = None, usuario
     falta juntos como positivo) - um jeito de olhar evolução/involução em
     R$, não em %, já que 100% de acurácia com R$ 50 mil em jogo é uma
     leitura bem diferente de 100% com R$ 500."""
-    fechamentos = db.query(models.FechamentoInventario).all()
-    if almoxarifado:
-        fechamentos = [f for f in fechamentos if f.almoxarifado == almoxarifado]
+    q_fech = filtrar_por_almoxarifado_permitido(db.query(models.FechamentoInventario), models.FechamentoInventario.almoxarifado, usuario, almoxarifado)
+    fechamentos = q_fech.all()
 
     meses = sorted({f.data_fechamento.strftime("%Y-%m") for f in fechamentos})
     resultado = []
@@ -983,7 +982,7 @@ def dashboard_evolucao_ponderada_mensal(almoxarifado: str | None = None, usuario
         kpis = dashboard_kpis(almoxarifado, mes, usuario, db)
         atual = {
             "item_a_item_pct": kpis["acuracia_geral_pct"], "iaq_pct": iaq["iaq_pct"], "iap_pct": iap["iap_pct"],
-            "valor_mod": _valor_mod_mensal(db, almoxarifado, mes),
+            "valor_mod": _valor_mod_mensal(db, almoxarifado, mes, usuario),
         }
 
         def variacao(chave):

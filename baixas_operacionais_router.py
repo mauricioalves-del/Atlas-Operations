@@ -17,7 +17,7 @@ import pandas as pd
 
 from .. import models
 from ..database import get_db
-from ..deps import obter_usuario_atual, requer_papel
+from ..deps import obter_usuario_atual, requer_papel, filtrar_por_almoxarifado_permitido
 from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote, importar_planilha_historico_lovable
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
@@ -133,8 +133,7 @@ def listar_baixas(
     q = db.query(models.BaixaOperacional)
     if status_fluxo:
         q = q.filter(models.BaixaOperacional.status_fluxo == status_fluxo.upper())
-    if almoxarifado:
-        q = q.filter(models.BaixaOperacional.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.BaixaOperacional.almoxarifado, usuario, almoxarifado)
     if hipotese_aplicada:
         q = q.filter(models.BaixaOperacional.hipotese_aplicada == hipotese_aplicada)
     if data_inicio:
@@ -222,14 +221,18 @@ def _filtrar_baixas_dashboard(
     db: Session, status_fluxo: str | None, categoria_mapeamento: str | None, mes: str | None, sku: str | None,
     motivo: str | None = None, excluir_categoria_mapeamento: str | None = None,
     ano: int | None = None, data_inicio=None, data_fim=None, almoxarifado: str | None = None,
-    mes_numero: int | None = None,
+    mes_numero: int | None = None, usuario: models.Usuario | None = None,
 ) -> list:
     q = db.query(models.BaixaOperacional)
     if status_fluxo:
         q = q.filter(models.BaixaOperacional.status_fluxo == status_fluxo.upper())
     if sku:
         q = q.filter(models.BaixaOperacional.sku == sku)
-    if almoxarifado:
+    # "Parâmetro de visualização" por almoxarifado (18/08/2026) - usuario=None (chamadas
+    # antigas que não repassam o usuário) mantém o comportamento de sempre, sem restrição.
+    if usuario is not None:
+        q = filtrar_por_almoxarifado_permitido(q, models.BaixaOperacional.almoxarifado, usuario, almoxarifado)
+    elif almoxarifado:
         q = q.filter(models.BaixaOperacional.almoxarifado == almoxarifado)
     if motivo:
         # aceita uma lista separada por vírgula (clique no segmento "Outros" do
@@ -789,7 +792,7 @@ def dashboard_passivos_itens(
     df = _parse_data_iso(data_fim, "data_fim")
     baixas = _filtrar_baixas_dashboard(
         db, status_fluxo, categoria_mapeamento, mes, sku, motivo, excluir_categoria_mapeamento,
-        ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado, mes_numero=mes_numero,
+        ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado, mes_numero=mes_numero, usuario=usuario,
     )
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_({b.sku for b in baixas if b.sku})).all()}

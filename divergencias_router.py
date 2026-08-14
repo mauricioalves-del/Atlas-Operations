@@ -8,7 +8,7 @@ from .. import models, schemas
 from ..database import get_db
 from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
-from ..deps import requer_papel, obter_usuario_atual
+from ..deps import requer_papel, obter_usuario_atual, filtrar_por_almoxarifado_permitido
 from ..audit import registrar_log
 
 router = APIRouter(prefix="/divergencias", tags=["divergencias"])
@@ -87,8 +87,7 @@ def listar(
     q = db.query(models.Divergencia)
     if not incluir_fechamento_inventario:
         q = q.filter(models.Divergencia.origem != "fechamento_inventario")
-    if almoxarifado:
-        q = q.filter(models.Divergencia.almoxarifado == almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.Divergencia.almoxarifado, usuario, almoxarifado)
     if status:
         q = q.filter(models.Divergencia.status == status)
     if hipotese:
@@ -215,8 +214,7 @@ def cobertura_conferencia(dias: int = 90, almoxarifado: str | None = None, usuar
     data_inicio = data_fim - timedelta(days=dias - 1)
 
     q = db.query(models.Almoxarifado).filter_by(ativo=True, participa_contagem_diaria=True)
-    if almoxarifado:
-        q = q.filter_by(codigo=almoxarifado)
+    q = filtrar_por_almoxarifado_permitido(q, models.Almoxarifado.codigo, usuario, almoxarifado)
     almoxarifados_cadastrados = [a.codigo for a in q.all()]
 
     bruta_por_almox = _dias_movimentacao_bruta_por_almoxarifado(db, data_inicio, data_fim)

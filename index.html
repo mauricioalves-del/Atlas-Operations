@@ -710,13 +710,17 @@
           </div>
           <button id="btn-criar-usuario" class="btn-primario">Criar usuário</button>
         </div>
+        <div style="margin-top:14px">
+          <label>Parâmetro de visualização - Almoxarifados permitidos <span class="hint">(deixe tudo desmarcado para o usuário ver todos os almoxarifados)</span></label>
+          <div id="novo-usuario-almoxarifados" class="lista-almoxarifados-permitidos"></div>
+        </div>
         <p id="usuario-msg" class="hint"></p>
       </div>
 
       <div class="panel">
         <h2>Usuários cadastrados</h2>
         <table class="tabela" id="tabela-usuarios">
-          <thead><tr><th>Username</th><th>Nome</th><th>Papel</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Username</th><th>Nome</th><th>Papel</th><th>Status</th><th>Almoxarifados permitidos</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1569,6 +1573,44 @@
   </div>
 </div>
 
-<script src="app.js?v=87"></script>
+<div id="modal-usuario-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="width:min(560px, 92vw)">
+    <div class="modal-header">
+      <h2 id="modal-usuario-titulo">Editar usuário</h2>
+      <button id="btn-fechar-modal-usuario" class="btn-secundario">Fechar ✕</button>
+    </div>
+    <div style="padding:24px">
+      <div class="form-cadastro" style="grid-template-columns:1fr 1fr; gap:14px">
+        <div>
+          <label>Nome de exibição</label>
+          <input type="text" id="modal-usuario-nome">
+        </div>
+        <div>
+          <label>Papel</label>
+          <select id="modal-usuario-papel">
+            <option value="leitura">Leitura (só visualiza)</option>
+            <option value="analista">Analista (importa e confirma)</option>
+            <option value="admin">Admin (tudo + gerencia usuários)</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <label>Parâmetro de visualização - Almoxarifados permitidos <span class="hint">(deixe tudo desmarcado para o usuário ver todos os almoxarifados)</span></label>
+        <div id="modal-usuario-almoxarifados" class="lista-almoxarifados-permitidos"></div>
+      </div>
+
+      <div style="margin-top:16px">
+        <label>Trocar senha <span class="hint">(deixe em branco para não alterar a senha atual)</span></label>
+        <input type="text" id="modal-usuario-nova-senha" placeholder="Nova senha">
+      </div>
+
+      <p id="modal-usuario-msg" class="hint" style="margin-top:10px"></p>
+      <button id="btn-salvar-modal-usuario" class="btn-primario" style="margin-top:10px">Salvar alterações</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=88"></script>
 </body>
 </html>
