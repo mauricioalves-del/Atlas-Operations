@@ -10,15 +10,9 @@ python-multipart==0.0.9
 pytest==8.3.3
 fpdf2==2.7.9
 
-# Geração do MBR (Monthly Business Review) em PPTX com prints reais das
-# telas do Atlas (19/08/2026, ver app/mbr_generator.py e POST
-# /api/auditoria/gerar-mbr) - python-pptx/Pillow são dependências Python
-# normais, mas o Playwright TAMBÉM precisa do navegador Chromium instalado
-# separadamente (não vem com o pip install). Depois de instalar estes
-# pacotes, rode UMA VEZ (localmente e no build do servidor de nuvem):
-#   playwright install --with-deps chromium
-# Sem esse passo extra, o resto do Atlas continua funcionando normalmente -
-# só o botão "Gerar MBR" retorna erro 500 até o Chromium ser instalado.
+# Geração do MBR (Monthly Business Review) em PPTX (reescrito em 20/08/2026)
+# - python-pptx é uma dependência Python normal, sem nenhum passo extra de
+# instalação (a versão anterior usava Playwright/Chromium para printar as
+# telas do Atlas; foi substituída por um gerador que lê os dados direto das
+# funções de negócio do Atlas, sem navegador nenhum - ver app/mbr_generator.py).
 python-pptx==0.6.23
-Pillow==10.4.0
-playwright==1.46.0

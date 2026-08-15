@@ -4273,7 +4273,7 @@ async function carregarAuditoria(pagina = 1) {
   if (btnProx) btnProx.addEventListener("click", () => carregarAuditoria(resposta.pagina + 1));
 }
 
-// ---------- Gerar MBR (Monthly Business Review) - PPTX com prints reais das telas (19/08/2026) ----------
+// ---------- Gerar MBR (Monthly Business Review) - PPTX com dados reais, sem prints de tela (reescrito 20/08/2026) ----------
 // O usuário escolhe o mês (decisão explícita, sem cálculo automático de
 // "último mês fechado") - a lista de meses aqui é só gerada a partir da
 // data de hoje (últimos 24 meses), não depende de já existir dado pra esse
