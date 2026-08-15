@@ -4250,6 +4250,7 @@ async function carregarAuditoria(pagina = 1) {
   carregarStatusBackup();
   carregarStatusMl();
   popularFiltroMesMbr();
+  carregarDashboardsExternos();
   const resposta = await apiFetch(`${API}/auditoria?pagina=${pagina}&tamanho_pagina=50`).then((r) => r.json());
   document.querySelector("#tabela-auditoria tbody").innerHTML = resposta.itens
     .map(
@@ -4301,7 +4302,7 @@ document.getElementById("btn-gerar-mbr").addEventListener("click", async () => {
   if (!mes) return;
   btn.disabled = true;
   btn.textContent = "Gerando...";
-  status.textContent = "Capturando as telas do Atlas... isso pode levar cerca de um minuto.";
+  status.textContent = "Gerando o PPTX com os dados do mês... deve levar só alguns segundos.";
   try {
     const res = await apiFetch(`${API}/auditoria/gerar-mbr?mes=${encodeURIComponent(mes)}`, { method: "POST" });
     if (!res.ok) {
@@ -4325,6 +4326,125 @@ document.getElementById("btn-gerar-mbr").addEventListener("click", async () => {
   btn.disabled = false;
   btn.textContent = "Gerar MBR";
 });
+
+// ---------- Outros Dashboards (HTML autocontido, embutido via iframe) - 20/08/2026 ----------
+// Nasceu da conversa sobre o slide de FEFO do MBR: em vez de forçar uma métrica de
+// "quebra de FEFO" que a base de dados não sustenta com confiança (não há hoje uma
+// leitura de disponibilidade do lote concorrente tirada na hora exata da transferência),
+// o admin sobe aqui o HTML já pronto de cada dashboard que a equipe já mantém por fora
+// (Controle de FEFO, Farol de Shelf-Life, Recuperação de Shelf, Testes Industriais,
+// Dashboard Baixas Operacionais), e ele fica acessível dentro do próprio Atlas.
+const dashboardsExternosAbertos = new Set(); // chaves com iframe expandido no momento
+
+async function carregarDashboardsExternos() {
+  const container = document.getElementById("lista-dashboards-externos");
+  try {
+    const lista = await apiFetch(`${API}/dashboards-externos`).then((r) => r.json());
+    renderDashboardsExternos(lista);
+  } catch (erro) {
+    container.innerHTML = `<p class="hint">Não consegui carregar: ${erro.message}</p>`;
+  }
+}
+
+function renderDashboardsExternos(lista) {
+  const container = document.getElementById("lista-dashboards-externos");
+  container.innerHTML = lista
+    .map((d) => {
+      const aberto = dashboardsExternosAbertos.has(d.chave);
+      const meta = d.enviado
+        ? `Enviado por ${d.enviado_por || "—"} em ${new Date(d.enviado_em).toLocaleString("pt-BR")} · ${d.nome_arquivo_original || ""}`
+        : "Nenhum arquivo enviado ainda.";
+      return `
+        <div class="dashboard-externo-item" data-chave="${d.chave}">
+          <div class="dashboard-externo-linha">
+            <div class="dashboard-externo-info">
+              <span class="dashboard-externo-nome">${d.nome_exibicao}
+                <span class="badge ${d.enviado ? "badge-dash-enviado" : "badge-dash-vazio"}">${d.enviado ? "Enviado" : "Vazio"}</span>
+              </span>
+              <span class="dashboard-externo-meta">${meta}</span>
+            </div>
+            <div class="dashboard-externo-acoes">
+              ${d.enviado ? `<button class="btn-secundario btn-dash-abrir" data-chave="${d.chave}">${aberto ? "Fechar" : "Abrir"}</button>` : ""}
+              <label class="btn-secundario" style="cursor:pointer">
+                ${d.enviado ? "Substituir" : "Enviar"} .html
+                <input type="file" accept=".html,.htm" class="input-dash-upload" data-chave="${d.chave}" style="display:none">
+              </label>
+              ${d.enviado ? `<button class="btn-secundario btn-dash-remover" data-chave="${d.chave}">Remover</button>` : ""}
+            </div>
+          </div>
+          ${aberto ? `<div class="dashboard-externo-iframe-wrap"><iframe id="iframe-dash-${d.chave}"></iframe></div>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  container.querySelectorAll(".btn-dash-abrir").forEach((btn) => {
+    btn.addEventListener("click", () => alternarDashboardExterno(btn.dataset.chave, lista));
+  });
+  container.querySelectorAll(".input-dash-upload").forEach((input) => {
+    input.addEventListener("change", (ev) => enviarDashboardExterno(input.dataset.chave, ev.target.files[0]));
+  });
+  container.querySelectorAll(".btn-dash-remover").forEach((btn) => {
+    btn.addEventListener("click", () => removerDashboardExterno(btn.dataset.chave));
+  });
+
+  // se algum dashboard já estava marcado como aberto (ex: reload da lista depois de um
+  // upload), recarrega o conteúdo no iframe agora que ele acabou de ser recriado no DOM.
+  dashboardsExternosAbertos.forEach((chave) => {
+    const item = lista.find((d) => d.chave === chave);
+    if (item && item.enviado) carregarConteudoIframe(chave);
+  });
+}
+
+function alternarDashboardExterno(chave, lista) {
+  if (dashboardsExternosAbertos.has(chave)) {
+    dashboardsExternosAbertos.delete(chave);
+  } else {
+    dashboardsExternosAbertos.add(chave);
+  }
+  renderDashboardsExternos(lista);
+}
+
+async function carregarConteudoIframe(chave) {
+  const iframe = document.getElementById(`iframe-dash-${chave}`);
+  if (!iframe) return;
+  try {
+    const html = await apiFetch(`${API}/dashboards-externos/${chave}/conteudo`).then((r) => r.text());
+    // srcdoc (não src) porque o conteúdo já foi buscado com o token de autenticação -
+    // um <iframe src="/api/..."> comum não manda o cabeçalho Authorization.
+    iframe.srcdoc = html;
+  } catch (erro) {
+    iframe.srcdoc = `<p style="font-family:sans-serif; padding:20px">Falha ao carregar: ${erro.message}</p>`;
+  }
+}
+
+async function enviarDashboardExterno(chave, arquivo) {
+  if (!arquivo) return;
+  const formData = new FormData();
+  formData.append("arquivo", arquivo);
+  try {
+    const res = await apiFetch(`${API}/dashboards-externos/${chave}/upload`, { method: "POST", body: formData });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Erro ao enviar: ${data.detail || "falha desconhecida."}`);
+      return;
+    }
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao enviar: " + erro.message);
+  }
+}
+
+async function removerDashboardExterno(chave) {
+  if (!confirm("Remover o dashboard enviado nesse slot? Isso não pode ser desfeito.")) return;
+  dashboardsExternosAbertos.delete(chave);
+  try {
+    await apiFetch(`${API}/dashboards-externos/${chave}`, { method: "DELETE" });
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao remover: " + erro.message);
+  }
+}
 
 // ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
 function badgeStatusBaixa(statusFluxo) {

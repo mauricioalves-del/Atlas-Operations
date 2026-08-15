@@ -784,3 +784,30 @@ class ResumoTransferenciasMensal(Base):
     quebras_fefo = Column(Integer, default=0)
     taxa_quebra_fefo_pct = Column(Float, nullable=True)
     atualizado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class DashboardExterno(Base):
+    """Dashboards HTML autocontidos (CSS/JS já embutidos no próprio arquivo),
+    construídos fora do Atlas e mantidos em paralelo a ele - pedido do usuário
+    (20/08/2026) depois de esclarecer que a "quebra de FEFO" calculada a
+    partir da data de transferência não reflete disponibilidade real medida
+    no momento (não há hoje uma leitura de estoque do lote concorrente
+    tirada exatamente na hora da transferência - ver docstring de fefo.py).
+    Em vez de forçar dentro do MBR uma métrica que a base de dados atual não
+    sustenta com confiança, o admin sobe aqui o HTML já pronto de cada
+    dashboard que a equipe já mantém por fora, e ele fica acessível dentro do
+    Atlas (Auditoria > Outros Dashboards), embutido via iframe - sem
+    recalcular nada, só exibir o que já existe.
+
+    5 slots fixos (ver CHAVES_VALIDAS em dashboards_externos_router.py):
+    Controle de FEFO, Farol de Shelf-Life, Recuperação de Shelf, Testes
+    Industriais, Dashboard Baixas Operacionais. Um upload novo substitui o
+    conteúdo anterior do mesmo slot (upsert por chave)."""
+    __tablename__ = "dashboards_externos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chave = Column(String, unique=True, index=True, nullable=False)
+    nome_exibicao = Column(String, nullable=False)
+    html_content = Column(Text, nullable=False)
+    nome_arquivo_original = Column(String, nullable=True)
+    enviado_por = Column(String, nullable=True)
+    enviado_em = Column(DateTime, default=datetime.utcnow)

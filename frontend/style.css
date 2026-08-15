@@ -703,6 +703,19 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 
 .lista-wrap{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:8px 20px}
 
+/* ---- Outros Dashboards (20/08/2026) - upload de HTML autocontido, embutido via iframe ---- */
+.lista-dashboards-externos{display:flex; flex-direction:column; gap:10px}
+.dashboard-externo-item{border:1px solid var(--border); border-radius:var(--radius-input); background:var(--panel-2); overflow:hidden}
+.dashboard-externo-linha{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; flex-wrap:wrap}
+.dashboard-externo-info{display:flex; flex-direction:column; gap:2px; min-width:200px}
+.dashboard-externo-nome{font-weight:600; font-size:13.5px; color:var(--text)}
+.dashboard-externo-meta{font-size:11.5px; color:var(--muted)}
+.dashboard-externo-acoes{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.dashboard-externo-iframe-wrap{border-top:1px solid var(--border); padding:0}
+.dashboard-externo-iframe-wrap iframe{width:100%; height:640px; border:none; display:block; background:#fff}
+.badge-dash-enviado{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.badge-dash-vazio{background:color-mix(in srgb, var(--muted) 18%, transparent); color:var(--muted)}
+
 /* ---- detalhe ---- */
 .btn-voltar{
   background:none; border:1px solid var(--border); color:var(--muted); border-radius:var(--radius-btn);
