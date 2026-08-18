@@ -40,6 +40,13 @@ COLUNAS_LOTE_SISTEMA = {
     "peso_kg": "Peso_Kg",
     "custo": "Custo_Vlr",
     "ean": "EAN",
+    # "Grupo" (ex: Produto Acabado, Embalagem, Ativo Imobilizado, Materia Prima...)
+    # passou a vir na exportação a partir de 20/08/2026 - NÃO é obrigatória (ver
+    # COLUNAS_OBRIGATORIAS_LOTE_SISTEMA abaixo), pra continuar aceitando uma
+    # exportação mais antiga sem essa coluna. Quando ausente, a exclusão de
+    # Embalagens no indicador cai pro fallback por palavra-chave na descrição
+    # (ver GRUPOS_EXCLUIDOS_SHELF_LIFE / _eh_item_embalagem).
+    "grupo": "Grupo",
 }
 
 COLUNAS_OBRIGATORIAS_LOTE_SISTEMA = (COLUNAS_LOTE_SISTEMA["sku"], COLUNAS_LOTE_SISTEMA["lote"], COLUNAS_LOTE_SISTEMA["data_validade"])
@@ -86,6 +93,43 @@ PALAVRAS_CHAVE_EMBALAGEM = (
 def _eh_item_embalagem(descricao) -> bool:
     texto = (descricao or "").lower()
     return any(palavra in texto for palavra in PALAVRAS_CHAVE_EMBALAGEM)
+
+
+# Grupos de produto excluídos do indicador de Shelf Life (pedido do usuário,
+# 20/08/2026): Embalagem e Ativo Imobilizado não representam o mesmo tipo de
+# risco de perda por validade que matéria-prima/produto perecível - uma
+# embalagem "vencendo" ou um ativo imobilizado (ex: equipamento com validade
+# de calibração cadastrada por engano num campo de validade) não deveriam
+# contar pro indicador. Comparação normalizada (minúsculo + sem espaço extra)
+# contra o valor exato vindo da coluna "Grupo" da planilha - cobre tanto a
+# forma singular quanto a plural, caso a exportação varie.
+GRUPOS_EXCLUIDOS_SHELF_LIFE = ("embalagem", "embalagens", "ativo imobilizado", "ativos imobilizados")
+
+# Almoxarifados excluídos do indicador de Shelf Life (pedido do usuário,
+# 20/08/2026): Box e Box 2 são áreas de triagem/trânsito de embalagens e
+# materiais diversos, não estoque de produto/matéria-prima em risco real de
+# obsolescência - mesmo raciocínio da exclusão por Grupo acima, mas por
+# almoxarifado. Usa o código já normalizado (ver hipoteses_config.
+# normalizar_almoxarifado) pra não depender de como o almoxarifado chegou
+# escrito na planilha de origem.
+ALMOXARIFADOS_EXCLUIDOS_SHELF_LIFE = ("Almox_Box", "Almox_Box_2")
+
+
+def _grupo_excluido(grupo_produto) -> bool:
+    if not grupo_produto:
+        return False
+    return grupo_produto.strip().lower() in GRUPOS_EXCLUIDOS_SHELF_LIFE
+
+
+def _item_excluido_do_indicador(lote) -> bool:
+    """Decide se um LoteShelfLife deve ficar de fora do Farol/Mapeamento de
+    Risco. Prioriza o Grupo vindo da planilha (mais confiável) quando
+    presente; só cai pro filtro por palavra-chave na descrição
+    (_eh_item_embalagem) quando o lote não tem Grupo cadastrado (planilha
+    antiga sem essa coluna, ou lote cadastrado manualmente na tela)."""
+    if lote.grupo_produto:
+        return _grupo_excluido(lote.grupo_produto)
+    return _eh_item_embalagem(lote.descricao_produto)
 
 
 def _data_excel_serial(valor_serial) -> date:
@@ -158,6 +202,10 @@ def _linha_para_campos(linha: dict):
         "sku": sku,
         "descricao_produto": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["descricao"])),
         "tipo_material": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["tipo_material"])),
+        # .get(..., None) explícito (em vez de .get(chave)) só por clareza - o dict já
+        # vem de zip(cabecalho, linha), então uma planilha sem a coluna "Grupo"
+        # simplesmente não tem essa chave, e .get devolve None do mesmo jeito.
+        "grupo_produto": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["grupo"], None)),
         "almoxarifado": normalizar_almoxarifado(origem_bruta) if origem_bruta else None,
         "almoxarifado_origem": origem_bruta,
         "lote": limpar_texto(linha.get(COLUNAS_LOTE_SISTEMA["lote"])),
@@ -220,7 +268,10 @@ def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_i
     Shelf Life quanto o bloco de Shelf Life do Mapa de Demandas (tela
     Início). Só considera lotes ativos com quantidade > 0 - lote zerado
     ou inativado (Ativo=N na planilha de origem) não é risco: já saiu do
-    estoque ou foi descartado, não deveria continuar aparecendo."""
+    estoque ou foi descartado, não deveria continuar aparecendo. Também
+    desconsidera os grupos Embalagem/Ativo Imobilizado (_item_excluido_do_
+    indicador) e os almoxarifados Box/Box 2 (ALMOXARIFADOS_EXCLUIDOS_SHELF_LIFE),
+    pedido do usuário (20/08/2026)."""
     hoje = date.today()
     lotes = db.query(models.LoteShelfLife).filter(models.LoteShelfLife.ativo.is_(True)).all()
 
@@ -232,12 +283,16 @@ def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_i
         FAROL_SEM_VALIDADE: {"quantidade": 0, "valor": 0.0},
     }
     itens = []
-    embalagens_excluidas = 0
+    itens_excluidos_grupo = 0
+    itens_excluidos_almoxarifado = 0
     for l in lotes:
         if not l.quantidade or l.quantidade <= 0:
             continue
-        if _eh_item_embalagem(l.descricao_produto):
-            embalagens_excluidas += 1
+        if l.almoxarifado in ALMOXARIFADOS_EXCLUIDOS_SHELF_LIFE:
+            itens_excluidos_almoxarifado += 1
+            continue
+        if _item_excluido_do_indicador(l):
+            itens_excluidos_grupo += 1
             continue
         farol = calcular_farol(l.data_validade, hoje)
         valor = round((l.quantidade or 0) * (l.custo_unitario or 0), 2)
@@ -273,7 +328,8 @@ def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_i
         "pendente_validade": resumo[FAROL_SEM_VALIDADE],
         "itens": itens[:limite_itens],
         "total_itens": len(itens),
-        "embalagens_excluidas": embalagens_excluidas,
+        "itens_excluidos_grupo": itens_excluidos_grupo,
+        "itens_excluidos_almoxarifado": itens_excluidos_almoxarifado,
     }
 
 
@@ -309,9 +365,11 @@ def calcular_mapeamento_risco_obsolescencia(db: Session, janela_dias: int = JANE
       - Giro suficiente (>= quantidade em estoque): não entra na lista -
         risco de validade existe, mas o consumo real já está dando conta.
 
-    Mesma exclusão de embalagens do Shelf Life (_eh_item_embalagem) - uma
-    caixa ou sacola "vencendo" parada no estoque não é o mesmo tipo de
-    risco de negócio que um insumo/produto perecível."""
+    Mesma exclusão de Embalagem/Ativo Imobilizado e de almoxarifado
+    (Box/Box 2) do Farol de Shelf Life (_item_excluido_do_indicador /
+    ALMOXARIFADOS_EXCLUIDOS_SHELF_LIFE) - uma embalagem ou ativo imobilizado
+    "vencendo" parado numa área de triagem não é o mesmo tipo de risco de
+    negócio que um insumo/produto perecível parado no estoque."""
     hoje = date.today()
     inicio_janela = hoje - timedelta(days=janela_dias)
 
@@ -320,7 +378,9 @@ def calcular_mapeamento_risco_obsolescencia(db: Session, janela_dias: int = JANE
     for l in lotes:
         if not l.quantidade or l.quantidade <= 0:
             continue
-        if _eh_item_embalagem(l.descricao_produto):
+        if l.almoxarifado in ALMOXARIFADOS_EXCLUIDOS_SHELF_LIFE:
+            continue
+        if _item_excluido_do_indicador(l):
             continue
         farol = calcular_farol(l.data_validade, hoje)
         if farol not in FAROIS_DE_RISCO:

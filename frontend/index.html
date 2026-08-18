@@ -644,9 +644,13 @@
         <p class="hint" style="margin-top:8px">
           <strong>Lote de Validade:</strong> aba <code>Lote_Sistema</code> (ou a informada) com colunas
           <code>Ativo, TipoMaterial, Id_produto, descricao, um, Origem, Qtd, Lote, Dt_Validade, Unidade, Peso_Kg, Custo_Vlr, EAN</code> —
-          igual ao arquivo exportado direto do sistema. Ao contrário das demais fontes desta tabela, reimportar
-          <strong>atualiza</strong> os lotes já conhecidos (por SKU + Lote + Almoxarifado) em vez de substituir tudo, e não
-          apaga lotes cadastrados manualmente na tela Shelf Life.
+          igual ao arquivo exportado direto do sistema. Se a planilha também tiver a coluna <code>Grupo</code> (Produto Acabado,
+          Embalagem, Ativo Imobilizado...), os itens dos grupos <strong>Embalagem</strong> e <strong>Ativo Imobilizado</strong>
+          são automaticamente desconsiderados do indicador de Shelf Life — sem essa coluna, o Atlas cai pra um filtro por
+          palavra-chave na descrição (menos preciso, só cobre Embalagem). Almoxarifados <strong>Box</strong> e <strong>Box 2</strong>
+          também são sempre desconsiderados do indicador, com ou sem a coluna Grupo. Ao contrário das demais fontes desta
+          tabela, reimportar <strong>atualiza</strong> os lotes já conhecidos (por SKU + Lote + Almoxarifado) em vez de
+          substituir tudo, e não apaga lotes cadastrados manualmente na tela Shelf Life.
         </p>
       </div>
 

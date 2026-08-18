@@ -612,6 +612,14 @@ class LoteShelfLife(Base):
     sku = Column(String, index=True)
     descricao_produto = Column(String, nullable=True)
     tipo_material = Column(String, nullable=True)  # MateriaPrima | Produto | SubConjunto | Diversos
+    # Grupo de produto (ex: "Produto Acabado", "Embalagem", "Ativo Imobilizado",
+    # "Materia Prima"...) - coluna nova "Grupo" que passou a vir na aba Lote_Sistema
+    # a partir do arquivo enviado em 20/08/2026 (antes, a planilha não trazia essa
+    # informação, e a exclusão de embalagens só podia ser feita por palavra-chave na
+    # descrição - ver PALAVRAS_CHAVE_EMBALAGEM em shelf_life.py, mantida como
+    # fallback pra lote sem Grupo preenchido). None em lotes importados de uma
+    # planilha antiga ou cadastrados manualmente sem essa informação.
+    grupo_produto = Column(String, nullable=True, index=True)
     almoxarifado = Column(String, index=True, nullable=True)  # já normalizado (Almox_...) - ou NAO_MAPEADO__<valor>
     almoxarifado_origem = Column(String, nullable=True)  # valor bruto da planilha de origem, guardado pra auditoria
     lote = Column(String, index=True, nullable=True)

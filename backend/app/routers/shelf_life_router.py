@@ -20,6 +20,11 @@ class LoteManualIn(BaseModel):
     sku: str
     descricao_produto: str | None = None
     tipo_material: str | None = None
+    # Grupo de produto (ex: "Produto Acabado", "Embalagem", "Ativo Imobilizado"...) -
+    # opcional, mesma origem da coluna "Grupo" da planilha (ver shelf_life.py). Se
+    # informado como "Embalagem"/"Ativo Imobilizado", o lote cadastrado manualmente
+    # também fica de fora do indicador, igual a um lote importado da planilha.
+    grupo_produto: str | None = None
     almoxarifado: str | None = None  # aceita já normalizado (Almox_...) ou bruto (normaliza aqui)
     lote: str | None = None
     quantidade: float
@@ -71,7 +76,7 @@ def listar_lotes_shelf_life(
         dias = (l.data_validade - hoje).days if l.data_validade else None
         resultado.append({
             "id": l.id, "sku": l.sku, "descricao_produto": l.descricao_produto,
-            "tipo_material": l.tipo_material, "almoxarifado": l.almoxarifado,
+            "tipo_material": l.tipo_material, "grupo_produto": l.grupo_produto, "almoxarifado": l.almoxarifado,
             "almoxarifado_origem": l.almoxarifado_origem, "lote": l.lote,
             "quantidade": l.quantidade, "unidade": l.unidade,
             "data_validade": str(l.data_validade) if l.data_validade else None,
@@ -110,6 +115,7 @@ def criar_lote_manual(
     lote = models.LoteShelfLife(
         sku=sku, descricao_produto=limpar_texto(payload.descricao_produto),
         tipo_material=limpar_texto(payload.tipo_material),
+        grupo_produto=limpar_texto(payload.grupo_produto),
         almoxarifado=almoxarifado_normalizado, almoxarifado_origem=payload.almoxarifado,
         lote=limpar_texto(payload.lote), quantidade=payload.quantidade,
         unidade=limpar_texto(payload.unidade), data_validade=payload.data_validade,
@@ -145,6 +151,7 @@ def editar_lote_shelf_life(
     lote.sku = parse_sku(payload.sku) or lote.sku
     lote.descricao_produto = limpar_texto(payload.descricao_produto)
     lote.tipo_material = limpar_texto(payload.tipo_material)
+    lote.grupo_produto = limpar_texto(payload.grupo_produto)
     lote.almoxarifado = almoxarifado_normalizado
     lote.lote = limpar_texto(payload.lote)
     lote.quantidade = payload.quantidade

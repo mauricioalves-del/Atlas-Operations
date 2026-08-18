@@ -1,67 +1,58 @@
-# Auditoria FEFO importada — pacote de atualização
+# Shelf Life — coluna "Grupo" + exclusão de Box/Box 2
 
-Este pacote adiciona ao Atlas um painel nativo que consolida o histórico de
-auditoria de FEFO que o estagiário (André) já produz hoje por fora do
-sistema (notebooks `Auditar_FEFO.ipynb` + `DashBoard_FEFO.ipynb`). O Atlas
-**não recalcula** a comparação lote-vs-movimentação — ele importa e
-consolida o resultado já apurado por esse processo, conforme decidido.
+## O que mudou
 
-O slide de FEFO do MBR **não foi alterado** — continua usando o dashboard
-HTML externo, como já estava.
+A aba `Lote_Sistema` do arquivo exportado do sistema agora pode trazer uma
+coluna **Grupo** (Produto Acabado, Embalagem, Ativo Imobilizado, Materia
+Prima, SubConjunto...). O importador do Atlas passou a ler essa coluna
+(campo novo `grupo_produto` no lote) e o indicador de Shelf Life (Farol +
+Mapeamento de Risco por Obsolescência) agora desconsidera:
+
+- Itens do grupo **Embalagem** ou **Ativo Imobilizado** (antes, só dava
+  pra tentar excluir Embalagem por palavra-chave na descrição — e isso
+  não pegava tudo, ex: "Luva LO 80GR ao leite com Praliné" é embalagem
+  mas não tem nenhuma palavra da lista; "Ativo Imobilizado" não tinha
+  filtro nenhum).
+- Almoxarifados **Box** e **Box 2** (novo pedido) — em qualquer lote,
+  independente do Grupo.
+
+**Retrocompatível:** se você reimportar uma planilha no formato antigo
+(sem a coluna Grupo), o Atlas não quebra — só volta a usar o filtro por
+palavra-chave na descrição pros lotes daquela importação (menos preciso,
+mas funcional). Assim que reimportar no formato novo (com Grupo), a
+precisão volta ao normal.
 
 ## Arquivos alterados
 
-- `backend/app/models.py` — novo modelo `AuditoriaFefo` (append no fim do arquivo).
-- `backend/app/fefo.py` — lógica de importação/consolidação (append no fim do arquivo).
-- `backend/app/routers/fefo_router.py` — 4 novos endpoints (append no fim do arquivo).
-- `frontend/index.html` — novo painel "Auditoria FEFO — histórico importado" na tela FEFO.
-- `frontend/app.js` — carregamento do painel, gráfico, tabelas e os dois uploads.
+- `backend/app/models.py` — novo campo `grupo_produto` em `LoteShelfLife`.
+- `backend/app/database.py` — migração automática (`ALTER TABLE`) que
+  adiciona a coluna nova no banco existente, sem precisar recriar nada.
+- `backend/app/shelf_life.py` — leitura da coluna "Grupo", exclusão por
+  grupo e por almoxarifado (Box/Box 2) no Farol e no Mapeamento de Risco
+  por Obsolescência.
+- `backend/app/routers/shelf_life_router.py` — aceita `grupo_produto`
+  também no cadastro manual de lote, e devolve o campo na listagem.
+- `frontend/index.html` — hint atualizado na tela de importação explicando
+  a coluna Grupo e a exclusão de Box/Box 2.
 
-Basta sobrepor esses 5 arquivos nos mesmos caminhos do seu repositório atual
-e fazer o deploy normalmente (nenhuma migração manual de banco é
-necessária — o Atlas cria a tabela nova automaticamente no próximo boot,
-igual às outras tabelas).
+Nenhuma migração manual necessária — a coluna nova é criada
+automaticamente no próximo boot do backend.
 
-## Como importar o histórico depois do deploy
+## Validado (banco de teste local, com o arquivo que você enviou)
 
-Na tela FEFO do Atlas, dois uploads novos aparecem no topo do novo painel:
+Importei o `Lote_Sistema.xlsx` que você mandou (1.060 linhas). Confirmado
+com um cálculo manual em paralelo sobre o mesmo arquivo:
 
-1. **Importar auditoria diária** — selecione os Excels diários que o
-   processo do André já gera (`Auditoria_FEFO_DDMMAAAA.xlsx`, aba "Todas as
-   Movimentações"). Pode selecionar vários de uma vez. Reimportar o mesmo
-   dia substitui só as linhas daquele dia — não duplica.
-2. **Importar consolidado (HTML)** — suba o `Controle - FEFO.html` que o
-   André já mantinha, pra estender o histórico aos dias mais antigos (sem
-   Excel diário bruto). Dias que já tiverem sido cobertos pelo upload (1)
-   são automaticamente ignorados nesse import, pra nunca sobrescrever o
-   dado mais detalhado com o menos detalhado.
-
-Ordem recomendada: primeiro suba todos os Excels diários que você tiver,
-depois suba o HTML consolidado por último (assim ele já sabe quais dias
-pular).
-
-## Validação feita nesta sessão
-
-Rodei os dois importadores localmente contra os 8 Excels diários e o HTML
-consolidado que você enviou, num banco de teste isolado (não no seu banco
-de produção — não tenho acesso a ele). Confirmado:
-
-- Os 8 arquivos diários importaram exatamente as mesmas contagens de
-  quebra que cada um já reporta na própria aba "Resumo" (total: 27
-  quebras, 325 linhas).
-- O HTML consolidado importou 973 linhas (36 dias, 20/05 a 21/07/2026) e
-  pulou corretamente os 5 dias que já estavam cobertos pelos Excels
-  diários (22/07, 24/07, 28/07, 31/07, 05/08) — sem duplicar nem
-  sobrescrever o dado mais detalhado.
-- Resumo agregado final: 1.298 movimentos, 60 quebras (4,6%), 44 dias com
-  dado, 20/05 a 12/08/2026.
-- Reimportar o mesmo arquivo duas vezes não duplica linhas (testado com o
-  arquivo de 24/07).
-- Upload de arquivo inválido ou sem a aba esperada retorna um erro claro
-  por arquivo, sem travar a importação dos outros arquivos do lote.
-- Permissão: usuário com papel "leitura" consegue ver os relatórios mas
-  recebe 403 ao tentar importar — só admin/analista importam.
-
-O histórico real, porém, só existe no seu banco de produção depois que
-você (ou quem administra o Atlas) subir esses mesmos arquivos pela tela,
-já que não tenho acesso de escrita ao banco em produção.
+- 52 lotes com quantidade > 0 e ativos estavam em Box/Box 2 — todos
+  excluídos do indicador (bate exatamente com a contagem manual).
+- 241 lotes (dentre os que não são Box/Box 2, ativos e com quantidade >
+  0) eram do grupo Embalagem ou Ativo Imobilizado — todos excluídos (bate
+  exatamente com a contagem manual). Nenhum item de embalagem (ex: "Luva
+  LO 80GR...", "Caixa Base LO 80g") apareceu na lista final do Farol nem
+  do Mapeamento de Risco.
+- Testei também reimportar uma versão do mesmo arquivo sem a coluna Grupo
+  (simulando o formato antigo que você usava até agora): a importação não
+  quebrou, só voltou a excluir menos itens (94 em vez de 241) porque caiu
+  pro filtro por palavra-chave — confirma o problema que você relatou, e
+  confirma que a correção resolve.
+- Geração do MBR testada depois da reimportação — sem regressão.

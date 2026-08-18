@@ -213,6 +213,17 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE fechamentos_inventario ADD COLUMN aprovado_manual_em TIMESTAMP"))
                 conn.commit()
 
+    # grupo_produto (20/08/2026) - a aba Lote_Sistema passou a trazer a coluna
+    # "Grupo" (Produto Acabado, Embalagem, Ativo Imobilizado...), o que permite
+    # excluir Embalagens e Ativos Imobilizados do indicador de Shelf Life de forma
+    # confiável (ver models.LoteShelfLife e shelf_life.py).
+    if inspecao.has_table("lotes_shelf_life"):
+        colunas_shelf_life = {c["name"] for c in inspecao.get_columns("lotes_shelf_life")}
+        if "grupo_produto" not in colunas_shelf_life:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE lotes_shelf_life ADD COLUMN grupo_produto VARCHAR"))
+                conn.commit()
+
 
 def _backfill_lotes_ajuste_inventario_legado():
     """Roda uma única vez, imediatamente depois da migração que criou a
