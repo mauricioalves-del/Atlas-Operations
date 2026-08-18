@@ -29,6 +29,19 @@ Duas famílias de arquivo, por como cada um foi construído:
    além dos 5 acima (ver dashboards_externos_router.py, POST "") usa
    `extrair_generico`: só tabelas HTML reais + metadados de exportação, sem
    tentar adivinhar KPIs de um layout desconhecido (ver docstring da função).
+
+4. Dispersão de Ficha Técnica ("Dispersão de Lote — Produção", 20/08/2026,
+   pedido do usuário: "Adicione Dispersão de Ficha técnica na apresentação
+   do MBR") - é um indicador dinâmico (cadastrado em Outros Dashboards >
+   Adicionar Indicador), mas ganhou extrator e slide dedicados porque os
+   KPIs dele (OPs analisadas, taxa de furo, perda/economia...) são
+   renderizados no navegador a partir de um JSON embutido
+   (`<script id="dados" type="application/json">`), não como HTML/tabela
+   estática - `extrair_generico` não teria nada de confiável pra ler nesse
+   arquivo (as tabelas de "Top 10 perda/economia" e "Detalhamento" também
+   são preenchidas via JS, ficam vazias no HTML bruto). Tem "mês" limpo por
+   registro (campo "mes", "YYYY-MM") - filtra exato pelo mês do MBR, igual
+   a Controle de FEFO/Testes Industriais (`extrair_dispersao_ficha_tecnica`).
 """
 import re
 import json
@@ -359,4 +372,103 @@ def extrair_generico(html_content: str) -> dict:
         # até 4 tabelas por slide - o suficiente sem virar sopa de letra numa
         # única página do MBR.
         "tabelas": tabelas[:4],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. Dispersão de Ficha Técnica ("Dispersão de Lote — Produção") - Ficha
+#    Técnica (BOM) × Consumo real por Ordem de Produção. Todo o conteúdo
+#    visível (KPIs, gráficos, tabelas) é renderizado no navegador a partir
+#    de um único JSON embutido - reproduz aqui em Python a mesma agregação
+#    que o próprio arquivo faz em JS (funções renderKpis/agregarMatriz do
+#    export), pra chegar nos mesmos números sem precisar de navegador.
+# ---------------------------------------------------------------------------
+def extrair_dispersao_ficha_tecnica(html_content: str, mes: str) -> dict:
+    """mes: 'YYYY-MM'. Cada registro em `linhas` é um par OP + material
+    consumido (com o previsto pela Ficha Técnica, o consumo real, e o
+    impacto financeiro já calculado pelo próprio export: positivo = perda,
+    negativo = economia). `tem_furo` marca se aquele material daquela OP
+    saiu do critério de tolerância do export."""
+    m = re.search(r'<script id="dados" type="application/json">(.*?)</script>', html_content, re.S)
+    if not m:
+        return None
+    try:
+        dados = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    linhas = dados.get("linhas") or []
+    lim_freq = dados.get("limFreq", 5)
+
+    do_mes = [r for r in linhas if r.get("mes") == mes]
+    if not do_mes:
+        return {"tem_dados": False, "mes": mes}
+
+    ops, ops_com_furo, ops_criticas = set(), set(), set()
+    perda, economia = 0.0, 0.0
+    for r in do_mes:
+        id_op = r.get("id_op")
+        ops.add(id_op)
+        if r.get("tem_furo"):
+            ops_com_furo.add(id_op)
+        impacto = r.get("impacto") or 0
+        if impacto > 0:
+            perda += impacto
+        else:
+            economia += -impacto
+        if r.get("cls") == "CRITICO":
+            ops_criticas.add(id_op)
+
+    # Matriz de criticidade por material (só materiais com furo em ao menos
+    # uma OP no mês) - mesma base usada pros Top 10 de perda/economia e pra
+    # "Concentração Top 20" (quanto do impacto absoluto total está nos 20
+    # materiais de maior impacto, positivo ou negativo).
+    materiais: dict[str, dict] = {}
+    for r in do_mes:
+        if not r.get("tem_furo"):
+            continue
+        chave_material = r.get("material") or "—"
+        c = materiais.setdefault(chave_material, {
+            "material": chave_material,
+            "desc": r.get("desc_material") or chave_material,
+            "ops": set(), "liq": 0.0, "abs": 0.0,
+        })
+        c["ops"].add(r.get("id_op"))
+        impacto = r.get("impacto") or 0
+        c["liq"] += impacto
+        c["abs"] += abs(impacto)
+
+    matriz = [
+        {"material": c["material"], "desc": c["desc"], "freq": len(c["ops"]), "liq": c["liq"], "abs": c["abs"]}
+        for c in materiais.values()
+    ]
+    matriz.sort(key=lambda x: -x["abs"])
+
+    total_abs = sum(mm["abs"] for mm in matriz)
+    top20_abs = sum(mm["abs"] for mm in matriz[:20])
+    materiais_cronicos = sum(1 for mm in matriz if mm["freq"] >= lim_freq)
+
+    top_perda = sorted((mm for mm in matriz if mm["liq"] > 0), key=lambda x: -x["liq"])[:10]
+    top_economia = sorted((mm for mm in matriz if mm["liq"] < 0), key=lambda x: x["liq"])[:10]
+
+    return {
+        "tem_dados": True,
+        "mes": mes,
+        "ops_analisadas": len(ops),
+        "ops_com_furo": len(ops_com_furo),
+        "taxa_furo_pct": (len(ops_com_furo) / len(ops) * 100) if ops else None,
+        "perda": round(perda, 2),
+        "economia": round(economia, 2),
+        "impacto_liquido": round(perda - economia, 2),
+        "materiais_cronicos": materiais_cronicos,
+        "limiar_freq_ops": lim_freq,
+        "ops_criticas": len(ops_criticas),
+        "concentracao_top20_pct": (top20_abs / total_abs * 100) if total_abs else None,
+        "top_materiais_perda": [
+            {"material": mm["material"], "descricao": mm["desc"], "ops": mm["freq"], "impacto": round(mm["liq"], 2)}
+            for mm in top_perda
+        ],
+        "top_materiais_economia": [
+            {"material": mm["material"], "descricao": mm["desc"], "ops": mm["freq"], "impacto": round(mm["liq"], 2)}
+            for mm in top_economia
+        ],
     }

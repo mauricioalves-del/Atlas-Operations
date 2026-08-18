@@ -226,14 +226,28 @@ def _linha_para_campos(linha: dict):
 def importar_linhas_lote_sistema(db: Session, linhas: list[dict], usuario: str) -> dict:
     """Upsert por chave natural (sku, lote, almoxarifado) - reimportar a
     mesma planilha (ou uma exportação mais recente) atualiza os lotes já
-    conhecidos em vez de duplicar. Ao contrário do padrão 'substituição
-    completa' usado em outras importações do Atlas (Faturamento, BOM...),
-    aqui NÃO apaga o que não está na planilha nova: lotes cadastrados à
-    mão na tela, ou vindos de uma importação anterior e já consumidos na
-    planilha mais nova, continuam existindo (a planilha é uma fonte entre
-    outras, não a única - e query de "consumido" não é objetivo deste
-    importador)."""
+    conhecidos em vez de duplicar.
+
+    DESATIVA (ativo=False, não apaga a linha) qualquer lote que já tenha
+    vindo de uma importação de planilha anterior (origem_cadastro=
+    "importacao_planilha") e que NÃO apareça nesta planilha nova
+    (20/08/2026, pedido do usuário: "Não está atualizando, está trazendo
+    itens que já foram baixados. atualize todos os itens conforme upload
+    realizado" - o Farol de Shelf Life continuava mostrando como "Vencido"
+    lotes já consumidos/baixados no sistema real, porque a versão anterior
+    deste importador nunca desativava nada que tivesse saído da planilha,
+    ao contrário do padrão "substituição completa" usado em outras
+    importações do Atlas, como Faturamento e BOM).
+
+    NÃO desativa lotes cadastrados à mão na tela (origem_cadastro=
+    "manual") - só os que vieram de uma planilha anterior são candidatos,
+    e só se a chave (sku, lote, almoxarifado) não aparecer em NENHUMA
+    linha desta planilha nova. Desativar em vez de apagar a linha
+    preserva o histórico (criado_em/criado_por) e é reversível: se o
+    mesmo lote voltar a aparecer numa planilha futura, a própria linha de
+    upsert acima reativa ele a partir do valor de "Ativo" da planilha."""
     criados, atualizados, ignorados_sem_sku, nao_mapeados = 0, 0, 0, set()
+    chaves_na_planilha = set()
     for linha in linhas:
         campos = _linha_para_campos(linha)
         if campos is None:
@@ -241,6 +255,8 @@ def importar_linhas_lote_sistema(db: Session, linhas: list[dict], usuario: str) 
             continue
         if campos["almoxarifado"] and campos["almoxarifado"].startswith("NAO_MAPEADO__"):
             nao_mapeados.add(campos["almoxarifado_origem"])
+
+        chaves_na_planilha.add((campos["sku"], campos["lote"], campos["almoxarifado"]))
 
         existente = db.query(models.LoteShelfLife).filter_by(
             sku=campos["sku"], lote=campos["lote"], almoxarifado=campos["almoxarifado"],
@@ -255,9 +271,21 @@ def importar_linhas_lote_sistema(db: Session, linhas: list[dict], usuario: str) 
             db.add(models.LoteShelfLife(**campos, origem_cadastro="importacao_planilha", criado_por=usuario))
             criados += 1
 
+    desativados = 0
+    candidatos_desativacao = db.query(models.LoteShelfLife).filter(
+        models.LoteShelfLife.origem_cadastro == "importacao_planilha",
+        models.LoteShelfLife.ativo.is_(True),
+    ).all()
+    for lote in candidatos_desativacao:
+        if (lote.sku, lote.lote, lote.almoxarifado) not in chaves_na_planilha:
+            lote.ativo = False
+            lote.atualizado_em = datetime.utcnow()
+            desativados += 1
+
     return {
         "criados": criados,
         "atualizados": atualizados,
+        "desativados": desativados,
         "ignorados_sem_sku": ignorados_sem_sku,
         "almoxarifados_nao_mapeados": sorted(nao_mapeados),
     }

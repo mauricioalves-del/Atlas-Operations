@@ -657,7 +657,10 @@
           palavra-chave na descrição (menos preciso, só cobre Embalagem). Almoxarifados <strong>Box</strong> e <strong>Box 2</strong>
           também são sempre desconsiderados do indicador, com ou sem a coluna Grupo. Ao contrário das demais fontes desta
           tabela, reimportar <strong>atualiza</strong> os lotes já conhecidos (por SKU + Lote + Almoxarifado) em vez de
-          substituir tudo, e não apaga lotes cadastrados manualmente na tela Shelf Life.
+          substituir tudo. Lotes de uma importação anterior que <strong>não aparecem mais</strong> na planilha nova são
+          automaticamente desativados (não somem do histórico, só saem do Farol/Mapeamento de Risco — corrige itens já
+          baixados/consumidos que continuavam aparecendo como "Vencido"); lotes cadastrados manualmente na tela nunca
+          são desativados por uma importação.
         </p>
         <p class="hint" style="margin-top:8px">
           <strong>Movimentação por Lote:</strong> a exportação "Movimentação - Lt.xlsx" (colunas

@@ -192,9 +192,11 @@ async def importar_planilha_lote_sistema(
 ):
     """Importa a aba 'Lote_Sistema' do arquivo exportado do sistema
     interno (ex: Lote_Sistema.xlsx) - upsert por (sku, lote, almoxarifado),
-    ver shelf_life.importar_linhas_lote_sistema. Não apaga lotes
-    existentes que não estão nesta planilha (não é substituição
-    completa - ver comentário na função de upsert)."""
+    ver shelf_life.importar_linhas_lote_sistema. Lotes de uma importação
+    anterior que não aparecem nesta planilha nova são desativados
+    (ativo=False, não apagados - 20/08/2026, corrige itens já baixados/
+    consumidos que continuavam aparecendo como "Vencido"). Lotes
+    cadastrados manualmente na tela não são afetados."""
     conteudo = await arquivo.read()
     try:
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)

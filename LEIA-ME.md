@@ -1,145 +1,72 @@
-# FEFO — motor nativo por lote movimentado
+# Shelf Life — lotes já baixados continuavam no Farol como "Vencido"
 
-## O que mudou
+## O problema
 
-A tela "FEFO — Quebras na Movimentação" ("Checagens") estava trazendo dados
-errados (1.745 movimentos avaliados, 1.328 quebras, **89,85%** de taxa de
-quebra). A causa raiz: o cálculo antigo (`calcular_checagem_fefo`) **nunca
-comparava de fato o lote que saiu da Fábrica** contra nada — só checava (1)
-se já tinham passado 5 dias úteis desde a transferência até *hoje* e (2) se
-existia qualquer lote daquele SKU com estoque na Fábrica *hoje*. Como isso
-recalcula contra TODAS as transferências históricas usando a data de hoje
-a cada vez, praticamente toda transferência com mais de ~1 semana virava
-"quebra" — daí os 89,85%. Está tudo documentado, com data e detalhe técnico,
-no projeto Atlas Operations (`claude/checagens-fefo-heuristica-quebrada.md`).
+Você mostrou a tela "Lotes em risco" com 3 itens de sorvete (SKUs
+05004156, 05004157, 05004158, lotes "V.06052026...") aparecendo como
+"Vencido" — mesmo já tendo sido baixados/consumidos no sistema real (não
+aparecem mais na planilha `Lote_Sistema.xlsx` mais recente).
 
-A pedido explícito ("crie um motor investigativo, sem ferramenta genérica.
-Com base na tabela de movimentação, pegue tudo que saiu da fábrica e
-compare com o lote mais próximo da data de vencimento. Se lote não for
-igual, quebra de FEFO. Esse processo precisa atualizar todos os dias"),
-foi construído um motor **novo e independente**, que:
+## Causa raiz
 
-1. Lê a planilha bruta **"Movimentação - Lt.xlsx"** — a mesma exportação
-   por lote que o André já usa no próprio processo de auditoria dele (tem
-   a coluna `id_lote`, que a movimentação diária normal do Atlas não tem).
-2. Pra cada saída da Fábrica, pega o LOTE QUE DE FATO SAIU e compara contra
-   os lotes do mesmo SKU que continuam na Fábrica (validade conhecida,
-   estoque > 0). Se existe algum lote mais antigo que não foi o que saiu,
-   é quebra de FEFO.
-3. Recalcula automaticamente a cada importação nova, **e também uma vez
-   por dia em segundo plano**, mesmo sem upload manual naquele dia.
+O importador da planilha de Lote de Validade (`importar_linhas_lote_sistema`)
+foi construído de propósito pra NUNCA apagar nada que não estivesse na
+planilha nova — a ideia original era proteger lotes cadastrados manualmente
+na tela. Só que isso também significava que um lote vindo de uma
+importação ANTERIOR, e que sumiu da planilha porque foi consumido/baixado
+no sistema real, ficava marcado como ativo pra sempre — reimportar a
+planilha atualizava os lotes que continuavam lá, mas nunca desativava os
+que saíram dela. Confirmei isso diretamente: os 3 SKUs do seu print não
+aparecem em nenhuma linha do arquivo `Lote_Sistema.xlsx` mais recente que
+você já tinha enviado — ou seja, são resíduo de uma importação mais
+antiga.
 
-**Resultado no arquivo de teste real (5 dias, 07 a 12/08):** 186 movimentos
-de saída da Fábrica identificados, 20 quebras — **11,24%** de taxa de
-quebra. Validei manualmente caso a caso (ex: SKU 0040305007, lote
-030010306Z000010126 → corretamente "OK", porque era de fato o lote mais
-antigo dos dois que a Fábrica tinha; SKU 05004102 → corretamente "QUEBRA",
-porque saiu o lote com validade 01/01/2027 enquanto um lote com validade
-16/12/2026 continuou parado). Ordens de grandeza plausíveis, batendo perto
-do ~4,6% que a Auditoria FEFO importada (relatório do André) já mostrava.
+## Correção
 
-O motor antigo (`ChecagemFefo`) **fica desativado, mas não é apagado** —
-continua no banco só como registro histórico, e a docstring dele agora
-explica o problema e aponta pro motor novo. A "Auditoria FEFO importada"
-(os relatórios que o André já gera e sobem pro Atlas) continua existindo
-do mesmo jeito, como feature separada — não há fusão entre as duas.
+Agora, toda vez que você reimporta a planilha de Lote de Validade, qualquer
+lote que:
 
-## Limitação conhecida (avisando de propósito, não escondendo)
+- tenha vindo de uma importação de planilha anterior (não cadastro manual), **e**
+- não apareça em NENHUMA linha da planilha nova,
 
-O processo do André tem uma planilha de exceções manualmente validadas
-(`Excecoes_FEFO.xlsx`) — pares de produto + "lote mais antigo disponível"
-que um humano já revisou e confirmou que está OK apesar da ordem (ex: por
-motivo operacional específico daquele lote). **Esse motor nativo ainda não
-importa essa planilha de exceções.** Toda vez que existir um lote mais
-antigo do mesmo SKU na Fábrica que não foi o lote movimentado, isso é
-reportado como quebra — mesmo que o André já tenha validado aquele caso
-específico como OK no processo dele por fora. Se isso gerar muito falso
-positivo já conhecido/validado, dá pra construir a importação da planilha
-de exceções depois — não fiz isso agora pra não atrasar a entrega do
-motor principal.
+é automaticamente **desativado** (sai do Farol e do Mapeamento de Risco de
+Obsolescência). Não apago a linha do banco — só marco como inativo, pra
+manter o histórico e pra o caso de o item voltar a aparecer numa planilha
+futura (ex: reposição de estoque), quando ele é reativado automaticamente
+com a validade/quantidade novas.
 
-## Como usar
+**Lotes cadastrados manualmente na tela Shelf Life continuam protegidos** —
+uma importação de planilha nunca desativa um lote manual, só os que vieram
+de uma importação anterior.
 
-Na tela **Importar**, tabela "Dados de contexto", nova linha
-**"Movimentação por Lote (FEFO)"**: suba o(s) arquivo(s) "Movimentação -
-Lt.xlsx" (pode selecionar vários de uma vez; cada um pode trazer vários
-dias). A checagem de FEFO recalcula automaticamente ao final da
-importação. Reimportar um dia substitui as linhas daquele dia, sem
-duplicar.
+O resultado da importação agora também informa quantos itens foram
+desativados (ex: "1.060 atualizado(s) · 3 desativado(s) (não aparecem mais
+na planilha)").
 
-Na tela **FEFO**, o filtro agora é "Todos os movimentos avaliados" / "Só
-quebras de FEFO" (o campo antigo de resultado por transferência não existe
-mais, porque a unidade agora é o lote, não a transferência agregada). O
-botão "Recalcular" continua existindo, pra rodar de novo sem precisar
-reimportar (ex: depois de atualizar o Lote de Validade/Shelf Life).
+## Validado
 
-**Recálculo automático diário:** o servidor roda o recálculo em segundo
-plano a cada 24h (configurável por variável de ambiente
-`ATLAS_FEFO_RECALCULO_INTERVALO_HORAS`, verificando a cada
-`ATLAS_FEFO_CHECAGEM_SEGUNDOS`; pra desativar,
-`ATLAS_FEFO_AUTO_RECALCULO=false`), mesmo em dias sem upload manual — como
-pedido.
+Reproduzi exatamente o seu cenário num banco de teste: inseri os 3 lotes
+de sorvete como estavam na sua tela (ativos, "Vencido") e reimportei o
+`Lote_Sistema.xlsx` mais recente que você já tinha enviado. Resultado:
+1.060 lotes atualizados normalmente, e os 3 lotes de sorvete corretamente
+desativados — confirmei que eles não aparecem mais na lista de "Lotes em
+risco" depois da reimportação.
 
-## Contrato da API preservado (sem quebrar o frontend)
-
-`GET /fefo/dashboard/resumo` continua devolvendo os MESMOS nomes de campo
-de antes (`total_transferencias_avaliadas`, `total_quebras_fefo`,
-`total_dentro_do_criterio`, `total_sem_dado_suficiente`, `taxa_quebra_pct`,
-`top_skus_com_quebra`, `top_destinos_com_quebra`) — o que mudou foi só a
-fonte e o critério por trás de cada número, não o contrato. Só o texto do
-rótulo na tela mudou ("Transferências avaliadas" → "Movimentos avaliados").
-Isso significa que o card de FEFO no MBR e na tela "Movimentados & FEFO"
-continuam funcionando sem qualquer alteração.
-
-`GET /fefo/checagens` mudou de fato (é uma tabela nova,
-`ChecagemFefoMovimento`, com campos por lote) — a tela FEFO já foi
-atualizada pra refletir isso (nova coluna "Lote Movimentado" na tabela de
-Checagens).
+Testei também os dois casos que não podiam quebrar: um lote cadastrado
+manualmente continuou ativo depois de reimportar a planilha (não foi
+tocado), e um lote que eu simulei "voltando a aparecer" numa planilha
+seguinte foi reativado normalmente com a validade e quantidade da nova
+linha.
 
 ## Arquivos alterados
 
-- `backend/app/models.py` — docstring de `ChecagemFefo` atualizada com o
-  aviso de desativação; duas classes novas, `MovimentacaoLoteDiaria`
-  (movimentação bruta por lote importada) e `ChecagemFefoMovimento`
-  (resultado do motor nativo). Tabelas novas — sem migração manual
-  necessária, criadas automaticamente no próximo boot.
-- `backend/app/fefo.py` — nova seção com o motor nativo: importação da
-  planilha de movimentação por lote, comparação lote-a-lote, e o
-  recálculo/resumo agregado.
-- `backend/app/routers/fefo_router.py` — novo endpoint
-  `POST /fefo/movimentacao/importar`; `POST /fefo/recalcular`,
-  `GET /fefo/checagens` e `GET /fefo/dashboard/resumo` repontados pro
-  motor novo.
-- `backend/app/scheduler.py` — novo agendador em segundo plano pro
-  recálculo diário automático (mesmo padrão de thread já usado pro
-  retreino de ML).
-- `backend/app/main.py` — chama o novo agendador na inicialização.
-- `frontend/index.html` — nova linha de importação na tela Importar; tela
-  FEFO com filtro, texto explicativo e tabela de Checagens atualizados
-  pro motor novo (coluna "Lote Movimentado" no lugar de "Dias úteis em
-  aberto").
-- `frontend/app.js` — `carregarFefo()` atualizada pro novo formato de
-  dados; novo handler de importação da movimentação por lote.
+- `backend/app/shelf_life.py` — `importar_linhas_lote_sistema` agora
+  desativa lotes de importação que saíram da planilha.
+- `backend/app/routers/shelf_life_router.py` — docstring do endpoint
+  atualizada.
+- `frontend/app.js` — mostra a contagem de itens desativados no resultado
+  da importação.
+- `frontend/index.html` — hint da tela Importar explicando o novo
+  comportamento.
 
-## Validado (banco de teste local, com o arquivo real que você enviou)
-
-Importei o `Movimentação - Lt.xlsx` real (6.406 linhas, 5 dias: 07 a
-12/08) sobre o `Lote_Sistema.xlsx` já importado (1.050 lotes ativos, 386
-na Fábrica). Confirmado:
-
-- 186 movimentos de saída da Fábrica identificados (o resto das 6.406
-  linhas é o mesmo movimento físico duplicado sob o almoxarifado de
-  destino, ou movimentos que não envolvem a Fábrica — corretamente fora
-  do escopo).
-- 20 quebras (11,24%) — taxa plausível, na mesma ordem de grandeza da
-  Auditoria FEFO importada (~4,6%).
-- Reimportar o mesmo arquivo não duplicou nada (6.406 linhas substituídas,
-  não somadas; 186 checagens, não 372).
-- `POST /fefo/recalcular` roda de novo sobre todo o histórico sem duplicar
-  e sem precisar reimportar.
-- Tracei 2 casos manualmente na planilha bruta: um "OK" (o lote que saiu
-  era de fato o mais antigo dos dois que a Fábrica tinha) e um "QUEBRA"
-  (saiu o lote mais novo, o mais antigo ficou parado) — os dois batem com
-  o que o motor calculou.
-- Agendador de recálculo diário inicializa corretamente no boot do
-  servidor (log: "Atlas: recálculo automático de FEFO ativo...").
+Nenhuma migração de banco necessária.

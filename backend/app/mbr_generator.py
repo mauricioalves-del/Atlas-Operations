@@ -38,6 +38,8 @@ IMPORTANTE - limitações conhecidas e assumidas nesta versão:
     pela operação. Fácil de ajustar depois se não bater com o apetite de
     risco real do time.
 """
+import re
+import unicodedata
 from datetime import datetime
 from io import BytesIO
 
@@ -565,6 +567,39 @@ def _extrair_dashboard_externo_sem_mes(db: Session, chave: str, extrator) -> dic
     return resultado
 
 
+def _normalizar_nome_indicador(nome: str) -> str:
+    sem_acento = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", sem_acento).strip().lower()
+
+
+def _extrair_dashboard_externo_por_nome(db: Session, nome_alvo: str, extrator, mes: str) -> dict:
+    """Como _extrair_dashboard_externo, mas busca o DashboardExterno pelo
+    nome_exibicao (não por uma chave fixa) - usado por indicadores DINÂMICOS
+    que ganharam extração/slide dedicados (20/08/2026: "Dispersão de Ficha
+    Técnica", pedido do usuário). A chave de um indicador dinâmico é gerada
+    por slug do nome no momento em que o admin cria (ver
+    dashboards_externos_router._slugificar) e pode variar se houver colisão
+    de nome - buscar pelo nome (normalizado: sem acento, sem espaço duplo,
+    minúsculo) é mais robusto do que fixar a chave esperada no código."""
+    alvo = _normalizar_nome_indicador(nome_alvo)
+    registro = next(
+        (r for r in db.query(models.DashboardExterno).all() if _normalizar_nome_indicador(r.nome_exibicao) == alvo),
+        None,
+    )
+    if not registro or not registro.html_content:
+        return {"tem_dados": False, "enviado": False, "_chave_dashboard_externo": None}
+    try:
+        resultado = extrator(registro.html_content, mes)
+    except Exception:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True, "_chave_dashboard_externo": registro.chave}
+    if resultado is None:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True, "_chave_dashboard_externo": registro.chave}
+    resultado["enviado"] = True
+    resultado["enviado_em"] = registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None
+    resultado["_chave_dashboard_externo"] = registro.chave
+    return resultado
+
+
 # Chaves dos 5 slots nativos (ver dashboards_externos_router.SLOTS) - cada um já
 # tem slide dedicado com extração específica acima; qualquer outra chave de
 # DashboardExterno é um indicador dinâmico (18/08/2026, ver _coletar_dashboards_extras).
@@ -574,16 +609,22 @@ _CHAVES_DASHBOARDS_NATIVOS_MBR = {
 }
 
 
-def _coletar_dashboards_extras(db: Session) -> list:
+def _coletar_dashboards_extras(db: Session, chaves_excluir: set = None) -> list:
     """Indicadores dinâmicos (Outros Dashboards > Adicionar Indicador,
     18/08/2026) - qualquer DashboardExterno com conteúdo enviado que não é um
     dos 5 slots nativos entra aqui automaticamente, com extração genérica (ver
     dashboards_externos_extrator.extrair_generico). "dado": None significa que
     a extração não achou tabela nem metadado confiável nesse arquivo - o slide
-    correspondente mostra um aviso em vez de inventar conteúdo."""
+    correspondente mostra um aviso em vez de inventar conteúdo.
+
+    `chaves_excluir` (20/08/2026): indicadores dinâmicos que já ganharam
+    extração/slide DEDICADOS (ex: "Dispersão de Ficha Técnica" - ver
+    _extrair_dashboard_externo_por_nome) não devem cair de novo aqui com a
+    extração genérica - senão apareceriam duplicados no MBR."""
+    chaves_bloqueadas = _CHAVES_DASHBOARDS_NATIVOS_MBR | (chaves_excluir or set())
     registros = (
         db.query(models.DashboardExterno)
-        .filter(~models.DashboardExterno.chave.in_(_CHAVES_DASHBOARDS_NATIVOS_MBR))
+        .filter(~models.DashboardExterno.chave.in_(chaves_bloqueadas))
         .all()
     )
     extras = []
@@ -661,6 +702,16 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "farol_shelf_externo": _extrair_dashboard_externo_sem_mes(db, "farol_shelf_life", dash_ext.extrair_farol_shelf),
         "recuperacao_shelf_externo": _extrair_dashboard_externo_sem_mes(db, "recuperacao_shelf", dash_ext.extrair_recuperacao_shelf),
         "baixas_operacionais_externo": _extrair_dashboard_externo_sem_mes(db, "baixas_operacionais", dash_ext.extrair_baixas_operacionais_externo),
+        # Dispersão de Ficha Técnica (20/08/2026, pedido do usuário: "Adicione
+        # Dispersão de Ficha técnica na apresentação do MBR") - indicador
+        # DINÂMICO (cadastrado em Outros Dashboards > Adicionar Indicador),
+        # mas com extração/slide dedicados (ver docstring de
+        # _extrair_dashboard_externo_por_nome e dashboards_externos_extrator.
+        # extrair_dispersao_ficha_tecnica) - por isso é buscado pelo nome de
+        # exibição, não por uma chave fixa como os 5 slots nativos.
+        "dispersao_ficha_tecnica_externo": _extrair_dashboard_externo_por_nome(
+            db, "Dispersão de Ficha Técnica", dash_ext.extrair_dispersao_ficha_tecnica, mes
+        ),
     }
 
     # Mapeamento de Risco - Obsolescência (18/08/2026, pedido do usuário) - ver
@@ -671,7 +722,12 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     # adicionar mais indicadores e adicionar automaticamente na construção do
     # MBR") - qualquer DashboardExterno enviado que não é um dos 5 slots nativos
     # acima entra aqui, com extração genérica (ver _coletar_dashboards_extras).
-    dados["dashboards_extras"] = _coletar_dashboards_extras(db)
+    # Exclui a chave de "Dispersão de Ficha Técnica" (se encontrada acima) pra
+    # não duplicar - ela já tem slide dedicado.
+    chave_dispersao_ficha = dados["dispersao_ficha_tecnica_externo"].pop("_chave_dashboard_externo", None)
+    dados["dashboards_extras"] = _coletar_dashboards_extras(
+        db, chaves_excluir={chave_dispersao_ficha} if chave_dispersao_ficha else None
+    )
 
     return dados
 
@@ -1781,6 +1837,79 @@ def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d:
     return slide
 
 
+def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Dispersão de Ficha Técnica (20/08/2026, pedido do usuário: "Adicione
+    Dispersão de Ficha técnica na apresentação do MBR") - dashboard
+    "Dispersão de Lote — Produção" (Ficha Técnica × Consumo real por Ordem
+    de Produção), enviado como indicador dinâmico em Auditoria > Outros
+    Dashboards. Tem data por registro (campo "mes"), então filtra exato
+    pelo mês deste relatório, igual a FEFO/Testes Industriais (ver
+    dashboards_externos_extrator.extrair_dispersao_ficha_tecnica). Sem
+    limiar de status definido pelo usuário pra taxa de furo (ao contrário
+    de FEFO/_LIMIARES) - mostra o valor real sem rótulo "Em avanço/
+    Atenção/Crítico" pra não inventar uma meta que não foi combinada."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Dispersão de Ficha Técnica", mes_label, pagina,
+               "Ficha Técnica × Consumo real por Ordem de Produção — filtrado pelo mês deste relatório")
+
+    dado = d["dispersao_ficha_tecnica_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Dispersão de Ficha Técnica"):
+        return slide
+
+    if not dado.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem OPs analisadas em {mes_label}",
+            "O dashboard de Dispersão de Ficha Técnica enviado não tem Ordens de Produção registradas para este mês "
+            "— confira se o arquivo está atualizado em Auditoria > Outros Dashboards.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_num(dado["ops_analisadas"]), "rotulo": "OPs Analisadas no Mês"},
+        {"valor": _fmt_pct(dado["taxa_furo_pct"]), "rotulo": "Taxa de Furo",
+         "cor": COR_ATENCAO if (dado["taxa_furo_pct"] or 0) > 0 else COR_SUCESSO},
+        {"valor": _fmt_moeda(dado["impacto_liquido"]), "rotulo": "Impacto Líquido (Perda − Economia)",
+         "cor": COR_ERRO if (dado["impacto_liquido"] or 0) > 0 else COR_SUCESSO},
+        {"valor": _fmt_num(dado["ops_criticas"]), "rotulo": "OPs Críticas",
+         "cor": COR_ERRO if dado["ops_criticas"] else COR_SUCESSO},
+    ], altura=1.25)
+
+    top_perda = dado.get("top_materiais_perda") or []
+    if top_perda:
+        amostra = top_perda[:8]
+        categorias = [t["descricao"][:26] for t in reversed(amostra)]
+        valores = [t["impacto"] for t in reversed(amostra)]
+        _texto(slide, MARGEM_IN, 3.05, 6.3, 0.26, "MATERIAIS COM MAIOR PERDA NO MÊS (R$)", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, MARGEM_IN, 3.35, 6.3, 2.55, categorias, "Perda", valores,
+                            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='#,##0')
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.05, 6.3, 2.55, "Materiais com maior perda",
+                        "Nenhum material com perda líquida neste mês.")
+
+    x_direita = MARGEM_IN + 6.3 + 0.35
+    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
+    _texto(slide, x_direita, 3.05, largura_direita, 0.26, "MATERIAIS COM MAIOR ECONOMIA", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    top_economia = dado.get("top_materiais_economia") or []
+    if top_economia:
+        linhas = [[te["descricao"][:24], _fmt_num(te["ops"]), _fmt_moeda(-te["impacto"])] for te in top_economia[:6]]
+        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Material", "OPs", "Economia"], linhas,
+                larguras_relativas=[2.4, 0.8, 1.4], tamanho_fonte=10.5)
+    else:
+        _caixa_leitura(slide, x_direita, 3.35, largura_direita, 2.25, "Economia",
+                        "Sem economia líquida registrada neste mês.")
+
+    _texto(
+        slide, MARGEM_IN, 6.15, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        f"Fonte: dashboard Dispersão de Ficha Técnica (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'} — "
+        f"Materiais crônicos (≥ {dado.get('limiar_freq_ops', 5)} OPs): {_fmt_num(dado.get('materiais_cronicos'))} · "
+        f"Concentração Top 20: {_fmt_pct(dado.get('concentracao_top20_pct'))} do impacto absoluto.",
+        tamanho=10, cor=CINZA_TEXTO,
+    )
+    return slide
+
+
 def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
     """Farol de Shelf-Life (20/08/2026) - dashboard é uma FOTO do estoque no
     momento da exportação (sem dimensão de mês: lotes com saldo agora e
@@ -2032,7 +2161,8 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
 
     dashboards_nativos_enviados = sum(
         1 for chave in ("fefo_externo", "testes_industriais_externo", "farol_shelf_externo",
-                         "recuperacao_shelf_externo", "baixas_operacionais_externo")
+                         "recuperacao_shelf_externo", "baixas_operacionais_externo",
+                         "dispersao_ficha_tecnica_externo")
         if (d.get(chave) or {}).get("enviado")
     )
     dashboards_extras = d.get("dashboards_extras") or []
@@ -2215,7 +2345,8 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # estourar a capa de seção se a equipe cadastrar muitos indicadores.
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
-    itens_outros = ["Farol de Shelf-Life", "Recuperação de Shelf", "Dashboard Baixas Operacionais"]
+    itens_outros = ["Farol de Shelf-Life", "Recuperação de Shelf", "Dashboard Baixas Operacionais",
+                     "Dispersão de Ficha Técnica"]
     if len(nomes_extras) > limite_itens_capa:
         itens_outros += nomes_extras[:limite_itens_capa]
         itens_outros.append(f"+ {len(nomes_extras) - limite_itens_capa} indicador(es) adicional(is)")
@@ -2227,6 +2358,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
+    _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 

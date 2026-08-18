@@ -6107,8 +6107,9 @@ document.getElementById("btn-importar-shelf-life").addEventListener("click", asy
       return;
     }
     resultado.textContent = `${data.criados} novo(s) · ${data.atualizados} atualizado(s)${
-      data.ignorados_sem_sku ? " · " + data.ignorados_sem_sku + " sem SKU" : ""
-    }${data.almoxarifados_nao_mapeados && data.almoxarifados_nao_mapeados.length ? " · não mapeados: " + data.almoxarifados_nao_mapeados.join(", ") : ""}`;
+      data.desativados ? " · " + data.desativados + " desativado(s) (não aparecem mais na planilha)" : ""
+    }${data.ignorados_sem_sku ? " · " + data.ignorados_sem_sku + " sem SKU" : ""}${
+      data.almoxarifados_nao_mapeados && data.almoxarifados_nao_mapeados.length ? " · não mapeados: " + data.almoxarifados_nao_mapeados.join(", ") : ""}`;
     // se a tela Shelf Life já foi carregada nesta sessão, atualiza os dados dela também
     if (typeof carregarShelfLife === "function" && document.getElementById("tabela-shelf-life")) {
       carregarShelfLife();
