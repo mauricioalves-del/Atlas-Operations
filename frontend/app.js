@@ -7092,6 +7092,8 @@ async function carregarFefo() {
         )
         .join("")
     : `<tr><td colspan="9" style="color:var(--muted)">Nenhuma checagem calculada ainda - clique em "Recalcular".</td></tr>`;
+
+  carregarAuditoriaFefo();
 }
 
 document.getElementById("fefo-filtro-resultado").addEventListener("change", carregarFefo);
@@ -7107,6 +7109,185 @@ document.getElementById("btn-recalcular-fefo").addEventListener("click", async (
   } finally {
     btn.disabled = false;
     btn.textContent = "↻ Recalcular";
+  }
+});
+
+// ---------- Auditoria FEFO importada (20/08/2026) ----------
+// Histórico real da auditoria que a equipe de Controle já roda por fora do
+// Atlas (planilha "Controle de lote" + exportação de "Movimentação",
+// comparadas dia a dia por um notebook Python do estagiário). O Atlas não
+// recalcula essa comparação - só consolida o resultado já apurado (ver
+// app/fefo.py, seção "Auditoria FEFO importada"). Pedido do usuário
+// (20/08/2026): "consolide o histórico e suba pro atlas [...] baseado nas
+// ferramentas de importação que já existem, consolide o relatório dentro
+// do Atlas".
+let chartAuditoriaFefoDia;
+
+async function carregarAuditoriaFefo() {
+  const dataInicio = document.getElementById("fefo-aud-filtro-data-inicio").value;
+  const dataFim = document.getElementById("fefo-aud-filtro-data-fim").value;
+  const produto = document.getElementById("fefo-aud-filtro-produto").value.trim();
+  const apenasQuebras = document.getElementById("fefo-aud-filtro-quebras").checked;
+
+  const qsResumo = new URLSearchParams();
+  if (dataInicio) qsResumo.set("data_inicio", dataInicio);
+  if (dataFim) qsResumo.set("data_fim", dataFim);
+
+  const qsRegistros = new URLSearchParams(qsResumo);
+  if (produto) qsRegistros.set("produto", produto);
+  if (apenasQuebras) qsRegistros.set("apenas_quebras", "true");
+
+  const [resumo, registros] = await Promise.all([
+    apiFetch(`${API}/fefo/auditoria/resumo?${qsResumo}`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/auditoria/registros?${qsRegistros}`).then((r) => r.json()),
+  ]);
+
+  document.getElementById("fefo-aud-kpi-row").innerHTML = [
+    { label: "Movimentos auditados", value: resumo.total_auditaveis },
+    { label: "Quebras de FEFO", value: resumo.total_quebras, cor: "var(--critico)" },
+    {
+      label: "Taxa de quebra",
+      value: resumo.taxa_quebra_pct != null ? resumo.taxa_quebra_pct + "%" : "—",
+      cor: resumo.taxa_quebra_pct ? "var(--critico)" : "var(--sucesso, #2e7d32)",
+    },
+    { label: "Sem correspondência", value: resumo.total_sem_correspondencia, cor: "var(--muted)" },
+    { label: "Dias com dado", value: resumo.dias_com_dado },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  document.getElementById("fefo-aud-periodo").textContent = resumo.periodo_coberto
+    ? `Período coberto: ${formatarDataCurta(resumo.periodo_coberto[0])} a ${formatarDataCurta(resumo.periodo_coberto[1])} · fonte(s): ${
+        resumo.fontes_no_periodo.map((f) => (f === "auditoria_diaria" ? "auditoria diária" : "consolidado")).join(", ") || "—"
+      }`
+    : "Nenhum dado importado ainda — suba um Excel de auditoria no painel acima.";
+
+  const ctx = document.getElementById("fefo-aud-chart-dia");
+  if (chartAuditoriaFefoDia) chartAuditoriaFefoDia.destroy();
+  chartAuditoriaFefoDia = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: resumo.por_dia.map((d) => formatarDataCurta(d.data)),
+      datasets: [
+        {
+          label: "Total auditado",
+          data: resumo.por_dia.map((d) => d.total),
+          backgroundColor: "rgba(91,117,172,0.22)",
+          borderColor: "#5b75ac",
+          borderWidth: 1,
+          borderRadius: 3,
+          order: 2,
+        },
+        { label: "Quebras de FEFO", data: resumo.por_dia.map((d) => d.quebras), backgroundColor: "#e5534b", borderRadius: 3, order: 1 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: true, labels: { color: "#8ca0a3", font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 }, maxRotation: 45 }, grid: { color: "#2e3a40" } },
+        y: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { color: "#2e3a40" }, min: 0 },
+      },
+    },
+  });
+
+  document.querySelector("#fefo-aud-tabela-produtos tbody").innerHTML = resumo.top_produtos_com_quebra.length
+    ? resumo.top_produtos_com_quebra.map((p) => `<tr><td class="col-descricao">${p.produto}</td><td>${p.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  document.querySelector("#fefo-aud-tabela-destinos tbody").innerHTML = resumo.top_destinos_com_quebra.length
+    ? resumo.top_destinos_com_quebra.map((d) => `<tr><td>${d.destino}</td><td>${d.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  document.querySelector("#fefo-aud-tabela-registros tbody").innerHTML = registros.length
+    ? registros
+        .map(
+          (r) => `<tr>
+            <td>${formatarDataCurta(r.data)}</td><td>${r.sku || "—"}</td><td class="col-descricao">${r.descricao_produto || "—"}</td>
+            <td>${r.movimento || "—"}</td><td>${r.lote_movimentado || "—"}</td><td>${r.qtd_lote_movimentado ?? "—"}</td>
+            <td>${r.lote_mais_antigo_disponivel || "—"}</td>
+            <td style="color:${r.quebra_fefo ? "var(--critico)" : "inherit"}">${r.status || "—"}</td>
+            <td>${r.fonte === "auditoria_diaria" ? "Diária" : "Consolidado"}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="9" style="color:var(--muted)">Nenhum movimento importado ainda — suba um Excel de auditoria no painel acima.</td></tr>`;
+}
+
+["fefo-aud-filtro-data-inicio", "fefo-aud-filtro-data-fim", "fefo-aud-filtro-quebras"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", carregarAuditoriaFefo)
+);
+document.getElementById("fefo-aud-filtro-produto").addEventListener("input", () => {
+  clearTimeout(window.__fefoAudBusca);
+  window.__fefoAudBusca = setTimeout(carregarAuditoriaFefo, 350);
+});
+
+document.getElementById("fefo-aud-btn-importar").addEventListener("click", async () => {
+  const input = document.getElementById("fefo-aud-input-arquivos");
+  const resultado = document.getElementById("fefo-aud-resultado-importacao");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione ao menos um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  Array.from(input.files).forEach((f) => form.append("arquivos", f));
+  const btn = document.getElementById("fefo-aud-btn-importar");
+  btn.disabled = true;
+  resultado.textContent = `Importando ${input.files.length} arquivo(s)...`;
+  try {
+    const res = await apiFetch(`${API}/fefo/auditoria/importar`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const erros = (data.detalhe || []).filter((d) => d.erro);
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) em ${data.arquivos_processados - data.arquivos_com_erro} arquivo(s) · ${data.quebras_importadas} quebra(s)${
+      data.arquivos_com_erro ? ` · ${data.arquivos_com_erro} arquivo(s) com erro: ${erros.map((e) => `${e.arquivo} (${e.erro})`).join("; ")}` : ""
+    }`;
+    input.value = "";
+    await carregarAuditoriaFefo();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("fefo-aud-btn-importar-html").addEventListener("click", async () => {
+  const input = document.getElementById("fefo-aud-input-html");
+  const resultado = document.getElementById("fefo-aud-resultado-html");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione o arquivo HTML primeiro.";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", input.files[0]);
+  const btn = document.getElementById("fefo-aud-btn-importar-html");
+  btn.disabled = true;
+  resultado.textContent = "Importando...";
+  try {
+    const res = await apiFetch(`${API}/fefo/auditoria/importar-consolidado`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) (${data.dias_importados} dia(s)${
+      data.periodo_importado ? ", " + data.periodo_importado[0] + " a " + data.periodo_importado[1] : ""
+    })${
+      data.dias_pulados_ja_cobertos_por_auditoria_diaria.length
+        ? ` · ${data.dias_pulados_ja_cobertos_por_auditoria_diaria.length} dia(s) já cobertos pela auditoria diária, ignorados`
+        : ""
+    }`;
+    input.value = "";
+    await carregarAuditoriaFefo();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
   }
 });
 

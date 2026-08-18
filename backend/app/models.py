@@ -815,3 +815,68 @@ class DashboardExterno(Base):
     nome_arquivo_original = Column(String, nullable=True)
     enviado_por = Column(String, nullable=True)
     enviado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class AuditoriaFefo(Base):
+    """Histórico de auditoria de FEFO (First-Expired-First-Out) importado do
+    processo que a equipe de Controle já roda por fora do Atlas (planilha
+    "Controle de lote" + exportação de "Movimentação", comparadas dia a dia
+    por um notebook Python do estagiário - ver fefo.py) - pedido do usuário
+    (20/08/2026): "consolide o histórico e suba pro Atlas [...] baseado nas
+    ferramentas de importação que já existem, consolide o relatório dentro
+    do Atlas". O Atlas NÃO recalcula a comparação de lotes aqui - só
+    consolida o resultado já apurado pelo processo do estagiário (isso é
+    diferente de ChecagemFefo, que é a checagem própria do Atlas, calculada
+    a partir de LoteShelfLife/Transferencia e sabidamente menos precisa por
+    não ter uma leitura de estoque no momento exato da transferência - ver
+    docstring de ChecagemFefo).
+
+    Cada linha é UM movimento (normalmente saída da Fábrica) já avaliado
+    pelo processo do estagiário. Dois níveis de fidelidade, marcados em
+    `fonte`:
+      - "auditoria_diaria": importado direto do Excel de auditoria de UM
+        dia (aba "Todas as Movimentações", gerada pelo notebook
+        Auditar_FEFO.ipynb dele) - todos os campos preenchidos, incluindo
+        qual seria o lote mais antigo disponível, sua validade e
+        quantidade.
+      - "dashboard_consolidado": recuperado do dashboard HTML que ele já
+        consolidava localmente (DashBoard_FEFO.ipynb, "Controle - FEFO.html")
+        - usado só pra estender o histórico a um período (Maio/Jun-2026)
+        de que não temos mais o Excel bruto de cada dia. Tem BEM menos
+        detalhe (sem SKU, sem número de lote, sem o lote mais antigo
+        disponível) porque o próprio dashboard dele já tinha descartado
+        essas colunas antes de exportar. Dias em que os dois níveis
+        existiriam ao mesmo tempo usam só "auditoria_diaria" (mais
+        confiável) - o importador do consolidado pula esses dias de
+        propósito (ver fefo.importar_auditoria_fefo_consolidada).
+
+    Reimportar o mesmo dia (mesma `data`, mesma `fonte`) substitui as linhas
+    daquele dia por completo (upsert por dia, não por linha - não há um ID
+    de movimento único no arquivo de origem pra upsert por linha).
+
+    Nem toda linha é uma "quebra em potencial" avaliável: quando o processo
+    do estagiário não confirma que a origem do movimento é a Fábrica, ele
+    marca como "Destino (não auditado)" e não avalia - guardado aqui do
+    mesmo jeito (fidelidade ao dado de origem, só existe em linhas
+    "auditoria_diaria" - o dashboard consolidado já descartava essas antes
+    de exportar), mas os relatórios do Atlas excluem esse status das
+    métricas de taxa de quebra (ver fefo.calcular_resumo_auditoria_fefo)."""
+    __tablename__ = "auditorias_fefo"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data = Column(Date, index=True, nullable=False)
+    sku = Column(String, index=True, nullable=True)
+    descricao_produto = Column(String, nullable=True)
+    movimento = Column(String, nullable=True)
+    almoxarifado = Column(String, index=True, nullable=True)
+    lote_movimentado = Column(String, nullable=True)
+    qtd_lote_movimentado = Column(Float, nullable=True)
+    validade_lote_movimentado = Column(Date, nullable=True)
+    quebra_fefo = Column(Boolean, default=False, index=True)
+    status = Column(String, nullable=True)
+    lote_mais_antigo_disponivel = Column(String, nullable=True)
+    qtd_lote_mais_antigo_disponivel = Column(Float, nullable=True)
+    validade_mais_antiga_disponivel = Column(Date, nullable=True)
+    fonte = Column(String, index=True, nullable=False, default="auditoria_diaria")
+    arquivo_origem = Column(String, nullable=True)
+    importado_por = Column(String, nullable=True)
+    importado_em = Column(DateTime, default=datetime.utcnow)

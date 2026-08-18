@@ -1384,6 +1384,83 @@
           <tbody></tbody>
         </table>
       </div>
+
+      <h2 style="font-family:var(--display); font-size:18px; font-weight:600; margin:28px 0 6px 0">
+        Auditoria FEFO — histórico importado
+      </h2>
+      <p class="hint">
+        Histórico real da auditoria que a equipe de Controle já roda por fora do Atlas: todo dia, um processo compara
+        a planilha de Controle de Lote com a movimentação do dia e aponta quando um lote mais novo saiu da Fábrica
+        antes de um mais antigo do mesmo SKU. O Atlas não recalcula essa comparação — só consolida o resultado já
+        apurado (por isso os números abaixo podem diferir do critério "Checagens" acima, que é o cálculo próprio do
+        Atlas e sabidamente menos preciso, sem visibilidade do lote exato movimentado).
+      </p>
+
+      <div class="panel">
+        <h2>Importar auditoria</h2>
+        <p class="panel-sub">
+          Suba o Excel de auditoria do dia (aba "Todas as Movimentações") — pode selecionar vários arquivos de uma vez
+          pra consolidar histórico acumulado. Reimportar o mesmo dia substitui as linhas daquele dia, sem duplicar.
+        </p>
+        <div class="filtros" style="flex-wrap:wrap">
+          <input type="file" id="fefo-aud-input-arquivos" accept=".xlsx,.xlsm" multiple>
+          <button class="btn-secundario" id="fefo-aud-btn-importar">Importar auditoria diária</button>
+        </div>
+        <p class="hint" id="fefo-aud-resultado-importacao"></p>
+
+        <p class="panel-sub" style="margin-top:18px">
+          Ou suba o dashboard HTML consolidado que a equipe já mantinha (só estende o histórico pra dias sem o Excel
+          diário bruto — dias já cobertos pela auditoria diária não são sobrescritos).
+        </p>
+        <div class="filtros" style="flex-wrap:wrap">
+          <input type="file" id="fefo-aud-input-html" accept=".html">
+          <button class="btn-secundario" id="fefo-aud-btn-importar-html">Importar consolidado (HTML)</button>
+        </div>
+        <p class="hint" id="fefo-aud-resultado-html"></p>
+      </div>
+
+      <div class="kpi-row" id="fefo-aud-kpi-row"></div>
+
+      <div class="panel">
+        <h2>Quebras de FEFO por dia</h2>
+        <p class="panel-sub" id="fefo-aud-periodo"></p>
+        <canvas id="fefo-aud-chart-dia"></canvas>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Top produtos com quebra</h2>
+          <table class="tabela" id="fefo-aud-tabela-produtos">
+            <thead><tr><th>Produto</th><th>Quebras</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h2>Top destinos com quebra</h2>
+          <table class="tabela" id="fefo-aud-tabela-destinos">
+            <thead><tr><th>Destino</th><th>Quebras</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Movimentos auditados</h2>
+          <div class="filtros" style="flex-wrap:wrap">
+            <input type="date" id="fefo-aud-filtro-data-inicio" class="select-filtro">
+            <input type="date" id="fefo-aud-filtro-data-fim" class="select-filtro">
+            <input type="text" id="fefo-aud-filtro-produto" class="select-filtro" placeholder="Buscar SKU/produto...">
+            <label style="display:flex; align-items:center; gap:6px; font-size:13px">
+              <input type="checkbox" id="fefo-aud-filtro-quebras"> Só quebras
+            </label>
+          </div>
+        </div>
+        <table class="tabela" id="fefo-aud-tabela-registros">
+          <thead><tr><th>Data</th><th>SKU</th><th>Descrição</th><th>Movimento</th><th>Lote</th><th>Qtd.</th><th>Lote mais antigo</th><th>Status</th><th>Fonte</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
   </main>
@@ -1727,6 +1804,6 @@
   </div>
 </div>
 
-<script src="app.js?v=94"></script>
+<script src="app.js?v=95"></script>
 </body>
 </html>
