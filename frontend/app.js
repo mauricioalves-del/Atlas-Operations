@@ -4360,6 +4360,7 @@ function renderDashboardsExternos(lista) {
             <div class="dashboard-externo-info">
               <span class="dashboard-externo-nome">${d.nome_exibicao}
                 <span class="badge ${d.enviado ? "badge-dash-enviado" : "badge-dash-vazio"}">${d.enviado ? "Enviado" : "Vazio"}</span>
+                ${d.personalizado ? `<span class="badge badge-dash-personalizado">Personalizado</span>` : ""}
               </span>
               <span class="dashboard-externo-meta">${meta}</span>
             </div>
@@ -4369,7 +4370,7 @@ function renderDashboardsExternos(lista) {
                 ${d.enviado ? "Substituir" : "Enviar"} .html
                 <input type="file" accept=".html,.htm" class="input-dash-upload" data-chave="${d.chave}" style="display:none">
               </label>
-              ${d.enviado ? `<button class="btn-secundario btn-dash-remover" data-chave="${d.chave}">Remover</button>` : ""}
+              ${d.enviado || d.personalizado ? `<button class="btn-secundario btn-dash-remover" data-chave="${d.chave}" data-personalizado="${d.personalizado ? "1" : ""}">Remover</button>` : ""}
             </div>
           </div>
           ${aberto ? `<div class="dashboard-externo-iframe-wrap"><iframe id="iframe-dash-${d.chave}"></iframe></div>` : ""}
@@ -4385,7 +4386,7 @@ function renderDashboardsExternos(lista) {
     input.addEventListener("change", (ev) => enviarDashboardExterno(input.dataset.chave, ev.target.files[0]));
   });
   container.querySelectorAll(".btn-dash-remover").forEach((btn) => {
-    btn.addEventListener("click", () => removerDashboardExterno(btn.dataset.chave));
+    btn.addEventListener("click", () => removerDashboardExterno(btn.dataset.chave, btn.dataset.personalizado === "1"));
   });
 
   // se algum dashboard já estava marcado como aberto (ex: reload da lista depois de um
@@ -4435,8 +4436,11 @@ async function enviarDashboardExterno(chave, arquivo) {
   }
 }
 
-async function removerDashboardExterno(chave) {
-  if (!confirm("Remover o dashboard enviado nesse slot? Isso não pode ser desfeito.")) return;
+async function removerDashboardExterno(chave, personalizado) {
+  const mensagem = personalizado
+    ? "Remover este indicador por completo (nome e arquivo enviado, se houver)? Isso não pode ser desfeito."
+    : "Remover o dashboard enviado nesse slot? Isso não pode ser desfeito.";
+  if (!confirm(mensagem)) return;
   dashboardsExternosAbertos.delete(chave);
   try {
     await apiFetch(`${API}/dashboards-externos/${chave}`, { method: "DELETE" });
@@ -4445,6 +4449,32 @@ async function removerDashboardExterno(chave) {
     alert("Falha ao remover: " + erro.message);
   }
 }
+
+// ---------- Adicionar indicador (18/08/2026 - indicadores dinâmicos, além dos 5 slots
+// fixos): a pessoa só dá um nome; o arquivo .html é enviado depois pelo mesmo botão
+// "Enviar .html" que os slots fixos já usam. Entra automaticamente como slide na seção
+// "Outros" do MBR (extração genérica - ver dashboards_externos_extrator.extrair_generico).
+async function adicionarIndicadorExterno() {
+  const nome = prompt("Nome do novo indicador (ex.: \"Controle de Devoluções\"):");
+  if (!nome || !nome.trim()) return;
+  try {
+    const res = await apiFetch(`${API}/dashboards-externos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nome_exibicao: nome.trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Erro ao criar indicador: ${data.detail || "falha desconhecida."}`);
+      return;
+    }
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao criar indicador: " + erro.message);
+  }
+}
+
+document.getElementById("btn-adicionar-indicador")?.addEventListener("click", adicionarIndicadorExterno);
 
 // ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
 function badgeStatusBaixa(statusFluxo) {

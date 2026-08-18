@@ -18,7 +18,7 @@
 <meta name="apple-mobile-web-app-title" content="Atlas">
 <meta name="mobile-web-app-capable" content="yes">
 
-<link rel="stylesheet" href="style.css?v=67">
+<link rel="stylesheet" href="style.css?v=68">
 <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -874,11 +874,15 @@
       </div>
 
       <div class="panel">
-        <h2>Outros Dashboards</h2>
+        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
+          <h2>Outros Dashboards</h2>
+          <button id="btn-adicionar-indicador" class="btn-secundario" type="button">+ Adicionar indicador</button>
+        </div>
         <p class="hint">
           Dashboards que a equipe já mantém em paralelo ao Atlas, fora dos módulos nativos do sistema. Suba o arquivo
           <code>.html</code> autocontido (CSS e JS já embutidos nele - o Atlas só guarda esse único arquivo, sem depender
-          de mais nada) de cada um pra deixá-lo acessível aqui dentro.
+          de mais nada) de cada um pra deixá-lo acessível aqui dentro. Qualquer indicador criado aqui entra
+          automaticamente como um slide adicional na seção "Outros" do MBR.
         </p>
         <div id="lista-dashboards-externos" class="lista-dashboards-externos">Carregando...</div>
       </div>
@@ -1723,6 +1727,6 @@
   </div>
 </div>
 
-<script src="app.js?v=93"></script>
+<script src="app.js?v=94"></script>
 </body>
 </html>

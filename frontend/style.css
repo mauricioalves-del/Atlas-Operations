@@ -715,6 +715,7 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 .dashboard-externo-iframe-wrap iframe{width:100%; height:640px; border:none; display:block; background:#fff}
 .badge-dash-enviado{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
 .badge-dash-vazio{background:color-mix(in srgb, var(--muted) 18%, transparent); color:var(--muted)}
+.badge-dash-personalizado{background:color-mix(in srgb, var(--info) 18%, transparent); color:var(--info)}
 
 /* ---- detalhe ---- */
 .btn-voltar{

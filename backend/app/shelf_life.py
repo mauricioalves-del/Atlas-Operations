@@ -53,6 +53,40 @@ FAROL_SEM_VALIDADE = "sem_validade"
 
 FAROIS_DE_RISCO = (FAROL_VENCIDO, FAROL_30, FAROL_60, FAROL_90)  # não inclui ok nem sem_validade
 
+# Palavras-chave pra excluir embalagens (caixas, sacolas, rótulos, tampas...)
+# do indicador de Shelf Life (pedido do usuário, 18/08/2026: "desconsidere o
+# grupo de produtos Embalagens da análise, pois não deveriam impactar o
+# indicador de Shelf"). O cadastro de Lote Shelf Life não tem hoje um campo
+# de grupo/categoria de produto (só tipo_material: MateriaPrima / Produto /
+# SubConjunto / Diversos) - a validade de uma embalagem não representa o
+# mesmo tipo de risco de perda que a de uma matéria-prima/produto perecível,
+# então a saída escolhida foi um filtro por palavra-chave na descrição do
+# item, sem precisar recadastrar/reimportar nada. Ajuste esta lista se
+# aparecer um falso positivo/negativo real (ex: um item de embalagem que não
+# contém nenhuma destas palavras, ou um item perecível cuja descrição
+# contém uma delas por coincidência).
+PALAVRAS_CHAVE_EMBALAGEM = (
+    "embalagem", "sacola", "rótulo", "rotulo", "etiqueta", "fita adesiva",
+    "lacre", "filme", "bobina", "tampa", "válvula", "valvula", "envelope",
+    "blister",
+    # "caixa"/"pote"/"frasco"/"saco"/"display" ficaram FORA de propósito
+    # (20/08/2026, achado numa QA de ponta a ponta): produto chocolateiro
+    # comumente é vendido "em caixa"/"em pote"/"em display" (ex.: "Bombom
+    # Trufado Caixa 12un" é um PRODUTO acabado perecível, não uma embalagem)
+    # - como palavra isolada, esses termos geram falso positivo justamente
+    # no tipo de item que este indicador precisa monitorar. Versão qualificada
+    # dessas mesmas palavras, restrita a contextos claramente de insumo de
+    # embalagem (não de produto acabado embalado):
+    "caixa de papelão", "caixa papelão", "caixa vazia", "caixa de embalagem",
+    "saco plástico", "saco de papel", "pote vazio", "frasco vazio",
+    "display vazio", "display de papelão",
+)
+
+
+def _eh_item_embalagem(descricao) -> bool:
+    texto = (descricao or "").lower()
+    return any(palavra in texto for palavra in PALAVRAS_CHAVE_EMBALAGEM)
+
 
 def _data_excel_serial(valor_serial) -> date:
     """Converte um número serial de data do Excel (dias desde 30/12/1899 -
@@ -198,8 +232,12 @@ def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_i
         FAROL_SEM_VALIDADE: {"quantidade": 0, "valor": 0.0},
     }
     itens = []
+    embalagens_excluidas = 0
     for l in lotes:
         if not l.quantidade or l.quantidade <= 0:
+            continue
+        if _eh_item_embalagem(l.descricao_produto):
+            embalagens_excluidas += 1
             continue
         farol = calcular_farol(l.data_validade, hoje)
         valor = round((l.quantidade or 0) * (l.custo_unitario or 0), 2)
@@ -235,4 +273,112 @@ def calcular_resumo_shelf_life(db: Session, incluir_itens: bool = True, limite_i
         "pendente_validade": resumo[FAROL_SEM_VALIDADE],
         "itens": itens[:limite_itens],
         "total_itens": len(itens),
+        "embalagens_excluidas": embalagens_excluidas,
+    }
+
+
+# Janela de "giro recente" usada pra cruzar risco de validade com consumo real
+# (ver calcular_mapeamento_risco_obsolescencia) - mesma ordem de grandeza do
+# horizonte de risco do Farol (vencido/30/60/90 dias), pra comparar maçã com
+# maçã: "esse lote vai vencer em até 90 dias, será que o ritmo de saída dos
+# últimos 90 dias é suficiente pra escoar o estoque a tempo?".
+JANELA_GIRO_DIAS = 90
+
+
+def calcular_mapeamento_risco_obsolescencia(db: Session, janela_dias: int = JANELA_GIRO_DIAS, limite_itens: int = 200) -> dict:
+    """Mapeamento de Risco por obsolescência (pedido do usuário, 18/08/2026):
+    "Mapeamento de risco, baseado nos itens que representam um risco para o
+    negócio por obsolescência". Só "vai vencer em breve" (Farol de Shelf
+    Life) não é o mesmo que "risco real de virar perda" - um lote pode estar
+    perto de vencer mas ter saída rápida o bastante pra escoar antes; outro
+    pode ter validade longa mas estar tão parado que, no ritmo atual, nunca
+    vai escoar. Este indicador cruza os dois sinais:
+
+      1. Risco de validade (mesmo cálculo do Farol de Shelf Life -
+         calcular_farol - restrito a vencido/30/60/90 dias; itens "ok" ou
+         sem validade cadastrada não entram aqui, mesmo com giro baixo,
+         porque validade longa por si só não é risco iminente).
+      2. Giro recente = soma de saída (Movimentados, origem == "movimentacao",
+         MESMA fonte usada pelo Controle de Movimentados - ver
+         movimentados_router.py) nos últimos `janela_dias` dias, por SKU.
+
+    Classificação (heurística simples, não um forecast estatístico):
+      - "Crítico": zero saída registrada na janela - lote parado, vencendo.
+      - "Atenção": giro recente é MENOR que a quantidade em estoque hoje -
+        no ritmo atual de saída, o lote não escoa antes de vencer.
+      - Giro suficiente (>= quantidade em estoque): não entra na lista -
+        risco de validade existe, mas o consumo real já está dando conta.
+
+    Mesma exclusão de embalagens do Shelf Life (_eh_item_embalagem) - uma
+    caixa ou sacola "vencendo" parada no estoque não é o mesmo tipo de
+    risco de negócio que um insumo/produto perecível."""
+    hoje = date.today()
+    inicio_janela = hoje - timedelta(days=janela_dias)
+
+    lotes = db.query(models.LoteShelfLife).filter(models.LoteShelfLife.ativo.is_(True)).all()
+    candidatos = []
+    for l in lotes:
+        if not l.quantidade or l.quantidade <= 0:
+            continue
+        if _eh_item_embalagem(l.descricao_produto):
+            continue
+        farol = calcular_farol(l.data_validade, hoje)
+        if farol not in FAROIS_DE_RISCO:
+            continue
+        candidatos.append((l, farol))
+
+    if not candidatos:
+        return {
+            "tem_dados": False, "janela_dias": janela_dias, "quantidade_itens": 0,
+            "valor_total_risco": 0.0, "quantidade_criticos": 0, "valor_criticos": 0.0, "itens": [],
+        }
+
+    skus = sorted({l.sku for l, _ in candidatos})
+    giro_por_sku = dict.fromkeys(skus, 0.0)
+    linhas_mov = (
+        db.query(models.MovimentacaoHistorico.sku, models.MovimentacaoHistorico.saida)
+        .filter(
+            models.MovimentacaoHistorico.sku.in_(skus),
+            models.MovimentacaoHistorico.origem == "movimentacao",
+            models.MovimentacaoHistorico.data_movimento >= inicio_janela,
+        )
+        .all()
+    )
+    for sku, saida in linhas_mov:
+        giro_por_sku[sku] = giro_por_sku.get(sku, 0.0) + (saida or 0.0)
+
+    itens = []
+    for l, farol in candidatos:
+        giro = giro_por_sku.get(l.sku, 0.0)
+        if giro <= 0:
+            classificacao = "Crítico"
+        elif giro < (l.quantidade or 0):
+            classificacao = "Atenção"
+        else:
+            continue  # giro já dá conta do estoque no ritmo atual - não é risco de obsolescência
+        valor = round((l.quantidade or 0) * (l.custo_unitario or 0), 2)
+        itens.append({
+            "sku": l.sku,
+            "descricao_produto": l.descricao_produto,
+            "lote": l.lote,
+            "almoxarifado": l.almoxarifado,
+            "quantidade": l.quantidade,
+            "unidade": l.unidade,
+            "data_validade": str(l.data_validade) if l.data_validade else None,
+            "dias_para_vencer": (l.data_validade - hoje).days if l.data_validade else None,
+            "valor_estimado": valor,
+            "giro_recente": round(giro, 2),
+            "farol": farol,
+            "classificacao": classificacao,
+        })
+    itens.sort(key=lambda x: (-(x["valor_estimado"] or 0)))
+
+    return {
+        "tem_dados": True,
+        "janela_dias": janela_dias,
+        "quantidade_itens": len(itens),
+        "valor_total_risco": round(sum(i["valor_estimado"] for i in itens), 2),
+        "quantidade_criticos": sum(1 for i in itens if i["classificacao"] == "Crítico"),
+        "valor_criticos": round(sum(i["valor_estimado"] for i in itens if i["classificacao"] == "Crítico"), 2),
+        "itens": itens[:limite_itens],
     }

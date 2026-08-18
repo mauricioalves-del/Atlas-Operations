@@ -565,13 +565,52 @@ def _extrair_dashboard_externo_sem_mes(db: Session, chave: str, extrator) -> dic
     return resultado
 
 
+# Chaves dos 5 slots nativos (ver dashboards_externos_router.SLOTS) - cada um já
+# tem slide dedicado com extração específica acima; qualquer outra chave de
+# DashboardExterno é um indicador dinâmico (18/08/2026, ver _coletar_dashboards_extras).
+_CHAVES_DASHBOARDS_NATIVOS_MBR = {
+    "controle_fefo", "testes_industriais", "farol_shelf_life",
+    "recuperacao_shelf", "baixas_operacionais",
+}
+
+
+def _coletar_dashboards_extras(db: Session) -> list:
+    """Indicadores dinâmicos (Outros Dashboards > Adicionar Indicador,
+    18/08/2026) - qualquer DashboardExterno com conteúdo enviado que não é um
+    dos 5 slots nativos entra aqui automaticamente, com extração genérica (ver
+    dashboards_externos_extrator.extrair_generico). "dado": None significa que
+    a extração não achou tabela nem metadado confiável nesse arquivo - o slide
+    correspondente mostra um aviso em vez de inventar conteúdo."""
+    registros = (
+        db.query(models.DashboardExterno)
+        .filter(~models.DashboardExterno.chave.in_(_CHAVES_DASHBOARDS_NATIVOS_MBR))
+        .all()
+    )
+    extras = []
+    for registro in registros:
+        if not registro.html_content:
+            continue
+        try:
+            resultado = dash_ext.extrair_generico(registro.html_content)
+        except Exception:
+            resultado = None
+        extras.append({
+            "chave": registro.chave,
+            "nome_exibicao": registro.nome_exibicao,
+            "enviado_em": registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None,
+            "dado": resultado,
+        })
+    extras.sort(key=lambda item: item["nome_exibicao"].lower())
+    return extras
+
+
 # ---------------------------------------------------------------------------
 # Coleta de dados (chama as funções de negócio do Atlas diretamente)
 # ---------------------------------------------------------------------------
 def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     ano_int, mes_int = (int(parte) for parte in mes.split("-"))
 
-    return {
+    dados = {
         "kpis_inventario": fechamento_router.dashboard_kpis(almoxarifado=None, mes=mes, usuario=usuario, db=db),
         "evolucao_inventario": fechamento_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db),
         "top_recorrentes": fechamento_router.dashboard_top_recorrentes(almoxarifado=None, limite=5, usuario=usuario, db=db),
@@ -623,6 +662,18 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "recuperacao_shelf_externo": _extrair_dashboard_externo_sem_mes(db, "recuperacao_shelf", dash_ext.extrair_recuperacao_shelf),
         "baixas_operacionais_externo": _extrair_dashboard_externo_sem_mes(db, "baixas_operacionais", dash_ext.extrair_baixas_operacionais_externo),
     }
+
+    # Mapeamento de Risco - Obsolescência (18/08/2026, pedido do usuário) - ver
+    # shelf_life.calcular_mapeamento_risco_obsolescencia.
+    dados["mapeamento_risco_obsolescencia"] = shelf_life_mod.calcular_mapeamento_risco_obsolescencia(db)
+
+    # Indicadores dinâmicos (18/08/2026, pedido do usuário: "adicione a opção de
+    # adicionar mais indicadores e adicionar automaticamente na construção do
+    # MBR") - qualquer DashboardExterno enviado que não é um dos 5 slots nativos
+    # acima entra aqui, com extração genérica (ver _coletar_dashboards_extras).
+    dados["dashboards_extras"] = _coletar_dashboards_extras(db)
+
+    return dados
 
 
 # ---------------------------------------------------------------------------
@@ -849,7 +900,27 @@ def _montar_scorecard(d: dict):
         "Priorizar SKUs de maior impacto financeiro na correção." if label_gap == "Atenção" else "Distorção sob controle — manter leitura mensal.",
     )
 
-    return [linha_inventario, linha_passivos, linha_ponderada, linha_shelf, linha_movimentados]
+    # Mapeamento de Risco - Obsolescência (18/08/2026, pedido do usuário) - cruza
+    # Shelf Life (validade) com Movimentados (giro) - ver
+    # shelf_life.calcular_mapeamento_risco_obsolescencia.
+    risco_obs = d["mapeamento_risco_obsolescencia"]
+    if risco_obs.get("quantidade_criticos"):
+        label_risco_obs, cor_risco_obs = "Crítico", COR_ERRO
+    elif risco_obs.get("quantidade_itens"):
+        label_risco_obs, cor_risco_obs = "Atenção", COR_ATENCAO
+    else:
+        label_risco_obs, cor_risco_obs = "Em avanço", COR_SUCESSO
+    linha_risco_obs = _linha_scorecard(
+        "Mapeamento de Risco (Obsolescência)", label_risco_obs, cor_risco_obs,
+        (f"{_fmt_num(risco_obs.get('quantidade_itens'))} item(ns) em risco de obsolescência, "
+         f"{_fmt_moeda(risco_obs.get('valor_total_risco'))} em valor exposto.")
+        if risco_obs.get("quantidade_itens") else "Nenhum item combina validade próxima com giro insuficiente neste recorte.",
+        "Priorizar ação comercial/promocional nos itens críticos (giro zero) antes que vençam." if risco_obs.get("quantidade_criticos")
+        else ("Monitorar itens em atenção — giro insuficiente pra escoar no ritmo atual." if risco_obs.get("quantidade_itens")
+              else "Sem risco de obsolescência — manter monitoramento."),
+    )
+
+    return [linha_inventario, linha_passivos, linha_ponderada, linha_shelf, linha_risco_obs, linha_movimentados]
 
 
 # ---------------------------------------------------------------------------
@@ -859,12 +930,42 @@ def _slide_capa(prs: Presentation, mes_label: str):
     slide = _slide_em_branco(prs)
     _fundo(slide, AZUL_INSTITUCIONAL)
     _texto(slide, 1.0, 2.55, 11.3, 0.3, "MÁGIO CHOCOLATES", tamanho=14, negrito=True, cor=AZUL_CLARO)
-    _texto(slide, 1.0, 2.95, 11.3, 1.1, "Relatório Executivo de Estoque", tamanho=40, negrito=True,
+    _texto(slide, 1.0, 2.95, 11.3, 1.1, "MBR Executivo - Controle", tamanho=40, negrito=True,
            cor=BRANCO, fonte=FONTE_TITULO)
     _texto(slide, 1.0, 3.80, 11.3, 0.5, "Inteligência e controle operacional · Atlas", tamanho=18, cor=AZUL_CLARO)
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
     _texto(slide, 1.0, 6.55, 11.3, 0.4, f"{mes_label}  ·  Gerado automaticamente pelo Atlas em {agora}",
            tamanho=13, cor=OFF_WHITE)
+    return slide
+
+
+def _slide_abertura_secao(prs: Presentation, mes_label: str, pagina: int, numero_secao: int, titulo_secao: str,
+                           descricao_secao: str, itens_secao: list):
+    """Capa de seção (pedido do usuário, 18/08/2026: "traga uma visão
+    detalhada modulando os grupos de relatório" nas 7 categorias definidas
+    com ele) - fundo escuro (mesma cor da capa), pra marcar visualmente a
+    virada de um grupo temático pro outro, sem usar accent stripe/linha
+    decorativa (ver diretrizes de design da skill de pptx - evitadas de
+    propósito)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, AZUL_INSTITUCIONAL)
+    _texto(slide, MARGEM_IN, 0.32, 4.0, 0.3, f"SEÇÃO {numero_secao} DE 7", tamanho=11, negrito=True, cor=AZUL_CLARO)
+    _texto(slide, LARGURA_IN - 2.9, 0.32, 2.4, 0.3, mes_label.upper(), tamanho=11, negrito=True,
+           cor=AZUL_CLARO, alinhamento=PP_ALIGN.RIGHT)
+    _texto(slide, MARGEM_IN, 1.15, LARGURA_IN - 2 * MARGEM_IN, 1.0, titulo_secao, tamanho=34, negrito=True,
+           cor=BRANCO, fonte=FONTE_TITULO)
+    _texto(slide, MARGEM_IN, 2.15, LARGURA_IN - 2 * MARGEM_IN, 0.6, descricao_secao, tamanho=15, cor=AZUL_CLARO)
+
+    y = 3.15
+    _texto(slide, MARGEM_IN, y, 4.0, 0.28, "NESTA SEÇÃO", tamanho=11, negrito=True, cor=AZUL_CLARO)
+    y += 0.4
+    for item in itens_secao:
+        _texto(slide, MARGEM_IN, y, 0.24, 0.3, "•", tamanho=14, negrito=True, cor=AZUL_CLARO)
+        _texto(slide, MARGEM_IN + 0.28, y, LARGURA_IN - 2 * MARGEM_IN - 0.28, 0.3, item, tamanho=13, cor=BRANCO)
+        y += 0.4
+
+    _texto(slide, LARGURA_IN - 2.9, ALTURA_IN - 0.42, 2.4, 0.3, f"{pagina:02d}", tamanho=10,
+           cor=AZUL_CLARO, alinhamento=PP_ALIGN.RIGHT)
     return slide
 
 
@@ -1389,7 +1490,7 @@ def _slide_shelf_life(prs: Presentation, mes_label: str, pagina: int, d: dict):
          "cor": COR_ATENCAO if shelf["total_lotes_em_risco"] else COR_SUCESSO},
         {"valor": _fmt_moeda(shelf["valor_total"]), "rotulo": "Valor Total Exposto"},
         {"valor": _fmt_num(resumo.get("vencido", {}).get("quantidade")), "rotulo": "Lotes Já Vencidos", "cor": COR_ERRO},
-        {"valor": _fmt_num(shelf.get("total_itens")), "rotulo": "Total de Lotes Ativos Analisados"},
+        {"valor": _fmt_num(shelf.get("total_itens")), "rotulo": "Total de Lotes Analisados (sem embalagens)"},
     ], altura=1.25)
 
     ordem_farol = [("vencido", "Vencido", COR_ERRO), ("30", "Até 30 dias", COR_ERRO),
@@ -1413,6 +1514,65 @@ def _slide_shelf_life(prs: Presentation, mes_label: str, pagina: int, d: dict):
                 larguras_relativas=[1.0, 2.2, 0.8], tamanho_fonte=11)
     else:
         _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.65, "Lotes urgentes", "Nenhum lote em risco de validade neste recorte.")
+    return slide
+
+
+def _slide_mapeamento_risco_obsolescencia(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Mapeamento de Risco - Obsolescência (pedido do usuário, 18/08/2026:
+    "Senti falta do Mapeamento de risco, baseado nos itens que representam
+    um risco para o negócio por obsolescência") - cruza o Farol de Shelf
+    Life (validade próxima) com o giro recente de Movimentados (saída real)
+    pra separar "vai vencer, mas está saindo rápido o bastante" de "vai
+    vencer E está parado" - só o segundo caso é risco real de virar perda
+    (ver shelf_life.calcular_mapeamento_risco_obsolescencia)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Mapeamento de Risco — Obsolescência", mes_label, pagina,
+               "Itens perto de vencer E com giro recente insuficiente — risco real de virar perda, não só validade próxima")
+
+    risco = d["mapeamento_risco_obsolescencia"]
+    if not risco.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Sem itens em risco de obsolescência",
+            "Nenhum lote ativo está, ao mesmo tempo, perto de vencer (até 90 dias) e com saída recente insuficiente "
+            "pra escoar o estoque a tempo, neste recorte.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_SUCESSO, tamanho_texto=13,
+        )
+        return slide
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_moeda(risco["valor_total_risco"]), "rotulo": "Valor Total em Risco", "cor": COR_ERRO},
+        {"valor": _fmt_num(risco["quantidade_itens"]), "rotulo": "Itens em Risco de Obsolescência"},
+        {"valor": _fmt_num(risco["quantidade_criticos"]), "rotulo": "Itens Críticos (giro zero)",
+         "cor": COR_ERRO if risco["quantidade_criticos"] else COR_SUCESSO},
+        {"valor": _fmt_moeda(risco["valor_criticos"]), "rotulo": "Valor em Itens Críticos", "cor": COR_ERRO},
+    ], altura=1.25)
+
+    top = risco.get("itens") or []
+    linhas = [
+        [
+            f"{it['sku']} — {(it['descricao_produto'] or '—')[:24]}",
+            it["almoxarifado"] or "—",
+            it["dias_para_vencer"] if it["dias_para_vencer"] is not None else "—",
+            _fmt_num(it["giro_recente"]),
+            _fmt_moeda(it["valor_estimado"]),
+            it["classificacao"],
+        ]
+        for it in top[:8]
+    ]
+    _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, "TOP ITENS EM RISCO DE OBSOLESCÊNCIA",
+           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _tabela(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0,
+            ["Item", "Almoxarifado", "Dias p/ Vencer", "Giro Recente", "Valor Estimado", "Classificação"],
+            linhas, larguras_relativas=[2.6, 1.3, 1.0, 1.0, 1.1, 1.1], tamanho_fonte=10.5)
+
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
+        f"Metodologia: cruza o Farol de Shelf Life (vencido/30/60/90 dias) com a saída registrada em Movimentados nos "
+        f"últimos {risco['janela_dias']} dias, por SKU — \"Crítico\" = zero saída na janela; \"Atenção\" = saída "
+        f"recente menor que a quantidade em estoque hoje. Embalagens não entram neste indicador.",
+        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
+    )
     return slide
 
 
@@ -1769,6 +1929,178 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     return slide
 
 
+def _slide_dashboard_externo_generico(prs: Presentation, mes_label: str, pagina: int, item: dict):
+    """Slide genérico pra indicadores dinâmicos (18/08/2026, pedido do usuário:
+    "adicione a opção de adicionar mais indicadores e adicionar automaticamente
+    na construção do MBR") - um slide desses por item em d["dashboards_extras"],
+    com extração deliberadamente conservadora (só tabelas + metadados de
+    exportação, ver dashboards_externos_extrator.extrair_generico) - sem tentar
+    adivinhar cartões de KPI num HTML de layout desconhecido."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    nome = item.get("nome_exibicao") or "Indicador"
+    _cabecalho(slide, nome, mes_label, pagina,
+               "Indicador adicionado pela equipe — retrato do arquivo enviado em Auditoria > Outros Dashboards")
+
+    dado = item.get("dado")
+    if not dado:
+        _caixa_leitura(slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Sem conteúdo extraível",
+                       "O arquivo enviado para este indicador não teve nenhuma tabela nem metadado de exportação "
+                       "reconhecido — confirme se o .html enviado é o export autocontido correto em "
+                       "Auditoria > Outros Dashboards.",
+                       cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13)
+        return slide
+
+    tabelas = dado.get("tabelas") or []
+    if not tabelas:
+        _caixa_leitura(slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Sem tabelas encontradas",
+                       "Este indicador foi reconhecido, mas o arquivo não teve nenhuma tabela — ele aparece com o "
+                       "conteúdo completo assim que o export enviado contiver ao menos uma.",
+                       cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13)
+        return slide
+
+    y_topo = 1.65
+    if len(tabelas) == 1:
+        tabela = tabelas[0]
+        if tabela.get("titulo"):
+            _texto(slide, MARGEM_IN, y_topo, LARGURA_IN - 2 * MARGEM_IN, 0.26, tabela["titulo"].upper(),
+                   tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        linhas = [[c[:30] if isinstance(c, str) else c for c in linha] for linha in tabela["linhas"][:8]]
+        _tabela(slide, MARGEM_IN, y_topo + 0.30, LARGURA_IN - 2 * MARGEM_IN, 3.9, tabela["cabecalho"], linhas,
+                tamanho_fonte=10.5)
+        tabelas_exibidas = 1
+    else:
+        largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
+        x2 = MARGEM_IN + largura_col + 0.35
+        duas = tabelas[:2]
+        # O título de cada tabela vem do heading/negrito mais próximo ANTES dela
+        # no HTML original (ver extrair_generico) - em exports sem um heading
+        # próprio por tabela, as duas acabam herdando o mesmo heading do topo
+        # da página, o que rende duas colunas com o título idêntico lado a lado.
+        # Desambigua nesse caso só na exibição (não nos dados extraídos).
+        titulos_iguais = (
+            len(duas) == 2 and duas[0].get("titulo") and duas[0]["titulo"] == duas[1]["titulo"]
+        )
+        for i, tabela in enumerate(duas):
+            x = MARGEM_IN if i == 0 else x2
+            titulo = tabela.get("titulo")
+            if titulo:
+                if titulos_iguais:
+                    titulo = f"{titulo} — Tabela {i + 1}"
+                _texto(slide, x, y_topo, largura_col, 0.26, titulo.upper(), tamanho=10.5,
+                       negrito=True, cor=AZUL_INSTITUCIONAL)
+            linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela["linhas"][:6]]
+            _tabela(slide, x, y_topo + 0.30, largura_col, 3.0, tabela["cabecalho"], linhas, tamanho_fonte=9.5)
+        tabelas_exibidas = min(2, len(tabelas))
+
+    exportado = dado.get("exportado_em") or item.get("enviado_em") or "—"
+    periodo = (dado.get("filtros") or {}).get("Período")
+    extras = len(tabelas) - tabelas_exibidas
+    rodape = f"Exportado em {exportado}."
+    if periodo:
+        rodape += f" Período do arquivo: {periodo}."
+    if extras > 0:
+        rodape += f" +{extras} tabela(s) adicional(is) no arquivo original, não exibida(s) aqui."
+    _texto(slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6, rodape, tamanho=9.5, cor=CINZA_TEXTO, italico=True)
+    return slide
+
+
+# Frentes que o Atlas cobre nativamente (18/08/2026, usado só no slide de
+# Impacto do Atlas) - nomes curtos de propósito (um item por linha, sem
+# quebrar em 2 linhas na lista de cobertura, ver _slide_impacto_atlas).
+MODULOS_NATIVOS_MBR = [
+    "Painel de Inventário — fechamento por almoxarifado",
+    "Acurácia Ponderada por Valor (IAP)",
+    "Mapeamento de Passivos e Baixas Operacionais",
+    "Shelf Life — Farol de Validade",
+    "Mapeamento de Risco de Obsolescência",
+    "Controle de Movimentados — reconciliação diária",
+]
+
+
+def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Impacto do Atlas (18/08/2026, pedido do usuário: mostrar "o impacto do
+    atlas no mapeamento completo dos processos e melhorias previstas com o uso
+    contínuo da ferramenta") - fecha o relatório com números reais medidos (não
+    projeção genérica): quantas frentes o Atlas cobre nativamente, quantos
+    controles paralelos da equipe já foram integrados automaticamente ao MBR, e
+    o ganho de acurácia medido desde a implantação do Controle de Movimentados."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Impacto do Atlas", mes_label, pagina,
+               "Mapeamento completo dos processos monitorados e ganhos mensuráveis com o uso contínuo da ferramenta")
+
+    dashboards_nativos_enviados = sum(
+        1 for chave in ("fefo_externo", "testes_industriais_externo", "farol_shelf_externo",
+                         "recuperacao_shelf_externo", "baixas_operacionais_externo")
+        if (d.get(chave) or {}).get("enviado")
+    )
+    dashboards_extras = d.get("dashboards_extras") or []
+    total_indicadores_integrados = dashboards_nativos_enviados + len(dashboards_extras)
+
+    resumo_mov = d["resumo_movimentados"]
+    evolucao_mov = d["evolucao_movimentados"]
+    primeiro_mov = evolucao_mov[0] if evolucao_mov else None
+    delta_implantacao = None
+    if primeiro_mov and primeiro_mov.get("pct_acuracia") is not None and resumo_mov.get("pct_acuracia") is not None:
+        delta_implantacao = round(resumo_mov["pct_acuracia"] - primeiro_mov["pct_acuracia"], 2)
+
+    valor_visibilidade = (
+        (d["resumo_passivos"]["passivos"].get("valor") or 0)
+        + (d["resumo_shelf_life"].get("valor_total") or 0)
+        + (d["mapeamento_risco_obsolescencia"].get("valor_total_risco") or 0)
+    )
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_num(len(MODULOS_NATIVOS_MBR)), "rotulo": "Frentes Nativas Mapeadas pelo Atlas"},
+        {"valor": _fmt_num(total_indicadores_integrados), "rotulo": "Controles Paralelos Integrados ao MBR",
+         "cor": COR_SUCESSO if total_indicadores_integrados else CINZA_TEXTO},
+        {"valor": (f"+{_fmt_pct(delta_implantacao)}" if delta_implantacao >= 0 else _fmt_pct(delta_implantacao))
+                  if delta_implantacao is not None else "—",
+         "rotulo": "Ganho de Acurácia (Movimentados)",
+         "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
+        {"valor": _fmt_moeda(valor_visibilidade), "rotulo": "Valor sob Visibilidade Ativa", "cor": AZUL_INSTITUCIONAL},
+    ], altura=1.25)
+
+    largura_esquerda = 6.3
+    _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "COBERTURA DE PROCESSOS HOJE", tamanho=11,
+           negrito=True, cor=AZUL_INSTITUCIONAL)
+    itens_cobertura = list(MODULOS_NATIVOS_MBR)
+    itens_cobertura.append(
+        f"{total_indicadores_integrados} controle(s) paralelo(s) da equipe já lido(s) automaticamente do arquivo exportado."
+        if total_indicadores_integrados else
+        "Nenhum controle paralelo enviado ainda — suba os arquivos em Auditoria > Outros Dashboards pra integrá-los aqui."
+    )
+    _lista_com_marcadores(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, itens_cobertura, tamanho=12)
+
+    x_direita = MARGEM_IN + largura_esquerda + 0.35
+    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
+    if delta_implantacao is not None and primeiro_mov:
+        texto_melhoria = (
+            f"Desde a implantação do Controle de Movimentados, em {_nome_mes(primeiro_mov['mes'])}, a acurácia da "
+            f"reconciliação diária avançou {_fmt_pct(delta_implantacao)} — mesma lógica de leitura contínua que hoje "
+            "também sustenta Shelf Life, Mapeamento de Risco de Obsolescência e os controles paralelos integrados "
+            "neste relatório. Quanto mais meses de uso contínuo, mais preciso o histórico e mais cedo cada "
+            "divergência aparece — o próximo ganho esperado é reduzir o tempo entre a divergência ocorrer e ela "
+            "ser tratada, hoje limitado pela cadência de conferência manual."
+        )
+    else:
+        texto_melhoria = (
+            "Ainda não há histórico suficiente pra medir o ganho de acurácia desde a implantação — a leitura "
+            "aparece a partir do segundo mês de dados do Controle de Movimentados."
+        )
+    _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.35, "Melhorias Previstas com o Uso Contínuo",
+                   texto_melhoria, cor_fundo=OFF_WHITE, tamanho_texto=12)
+
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        "Cobertura e integrações medidas neste relatório — não é uma projeção genérica: cada número acima vem dos "
+        "mesmos dados que alimentam as telas do Atlas no dia a dia.",
+        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
 def _slide_proximos_passos(prs: Presentation, mes_label: str, pagina: int, d: dict):
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
@@ -1822,30 +2154,87 @@ def _slide_proximos_passos(prs: Presentation, mes_label: str, pagina: int, d: di
 def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     """Gera o MBR completo (.pptx) para o mês informado ("AAAA-MM"),
     lendo os dados diretamente das funções de negócio do Atlas (sem HTTP,
-    sem navegador) e aplicando a identidade visual da Mágio Chocolates."""
+    sem navegador) e aplicando a identidade visual da Mágio Chocolates.
+
+    Estrutura em 7 seções temáticas, cada uma com capa própria (18/08/2026,
+    pedido do usuário: "traga uma visão detalhada modulando os grupos de
+    relatório" — respostas às perguntas de esclarecimento: "Reordenar + capa
+    de seção"). A contagem de página é dinâmica (closure `_pag`) porque o
+    número de slides varia com a quantidade de indicadores dinâmicos
+    cadastrados em Outros Dashboards (ver dados["dashboards_extras"])."""
     dados = _coletar_dados_mbr(db, usuario, mes)
     mes_label = _nome_mes(mes)
 
     prs = _nova_apresentacao()
     _slide_capa(prs, mes_label)
-    _slide_resumo_executivo(prs, mes_label, 2, dados)
-    _slide_scorecard(prs, mes_label, 3, dados)
-    _slide_painel_inventario(prs, mes_label, 4, dados)
-    _slide_acuracia_ponderada(prs, mes_label, 5, dados)
-    _slide_acuracia_ponderada_detalhe(prs, mes_label, 6, dados)
-    _slide_mapeamento_passivos(prs, mes_label, 7, dados)
-    _slide_passivos_evolucao(prs, mes_label, 8, dados)
-    _slide_shelf_life(prs, mes_label, 9, dados)
-    _slide_controle_movimentados(prs, mes_label, 10, dados)
-    _slide_fefo(prs, mes_label, 11, dados)
-    # Dashboards externos adicionais (20/08/2026, pedido do usuário) - slides novos,
-    # não substituem os slides nativos acima (Shelf Life, Passivos) que continuam com
-    # dados do próprio Atlas.
-    _slide_testes_industriais(prs, mes_label, 12, dados)
-    _slide_farol_shelf_externo(prs, mes_label, 13, dados)
-    _slide_recuperacao_shelf_externo(prs, mes_label, 14, dados)
-    _slide_baixas_operacionais_externo(prs, mes_label, 15, dados)
-    _slide_proximos_passos(prs, mes_label, 16, dados)
+
+    pagina = [1]  # a capa já é a página 1
+
+    def _pag():
+        pagina[0] += 1
+        return pagina[0]
+
+    def _secao(numero, titulo, descricao, itens):
+        _slide_abertura_secao(prs, mes_label, _pag(), numero, titulo, descricao, itens)
+
+    _secao(1, "Resumo Executivo Geral",
+           "Leitura consolidada do mês e status por frente monitorada.",
+           ["Resumo Executivo", "Scorecard do Mês"])
+    _slide_resumo_executivo(prs, mes_label, _pag(), dados)
+    _slide_scorecard(prs, mes_label, _pag(), dados)
+
+    _secao(2, "Inventários e Movimentados",
+           "Acurácia de fechamento, ponderação por valor e reconciliação diária sistema x físico.",
+           ["Painel de Inventário", "Acurácia Ponderada", "Acurácia Ponderada — Concentração de Risco",
+            "Controle de Movimentados"])
+    _slide_painel_inventario(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada_detalhe(prs, mes_label, _pag(), dados)
+    _slide_controle_movimentados(prs, mes_label, _pag(), dados)
+
+    _secao(3, "Mapeamento de Riscos e Passivos",
+           "Passivos aprovados, validade de lotes e risco de obsolescência por giro insuficiente.",
+           ["Mapeamento de Passivos", "Passivos — Evolução e Concentração", "Shelf Life",
+            "Mapeamento de Risco — Obsolescência"])
+    _slide_mapeamento_passivos(prs, mes_label, _pag(), dados)
+    _slide_passivos_evolucao(prs, mes_label, _pag(), dados)
+    _slide_shelf_life(prs, mes_label, _pag(), dados)
+    _slide_mapeamento_risco_obsolescencia(prs, mes_label, _pag(), dados)
+
+    _secao(4, "FEFO", "Aderência ao First Expired, First Out nas transferências do período.", ["FEFO"])
+    _slide_fefo(prs, mes_label, _pag(), dados)
+
+    _secao(5, "Testes Industriais", "Resultado dos testes industriais realizados no período.",
+           ["Testes Industriais"])
+    _slide_testes_industriais(prs, mes_label, _pag(), dados)
+
+    # "Outros" (20/08/2026 + indicadores dinâmicos 18/08/2026) - os 3 dashboards
+    # externos nativos + um slide genérico por indicador dinâmico cadastrado.
+    # Cap defensivo na lista "NESTA SEÇÃO" da capa (não no relatório em si -
+    # todo indicador enviado ainda gera seu slide completo abaixo) pra não
+    # estourar a capa de seção se a equipe cadastrar muitos indicadores.
+    nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
+    limite_itens_capa = 4
+    itens_outros = ["Farol de Shelf-Life", "Recuperação de Shelf", "Dashboard Baixas Operacionais"]
+    if len(nomes_extras) > limite_itens_capa:
+        itens_outros += nomes_extras[:limite_itens_capa]
+        itens_outros.append(f"+ {len(nomes_extras) - limite_itens_capa} indicador(es) adicional(is)")
+    else:
+        itens_outros += nomes_extras
+    _secao(6, "Outros",
+           "Controles paralelos que a equipe já mantém, integrados automaticamente a este relatório.",
+           itens_outros)
+    _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
+    _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
+    _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
+    for item in dados["dashboards_extras"]:
+        _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
+
+    _secao(7, "Atlas",
+           "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
+           ["Impacto do Atlas", "Próximos Passos"])
+    _slide_impacto_atlas(prs, mes_label, _pag(), dados)
+    _slide_proximos_passos(prs, mes_label, _pag(), dados)
 
     buffer = BytesIO()
     prs.save(buffer)

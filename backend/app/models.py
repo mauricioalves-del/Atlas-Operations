@@ -801,8 +801,12 @@ class DashboardExterno(Base):
 
     5 slots fixos (ver CHAVES_VALIDAS em dashboards_externos_router.py):
     Controle de FEFO, Farol de Shelf-Life, Recuperação de Shelf, Testes
-    Industriais, Dashboard Baixas Operacionais. Um upload novo substitui o
-    conteúdo anterior do mesmo slot (upsert por chave)."""
+    Industriais, Dashboard Baixas Operacionais - mais quaisquer indicadores
+    dinâmicos criados pelo admin (18/08/2026, POST /dashboards-externos),
+    identificados por não terem a chave em CHAVES_VALIDAS. Um upload novo
+    substitui o conteúdo anterior do mesmo slot (upsert por chave).
+    html_content="" (string vazia, não NULL) é o estado "criado, ainda sem
+    arquivo enviado" de um indicador dinâmico."""
     __tablename__ = "dashboards_externos"
     id = Column(Integer, primary_key=True, autoincrement=True)
     chave = Column(String, unique=True, index=True, nullable=False)

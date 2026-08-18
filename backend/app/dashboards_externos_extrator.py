@@ -24,6 +24,11 @@ Duas famílias de arquivo, por como cada um foi construído:
    conteúdo que já existe como texto/tabela HTML plana, que é a fonte
    confiável (ver `extrair_farol_shelf`, `extrair_recuperacao_shelf`,
    `extrair_baixas_operacionais_externo`).
+
+3. Indicadores dinâmicos (18/08/2026) - qualquer indicador criado pelo admin
+   além dos 5 acima (ver dashboards_externos_router.py, POST "") usa
+   `extrair_generico`: só tabelas HTML reais + metadados de exportação, sem
+   tentar adivinhar KPIs de um layout desconhecido (ver docstring da função).
 """
 import re
 import json
@@ -296,4 +301,62 @@ def extrair_baixas_operacionais_externo(html_content: str) -> dict:
         "filtros": filtros,
         "resumo": resumo,
         "tabelas": tabelas,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. Extração genérica - indicadores dinâmicos criados pelo admin (pedido do
+#    usuário, 18/08/2026: "adicione a opção de adicionar mais indicadores e
+#    adicionar automaticamente na construção do MBR" - ver
+#    dashboards_externos_router.py, POST ""). Um indicador novo não tem
+#    extrator sob medida como os 5 acima, então usa este: só o que dá pra
+#    ler com CONFIANÇA de qualquer HTML, sem depender de classe CSS ou texto
+#    específico de um layout de exportação conhecido - as tabelas <table>
+#    reais do arquivo (com o heading/negrito mais próximo antes de cada uma
+#    como título) e os metadados de exportação (.export-meta/.export-chip),
+#    se existirem. NÃO tenta adivinhar "KPIs" a partir de cards/divs
+#    estilizados: os 3 exports React/Recharts acima já mostram que o mesmo
+#    tipo de card usa classes Tailwind DIFERENTES entre arquivos (farol/
+#    recuperação vs. baixas operacionais) - um seletor genérico teria alta
+#    chance de não achar nada OU achar um número errado com cara de KPI
+#    real, o que é pior do que simplesmente não mostrar nada.
+# ---------------------------------------------------------------------------
+def extrair_generico(html_content: str) -> dict:
+    soup = _soup_sem_svg(html_content)
+    exportado_em, filtros = _export_meta(soup)
+
+    titulo = None
+    for nivel in ("h1", "h2"):
+        el = soup.find(nivel)
+        if el and el.get_text(strip=True):
+            titulo = el.get_text(strip=True)
+            break
+
+    tabelas = []
+    for t in soup.find_all("table"):
+        linhas_tr = t.find_all("tr")
+        if not linhas_tr:
+            continue
+        cabecalho = [c.get_text(" ", strip=True) for c in linhas_tr[0].find_all(["th", "td"])]
+        linhas = []
+        for r in linhas_tr[1:]:
+            cols = [c.get_text(" ", strip=True) for c in r.find_all(["td", "th"])]
+            if cols:
+                linhas.append(cols)
+        if not linhas:
+            continue  # tabela sem linha de dado (só cabeçalho, ou vazia) - não vale a pena mostrar
+        titulo_el = t.find_previous(["h1", "h2", "h3", "h4", "h5", "h6", "b", "strong"])
+        titulo_tabela = (titulo_el.get_text(strip=True) if titulo_el else "") or f"Tabela {len(tabelas) + 1}"
+        tabelas.append({"titulo": titulo_tabela[:60], "cabecalho": cabecalho, "linhas": linhas[:10]})
+
+    if not tabelas and not titulo and not filtros:
+        return None  # nada de confiável pra extrair - vira "erro_extracao" no chamador
+
+    return {
+        "titulo": titulo,
+        "exportado_em": exportado_em,
+        "filtros": filtros,
+        # até 4 tabelas por slide - o suficiente sem virar sopa de letra numa
+        # única página do MBR.
+        "tabelas": tabelas[:4],
     }
