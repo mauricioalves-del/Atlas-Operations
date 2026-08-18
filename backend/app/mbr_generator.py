@@ -52,8 +52,9 @@ from sqlalchemy.orm import Session
 
 from . import models
 from . import shelf_life as shelf_life_mod
+from . import dashboards_externos_extrator as dash_ext
 from .routers import (
-    fechamento_router, baixas_operacionais_router, movimentados_router, fefo_router,
+    fechamento_router, baixas_operacionais_router, movimentados_router,
     divergencias_router,
 )
 
@@ -225,7 +226,22 @@ def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
 def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCIONAL, contexto=None, cor_contexto=None):
     _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=CINZA_CLARO, raio=0.14)
     pad = 0.18
-    _texto(slide, x + pad, y + 0.16, w - 2 * pad, 0.55, valor_texto, tamanho=28,
+    largura_texto = w - 2 * pad
+    # Os valores numéricos "de sempre" (R$, %, contagens) sempre couberam numa
+    # linha só em 28pt, mas os dashboards externos passaram a alimentar este
+    # mesmo cartão com textos livres (ex.: "grupo_maior_impacto" = "Produto em
+    # Processo") que quebram em 2 linhas e invadem o rótulo, cuja posição é
+    # fixa - reduz a fonte do valor pra caber numa linha e, no limite, corta
+    # com reticências (20/08/2026).
+    tamanho_valor = 28
+    texto_valor = valor_texto
+    if isinstance(valor_texto, str) and valor_texto:
+        while tamanho_valor > 15 and len(valor_texto) > max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57))):
+            tamanho_valor -= 1
+        max_chars = max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57)))
+        if len(valor_texto) > max_chars:
+            texto_valor = valor_texto[:max(1, max_chars - 1)].rstrip() + "…"
+    _texto(slide, x + pad, y + 0.16, w - 2 * pad, 0.55, texto_valor, tamanho=tamanho_valor,
            negrito=True, cor=cor_valor, fonte=FONTE_TITULO)
     y_rotulo = y + h - (0.58 if contexto else 0.34)
     _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.26, rotulo.upper(), tamanho=10.5, negrito=True, cor=CINZA_TEXTO)
@@ -316,11 +332,28 @@ def _lista_com_marcadores(slide, x, y, w, h, itens, cor_marcador=VERDE_AMAZONIA,
     if not itens:
         itens = ["Sem observações relevantes neste recorte."]
     yy = y
-    for item in itens:
+    exibidos = 0
+    for idx, item in enumerate(itens):
+        linhas_estimadas = _linhas_estimadas(item, w - 0.22, tamanho)
+        altura_item = espaco_linha * linhas_estimadas + 0.10
+        # A altura `h` reservada pra esta lista é um orçamento (calculado em
+        # _slide_resumo_executivo a partir da coluna com mais itens no mês),
+        # não uma garantia - em meses com itens demais mesmo na fonte mínima
+        # já tentada, o conteúdo real pode passar do orçamento. Antes disso
+        # simplesmente estourava por baixo da caixa "Mensagem Central"
+        # (desenhada depois, por cima) e o item ficava escondido sem
+        # nenhum indício pro leitor; agora para de desenhar e avisa quantos
+        # itens ficaram de fora (20/08/2026 - motivado pelo FEFO real virar
+        # um 5º item de ATENÇÕES em meses com taxa de quebra fora da faixa).
+        if h and exibidos > 0 and (yy - y + altura_item) > h:
+            restantes = len(itens) - idx
+            _texto(slide, x + 0.22, yy, w - 0.22, 0.24, f"+ {restantes} adicional(is) — ver Scorecard.",
+                   tamanho=max(9, tamanho - 1), cor=CINZA_TEXTO, italico=True)
+            return yy
         _texto(slide, x, yy, 0.18, 0.24, "•", tamanho=tamanho, negrito=True, cor=cor_marcador)
         _texto(slide, x + 0.22, yy, w - 0.22, 0.6, item, tamanho=tamanho, cor=CINZA_TEXTO, espacamento=1.1)
-        linhas_estimadas = _linhas_estimadas(item, w - 0.22, tamanho)
-        yy += espaco_linha * linhas_estimadas + 0.10
+        yy += altura_item
+        exibidos += 1
     return yy
 
 
@@ -494,6 +527,45 @@ def _tabela(slide, x, y, w, h, cabecalhos, linhas, larguras_relativas=None,
 
 
 # ---------------------------------------------------------------------------
+# Dashboards externos (Auditoria > Outros Dashboards) - leitura do html_content
+# salvo em DashboardExterno e extração via dashboards_externos_extrator.py.
+# Nenhum dos dois helpers levanta exceção se o slot não tiver arquivo enviado
+# ou se a extração falhar (arquivo de formato inesperado) - o slide correspondente
+# trata "tem_dados": False / None mostrando que o dashboard ainda não foi enviado,
+# em vez de quebrar a geração do MBR inteiro por causa de um anexo (20/08/2026).
+# ---------------------------------------------------------------------------
+def _extrair_dashboard_externo(db: Session, chave: str, extrator, mes: str) -> dict:
+    registro = db.query(models.DashboardExterno).filter_by(chave=chave).first()
+    if not registro or not registro.html_content:
+        return {"tem_dados": False, "enviado": False}
+    try:
+        resultado = extrator(registro.html_content, mes)
+    except Exception:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True}
+    if resultado is None:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True}
+    resultado["enviado"] = True
+    resultado["enviado_em"] = registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None
+    return resultado
+
+
+def _extrair_dashboard_externo_sem_mes(db: Session, chave: str, extrator) -> dict:
+    registro = db.query(models.DashboardExterno).filter_by(chave=chave).first()
+    if not registro or not registro.html_content:
+        return {"tem_dados": False, "enviado": False}
+    try:
+        resultado = extrator(registro.html_content)
+    except Exception:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True}
+    if resultado is None:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True}
+    resultado["tem_dados"] = True
+    resultado["enviado"] = True
+    resultado["enviado_em"] = registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None
+    return resultado
+
+
+# ---------------------------------------------------------------------------
 # Coleta de dados (chama as funções de negócio do Atlas diretamente)
 # ---------------------------------------------------------------------------
 def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
@@ -535,7 +607,21 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "evolucao_movimentados": movimentados_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db),
         "resumo_transferencias": movimentados_router.dashboard_transferencias_resumo(usuario=usuario, db=db),
         "evolucao_transferencias": movimentados_router.dashboard_transferencias_evolucao_mensal(usuario=usuario, db=db),
-        "resumo_fefo": fefo_router.dashboard_resumo(usuario=usuario, db=db),
+        # Dashboards externos (Auditoria > Outros Dashboards) - substituem/complementam
+        # números calculados pelo Atlas por dados reais dos arquivos .html que a equipe
+        # já mantém em paralelo, pedido do usuário (20/08/2026, ver dashboards_externos_extrator.py).
+        # FEFO descarta de vez o cálculo do próprio Atlas (fefo_router) - o gerador de RAW
+        # é o dashboard dedicado, que já classifica cada transferência a partir dos arquivos
+        # de auditoria reais, não de uma comparação contra o estoque de lote atual.
+        "fefo_externo": _extrair_dashboard_externo(db, "controle_fefo", dash_ext.extrair_fefo, mes),
+        "testes_industriais_externo": _extrair_dashboard_externo(db, "testes_industriais", dash_ext.extrair_testes_industriais, mes),
+        # Os três abaixo não têm uma dimensão de mês limpa no arquivo de origem (ver
+        # docstring de dashboards_externos_extrator.py) - entram no MBR como retrato
+        # datado (número real, rotulado com a data/período real do arquivo), não
+        # filtrados pelo mês do relatório.
+        "farol_shelf_externo": _extrair_dashboard_externo_sem_mes(db, "farol_shelf_life", dash_ext.extrair_farol_shelf),
+        "recuperacao_shelf_externo": _extrair_dashboard_externo_sem_mes(db, "recuperacao_shelf", dash_ext.extrair_recuperacao_shelf),
+        "baixas_operacionais_externo": _extrair_dashboard_externo_sem_mes(db, "baixas_operacionais", dash_ext.extrair_baixas_operacionais_externo),
     }
 
 
@@ -657,19 +743,35 @@ def _analise_geral(d: dict):
     elif movimentados.get("itens_analisados"):
         avancos.append(f"Controle de Movimentados ativo: {_fmt_num(movimentados['itens_analisados'])} item(ns) reconciliado(s) neste mês.")
 
-    # FEFO (20/08/2026) - suavizado por pedido do usuário: a "quebra de FEFO" hoje compara a
-    # transferência com o estoque de lote ATIVO NO MOMENTO DO CÁLCULO, não com uma leitura de
-    # disponibilidade tirada na hora exata da transferência (essa medição não existe na base
-    # hoje) - por isso o número não entra mais como fato consolidado em avanços/decisões.
-    # O acompanhamento detalhado do dashboard de FEFO que a equipe já mantém fica em
-    # Auditoria > Outros Dashboards.
-    fefo = d["resumo_fefo"]
-    if fefo.get("total_transferencias_avaliadas"):
-        decisoes.append(
-            "Critério de FEFO: acompanhar pelo dashboard dedicado (Auditoria > Outros Dashboards > Controle de FEFO) — "
-            "a taxa de quebra calculada aqui usa o estoque de lote ATUAL, não uma leitura de disponibilidade tirada no "
-            "momento exato de cada transferência, então não é tratada como número fechado neste relatório."
+    # FEFO (20/08/2026) - modelo do próprio Atlas descartado por pedido do usuário: o cálculo
+    # antigo comparava a transferência com o estoque de lote ATIVO NO MOMENTO DO CÁLCULO, não
+    # com uma leitura tirada na hora exata da transferência. Agora vem do dashboard de Controle
+    # de FEFO (Auditoria > Outros Dashboards), que já classifica cada transferência a partir dos
+    # arquivos de auditoria reais - por isso entra como fato normal em avanços/atenções, com o
+    # mesmo limiar (_LIMIARES["fefo_quebra_pct"]) já usado no restante do relatório.
+    fefo = d["fefo_externo"]
+    if fefo.get("tem_dados"):
+        label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
+        texto_fefo = (
+            f"FEFO: taxa de quebra em {_fmt_pct(fefo['taxa_quebra_pct'])} neste mês "
+            f"({_fmt_num(fefo['quebras'])} de {_fmt_num(fefo['total_transferencias'])} transferências avaliadas, "
+            f"dados reais do dashboard de Controle de FEFO)."
         )
+        if label_fefo == "Em avanço":
+            avancos.append(texto_fefo)
+        elif label_fefo == "Atenção":
+            atencoes.append(texto_fefo)
+        else:
+            atencoes.append(texto_fefo + " — acima do limiar aceitável.")
+    elif not fefo.get("enviado"):
+        decisoes.append(
+            "Controle de FEFO ainda não foi enviado em Auditoria > Outros Dashboards — sem esse arquivo, o FEFO não "
+            "entra neste relatório com dado real."
+        )
+    elif fefo.get("erro_extracao"):
+        decisoes.append("Controle de FEFO: não foi possível ler o arquivo enviado em Auditoria > Outros Dashboards — reenviar o .html.")
+    else:
+        decisoes.append(f"Controle de FEFO: nenhuma transferência avaliada no arquivo enviado para {_nome_mes(fefo.get('mes', ''))}.")
 
     if not decisoes:
         decisoes.append("Manter a cadência atual de fechamento e monitoramento — sem decisão crítica pendente neste recorte.")
@@ -1376,45 +1478,293 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
     return slide
 
 
+def _slide_externo_indisponivel(slide, dado: dict, nome_dashboard: str) -> bool:
+    """Preenche o slide com uma mensagem de estado (não enviado / erro de leitura)
+    quando um dashboard externo ainda não tem conteúdo utilizável - usado pelos
+    slides de FEFO, Testes Industriais, Farol de Shelf, Recuperação de Shelf e
+    Baixas Operacionais externo (20/08/2026). Retorna True se preencheu (o
+    chamador deve `return slide` em seguida), False se há dado normal a exibir."""
+    if not dado.get("enviado"):
+        titulo = f"{nome_dashboard} ainda não enviado"
+        texto = (
+            f"Suba o arquivo .html autocontido do {nome_dashboard} em Auditoria > Outros Dashboards "
+            "pra que ele apareça neste relatório."
+        )
+        cor = COR_ATENCAO
+    elif dado.get("erro_extracao"):
+        titulo = f"Não foi possível ler o {nome_dashboard}"
+        texto = (
+            "O arquivo enviado não pôde ser processado (formato inesperado) — reenvie o .html "
+            "em Auditoria > Outros Dashboards."
+        )
+        cor = COR_ERRO
+    else:
+        return False
+    _caixa_leitura(slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, titulo, texto,
+                   cor_fundo=OFF_WHITE, cor_rotulo=cor, tamanho_texto=13)
+    return True
+
+
 def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """FEFO (20/08/2026, suavizado por pedido do usuário): a "quebra de
-    FEFO" hoje compara a transferência com o estoque de lote ATIVO NO
-    MOMENTO DO CÁLCULO (ver fefo.py: calcular_checagem_fefo lê
-    LoteShelfLife.ativo == True "agora"), não com uma leitura de
-    disponibilidade tirada na hora exata da transferência - essa medição
-    não existe na base hoje. Em vez de apresentar a taxa de quebra como
-    fato fechado, o slide mostra só o volume (esse sim confiável) e
-    aponta pro dashboard dedicado que a equipe já mantém (Auditoria >
-    Outros Dashboards)."""
+    """FEFO (20/08/2026): modelo de cálculo do próprio Atlas DESCARTADO por pedido
+    do usuário (comparava a transferência com o estoque de lote ATIVO NO MOMENTO
+    DO CÁLCULO, não com uma leitura tirada na hora exata da transferência). Os
+    números agora vêm do dashboard de Controle de FEFO (Auditoria > Outros
+    Dashboards), que já classifica cada transferência a partir dos arquivos de
+    auditoria reais - filtrado pelo mês deste relatório
+    (ver dashboards_externos_extrator.extrair_fefo)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "FEFO", mes_label, pagina, "Volume de transferências entre almoxarifados — leitura de critério em dashboard dedicado")
+    _cabecalho(slide, "FEFO", mes_label, pagina, "Dados reais do dashboard de Controle de FEFO — filtrado pelo mês deste relatório")
+
+    fefo = d["fefo_externo"]
+
+    if _slide_externo_indisponivel(slide, fefo, "Controle de FEFO"):
+        return slide
+
+    if not fefo.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem transferências avaliadas em {mes_label}",
+            "O dashboard de Controle de FEFO enviado não tem transferências registradas para este mês — confira se o "
+            "arquivo está atualizado em Auditoria > Outros Dashboards.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
 
     transf = d["resumo_transferencias"]
-    fefo = d["resumo_fefo"]
-
+    label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_num(transf["total_transferencias"]), "rotulo": "Transferências Registradas"},
-        {"valor": _fmt_num(transf.get("transferencias_da_fabrica")), "rotulo": "Saídas da Fábrica"},
-        {"valor": _fmt_num(fefo.get("total_transferencias_avaliadas")), "rotulo": "Avaliadas p/ Critério FEFO", "cor": COR_INFO},
-        {"valor": _fmt_pct(fefo.get("taxa_quebra_pct")), "rotulo": "Taxa de Quebra (referencial)", "cor": COR_INFO},
+        {"valor": _fmt_num(transf["total_transferencias"]), "rotulo": "Transferências Registradas (Atlas)"},
+        {"valor": _fmt_num(fefo["total_transferencias"]), "rotulo": "Avaliadas no Mês (Controle de FEFO)", "cor": COR_INFO},
+        {"valor": _fmt_num(fefo["quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["quebras"] else COR_SUCESSO},
+        {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
     ], altura=1.25)
 
-    _caixa_leitura(
-        slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 1.55, "Por que a taxa de quebra não é tratada como fato fechado",
-        "O cálculo de quebra de FEFO compara cada transferência que saiu da Fábrica com o lote mais antigo AINDA ATIVO NO "
-        "SISTEMA HOJE — não com uma leitura de disponibilidade tirada na hora exata em que a transferência aconteceu (essa "
-        "medição não existe na base de dados atual). Por isso o número acima é referencial, não uma meta oficial: uma "
-        "leitura mais realista pede uma captura de estoque no momento da transferência, que o Atlas ainda não tem.",
-        cor_fundo=OFF_WHITE, cor_rotulo=COR_INFO, tamanho_texto=12,
-    )
+    top = fefo.get("top_produtos_quebra") or []
+    if top:
+        categorias = [t["produto"][:26] for t in reversed(top)]
+        valores = [t["qtd"] for t in reversed(top)]
+        _texto(slide, MARGEM_IN, 3.05, 6.3, 0.26, "PRODUTOS COM MAIS QUEBRAS NO MÊS", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, MARGEM_IN, 3.35, 6.3, 2.55, categorias, "Quebras", valores,
+                            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='0')
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.05, 6.3, 2.55, "Produtos com mais quebras",
+                        "Nenhuma quebra registrada neste mês.")
 
-    _caixa_leitura(
-        slide, MARGEM_IN, 4.80, LARGURA_IN - 2 * MARGEM_IN, 1.55, "Onde acompanhar o critério de FEFO de verdade",
-        "O dashboard de Controle de FEFO que a equipe já mantém em paralelo ao Atlas está disponível em "
-        "Auditoria > Outros Dashboards — suba (ou atualize) o arquivo .html autocontido daquele dashboard lá pra "
-        "manter a leitura de FEFO acessível junto com o resto do sistema, sem misturar com este relatório.",
-        cor_fundo=AZUL_CLARO, cor_rotulo=AZUL_INSTITUCIONAL, tamanho_texto=12,
+    x_direita = MARGEM_IN + 6.3 + 0.35
+    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
+    _texto(slide, x_direita, 3.05, largura_direita, 0.26, "QUEBRAS POR DESTINO", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    por_destino = fefo.get("por_destino") or []
+    if por_destino:
+        linhas = [[pd["destino"][:24], _fmt_num(pd["total"]), _fmt_num(pd["quebras"]), _fmt_pct(pd["taxa_pct"])] for pd in por_destino]
+        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Destino", "Total", "Quebras", "Taxa"], linhas,
+                larguras_relativas=[2.2, 1.0, 1.0, 1.0], tamanho_fonte=10.5)
+    else:
+        _caixa_leitura(slide, x_direita, 3.35, largura_direita, 2.25, "Por destino", "Sem dados de destino neste mês.")
+
+    _texto(
+        slide, MARGEM_IN, 6.15, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        f"Fonte: dashboard de Controle de FEFO (Auditoria > Outros Dashboards), enviado em {fefo.get('enviado_em') or '—'} — "
+        f"{_fmt_num(fefo.get('inconclusivos'))} transferência(s) inconclusiva(s) neste mês não entram na taxa de quebra.",
+        tamanho=10, cor=CINZA_TEXTO,
+    )
+    return slide
+
+
+def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Testes Industriais (20/08/2026, pedido do usuário: "adicionar todos os
+    anexos na construção do MBR") - dashboard de Controle de Testes Industriais
+    tem data por registro (campo "mes"), então filtra exato pelo mês deste
+    relatório, igual ao FEFO (ver dashboards_externos_extrator.extrair_testes_industriais)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Testes Industriais", mes_label, pagina,
+               "Dados reais do dashboard de Controle de Testes Industriais — filtrado pelo mês deste relatório")
+
+    dado = d["testes_industriais_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Controle de Testes Industriais"):
+        return slide
+
+    if not dado.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem testes registrados em {mes_label}",
+            "O dashboard de Controle de Testes Industriais enviado não tem itens consumidos para este mês — confira "
+            "se o arquivo está atualizado em Auditoria > Outros Dashboards.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_num(dado["total_itens"]), "rotulo": "Itens Consumidos no Mês"},
+        {"valor": _fmt_moeda(dado["gasto_total"]), "rotulo": "Gasto Total no Mês", "cor": COR_ATENCAO},
+        {"valor": _fmt_num(dado["ops"]), "rotulo": "OPs Testadas"},
+        {"valor": _fmt_moeda(dado["custo_medio_op"]), "rotulo": "Custo Médio por OP"},
+    ], altura=1.25)
+
+    top = dado.get("top_materias_primas") or []
+    if top:
+        categorias = [t["nome"][:26] for t in reversed(top)]
+        valores = [t["custo"] for t in reversed(top)]
+        _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, "MATÉRIAS-PRIMAS COM MAIOR CUSTO NO MÊS (R$)",
+               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0, categorias, "Custo", valores,
+                            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ATENCAO, formato_numero='#,##0')
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.0, "Matérias-primas",
+                        "Nenhuma matéria-prima consumida neste mês.")
+
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.4,
+        f"Fonte: dashboard de Controle de Testes Industriais (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'}.",
+        tamanho=10, cor=CINZA_TEXTO,
+    )
+    return slide
+
+
+def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Farol de Shelf-Life (20/08/2026) - dashboard é uma FOTO do estoque no
+    momento da exportação (sem dimensão de mês: lotes com saldo agora e
+    validade em até 90 dias), não um recorte do mês deste relatório - entra
+    como retrato datado, rotulado com a data real da exportação (decisão do
+    usuário), não filtrado pelo mês (ver dashboards_externos_extrator.extrair_farol_shelf)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Farol de Shelf-Life", mes_label, pagina,
+               "Retrato do estoque em risco de validade — dados reais do dashboard de Farol de Shelf-Life")
+
+    dado = d["farol_shelf_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Farol de Shelf-Life"):
+        return slide
+
+    qtd = dado.get("qtd_lotes") or {}
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_moeda(dado.get("perda_potencial_total")), "rotulo": "Perda Potencial Total", "cor": COR_ERRO},
+        {"valor": _fmt_num(qtd.get("vencidos")), "rotulo": "Lotes Já Vencidos", "cor": COR_ERRO},
+        {"valor": _fmt_num(qtd.get("0_30")), "rotulo": "Lotes 0-30 dias (Urgente)", "cor": COR_ATENCAO},
+        {"valor": _fmt_num((qtd.get("31_60") or 0) + (qtd.get("61_90") or 0)), "rotulo": "Lotes 31-90 dias (Perigo/Atenção)"},
+    ], altura=1.25)
+
+    buckets = dado.get("buckets") or []
+    # Mostra o bucket mais urgente com itens (Urgente > Perigo > Atenção) como tabela principal.
+    bucket_principal = next((b for b in buckets if b["itens"]), None)
+    if bucket_principal:
+        linhas = [[it["descricao"][:34], _fmt_moeda(it["custo"]), it["pct"]] for it in bucket_principal["itens"][:8]]
+        _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, (bucket_principal["titulo"] or "").upper(),
+               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _tabela(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0, ["Descrição", "Custo", "% do bucket"], linhas,
+                larguras_relativas=[3.0, 1.2, 1.0], tamanho_fonte=11)
+        if bucket_principal.get("total"):
+            _texto(slide, MARGEM_IN, 6.45, LARGURA_IN - 2 * MARGEM_IN, 0.3,
+                   f"Total do bucket: {bucket_principal['total']['descricao']} — {_fmt_moeda(bucket_principal['total']['custo'])}",
+                   tamanho=10.5, negrito=True, cor=CINZA_TEXTO)
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.0, "Lotes em risco",
+                        "Nenhum lote em risco de validade neste retrato.")
+
+    exportado = dado.get("exportado_em") or "—"
+    _texto(
+        slide, MARGEM_IN, 6.85, LARGURA_IN - 2 * MARGEM_IN, 0.35,
+        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}.",
+        tamanho=10, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
+def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Recuperação de Shelf (20/08/2026) - dashboard cobre um período agregado
+    (ex.: jan-ago/26 no arquivo de exemplo), não um mês calendário isolado -
+    entra como retrato datado do período real do arquivo (decisão do usuário),
+    com os KPIs de metodologia de recuperação financeira e os 2 rankings Top 10
+    reais (ver dashboards_externos_extrator.extrair_recuperacao_shelf)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Recuperação de Shelf", mes_label, pagina,
+               "Retrato do período — dados reais do dashboard de Recuperação de Shelf (perda × recuperação por ações de lote)")
+
+    dado = d["recuperacao_shelf_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Recuperação de Shelf"):
+        return slide
+
+    kpis = dado.get("kpis") or {}
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_moeda(kpis.get("receita_recuperada")), "rotulo": "Receita Recuperada", "cor": COR_SUCESSO},
+        {"valor": _fmt_moeda(kpis.get("perda_evitada")), "rotulo": "Perda Evitada", "cor": COR_SUCESSO},
+        {"valor": _fmt_moeda(kpis.get("perda_real")), "rotulo": "Perda Real", "cor": COR_ERRO},
+        {"valor": _fmt_moeda(kpis.get("saving_recuperado")), "rotulo": "Saving Recuperado"},
+    ], altura=1.25)
+
+    tabelas = dado.get("tabelas") or {}
+    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
+    x2 = MARGEM_IN + largura_col + 0.35
+    y_tabelas = 3.05
+    for i, (titulo, tabela) in enumerate(list(tabelas.items())[:2]):
+        x = MARGEM_IN if i == 0 else x2
+        _texto(slide, x, y_tabelas, largura_col, 0.26, titulo.upper(), tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela["linhas"][:6]]
+        larguras = [1.6] + [1.0] * (len(tabela["cabecalho"]) - 1) if tabela["cabecalho"] else None
+        _tabela(slide, x, y_tabelas + 0.30, largura_col, 3.0, tabela["cabecalho"], linhas,
+                larguras_relativas=larguras, tamanho_fonte=9.5)
+
+    roi = kpis.get("roi_operacional_pct")
+    exportado = dado.get("exportado_em") or "—"
+    periodo = (dado.get("filtros") or {}).get("Período", "—")
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
+        f"ROI operacional (saving ÷ custo das ações): {_fmt_pct(roi) if roi is not None else '—'}. "
+        f"Retrato datado do período {periodo} (não é um recorte do mês deste relatório) — exportado em {exportado}.",
+        tamanho=10, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
+def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Dashboard Baixas Operacionais externo (20/08/2026) - controle paralelo
+    que a equipe já mantém (categorização de motivo diferente da do módulo
+    nativo de Baixas Operacionais do Atlas, que já aparece nos slides de
+    Mapeamento de Passivos). Cobre uma janela móvel (ex.: últimos ~60 dias no
+    arquivo de exemplo), não um mês calendário isolado - entra como retrato
+    datado (decisão do usuário), sem substituir os slides nativos
+    (ver dashboards_externos_extrator.extrair_baixas_operacionais_externo)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Baixas Operacionais (Controle Paralelo)", mes_label, pagina,
+               "Retrato do período — dashboard externo mantido em paralelo ao módulo nativo do Atlas")
+
+    dado = d["baixas_operacionais_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Dashboard Baixas Operacionais"):
+        return slide
+
+    resumo = dado.get("resumo") or {}
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_moeda(resumo.get("prejuizo_total")), "rotulo": "Prejuízo Total no Período", "cor": COR_ERRO},
+        {"valor": _fmt_pct(resumo.get("pct_concentrado")), "rotulo": f"Concentrado em {resumo.get('motivo_concentrado', '—')}"},
+        {"valor": resumo.get("setor_maior_impacto") or "—", "rotulo": "Setor de Maior Impacto"},
+        {"valor": resumo.get("grupo_maior_impacto") or "—", "rotulo": "Grupo de Maior Impacto"},
+    ], altura=1.25)
+
+    tabelas = dado.get("tabelas") or {}
+    tabela_motivo = tabelas.get("Baixas por Motivo")
+    tabela_sku = tabelas.get("Ranking de SKU — Top 10 Baixas")
+    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
+    x2 = MARGEM_IN + largura_col + 0.35
+    if tabela_sku:
+        _texto(slide, MARGEM_IN, 3.05, largura_col, 0.26, "TOP BAIXAS POR SKU", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        linhas = [[c[:24] if isinstance(c, str) else c for c in linha] for linha in tabela_sku["linhas"][:6]]
+        _tabela(slide, MARGEM_IN, 3.35, largura_col, 3.0, tabela_sku["cabecalho"], linhas,
+                larguras_relativas=[0.6, 2.4, 1.2, 1.2], tamanho_fonte=9.5)
+    if tabela_motivo:
+        _texto(slide, x2, 3.05, largura_col, 0.26, "BAIXAS POR MOTIVO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela_motivo["linhas"][:6]]
+        _tabela(slide, x2, 3.35, largura_col, 3.0, tabela_motivo["cabecalho"], linhas,
+                larguras_relativas=[1.8, 1.2, 0.7, 1.2], tamanho_fonte=9.5)
+
+    periodo = (dado.get("filtros") or {}).get("Período", "—")
+    exportado = dado.get("exportado_em") or "—"
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        f"Controle paralelo ao módulo nativo de Baixas Operacionais do Atlas (categorização de motivo própria). "
+        f"Retrato datado do período {periodo} — exportado em {exportado}.",
+        tamanho=10, cor=CINZA_TEXTO, italico=True,
     )
     return slide
 
@@ -1488,7 +1838,14 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_shelf_life(prs, mes_label, 9, dados)
     _slide_controle_movimentados(prs, mes_label, 10, dados)
     _slide_fefo(prs, mes_label, 11, dados)
-    _slide_proximos_passos(prs, mes_label, 12, dados)
+    # Dashboards externos adicionais (20/08/2026, pedido do usuário) - slides novos,
+    # não substituem os slides nativos acima (Shelf Life, Passivos) que continuam com
+    # dados do próprio Atlas.
+    _slide_testes_industriais(prs, mes_label, 12, dados)
+    _slide_farol_shelf_externo(prs, mes_label, 13, dados)
+    _slide_recuperacao_shelf_externo(prs, mes_label, 14, dados)
+    _slide_baixas_operacionais_externo(prs, mes_label, 15, dados)
+    _slide_proximos_passos(prs, mes_label, 16, dados)
 
     buffer = BytesIO()
     prs.save(buffer)

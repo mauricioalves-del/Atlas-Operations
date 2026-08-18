@@ -16,3 +16,7 @@ fpdf2==2.7.9
 # telas do Atlas; foi substituída por um gerador que lê os dados direto das
 # funções de negócio do Atlas, sem navegador nenhum - ver app/mbr_generator.py).
 python-pptx==0.6.23
+
+# Extração de dados reais dos dashboards HTML externos (Auditoria > Outros
+# Dashboards) usados no MBR - ver app/dashboards_externos_extrator.py (20/08/2026).
+beautifulsoup4==4.12.3
