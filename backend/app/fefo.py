@@ -6,11 +6,13 @@ em HTTP/permissões.
 """
 import re
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from . import models
+from .csv_utils import parse_sku, parse_decimal, limpar_texto
+from .hipoteses_config import normalizar_almoxarifado
 
 ALMOXARIFADO_FABRICA = "Almox_SP_Fabrica"
 JANELA_DIAS_UTEIS = 5  # prazo operacional de movimentação mencionado pelo usuário (18/08/2026)
@@ -371,4 +373,259 @@ def calcular_resumo_auditoria_fefo(db: Session, data_inicio: date = None, data_f
         "por_dia": por_dia,
         "top_produtos_com_quebra": [{"produto": p, "quebras": q} for p, q in top_produtos],
         "top_destinos_com_quebra": [{"destino": d, "quebras": q} for d, q in top_destinos],
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Motor NATIVO de checagem de FEFO por lote movimentado (20/08/2026) - pedido
+# do usuário depois de constatar que calcular_checagem_fefo/ChecagemFefo
+# (topo deste arquivo) nunca comparou de fato o lote que saiu ("Continua
+# trazendo dados errados", 89,85% de quebra): "Primeiro deixe registrado o
+# que já foi mapeado [...] Depois, crie um motor investigativo, sem
+# ferramenta genérica. Com base na tabela de movimentação, pegue tudo que
+# saiu da fabrica e compare com o lote mais próximo da data de vencimento.
+# Se lote não for igual, quebra de FEFO. Esse processo precisa atualizar
+# todos os dias." Ver claude/checagens-fefo-heuristica-quebrada.md
+# (histórico/decisão) no Atlas Operations.
+#
+# Reproduz a lógica de analisar_fefo()/ler_movimentacao() do
+# Auditar_FEFO.ipynb do estagiário (André) sobre a MESMA planilha bruta que
+# ele já usa ("Movimentação - Lt.xlsx", por lote - ver
+# models.MovimentacaoLoteDiaria), em vez da Transferencia agregada por
+# SKU/dia (que nunca carrega o lote na importação diária - ver docstring de
+# models.Transferencia.lote). Grava o resultado em ChecagemFefoMovimento,
+# tabela nova e independente de ChecagemFefo (mantida só como registro
+# histórico, desativada) e de AuditoriaFefo (feature separada, pros
+# relatórios já prontos que o André importa - ver seção "Auditoria FEFO
+# importada" acima; não há fusão/precedência entre as duas).
+#
+# LIMITAÇÃO CONHECIDA (ainda não implementada, decisão consciente pra não
+# atrasar a entrega - avisar o usuário): o processo do André tem uma
+# planilha de exceções validadas manualmente (Excecoes_FEFO.xlsx, pares
+# produto + "lote mais antigo disponível" que um humano já revisou e
+# confirmou que está OK apesar da ordem). Esse motor NÃO importa essa
+# planilha ainda - toda vez que existir um lote mais antigo do mesmo SKU na
+# Fábrica que não foi o lote movimentado, isso é reportado como quebra, sem
+# suprimir os casos já validados como exceção pelo André. Se isso gerar
+# muito falso positivo conhecido, dá pra construir a importação da planilha
+# de exceções depois.
+# ═════════════════════════════════════════════════════════════════════════
+
+STATUS_QUEBRA_NATIVA = "⚠️ QUEBRA DE FEFO"
+STATUS_OK = "OK"
+STATUS_OK_ALMOX_VAZIO = "OK (almox vazio para este produto)"
+STATUS_INCONCLUSIVO = "Inconclusivo (lotes sem validade cadastrada no almox)"
+STATUS_SEM_VALIDADE_LOTE_MOVIMENTADO = "Sem validade (lote não encontrado)"
+
+# Cabeçalho exato da planilha "Movimentação - Lt.xlsx" (aba com os dados,
+# mesma que o André lê em ler_movimentacao() no Auditar_FEFO.ipynb) - usado
+# pra validar o arquivo antes de importar.
+COLUNAS_MOVIMENTACAO_LOTE_DIARIA = (
+    "id_produto", "descricao", "Data", "doc", "desc_movimento", "desc_almox", "qtd", "id_lote",
+)
+
+
+def _movimento_eh_origem_fabrica(movimento, almoxarifado_raw) -> bool:
+    """Confirma que a Fábrica é a ORIGEM deste movimento (não o destino) -
+    precisa confirmar a direção porque `desc_almox`/almoxarifado_raw é só
+    "de qual almoxarifado esse registro foi exportado", e o mesmo movimento
+    físico pode aparecer no arquivo uma vez por almoxarifado envolvido (ver
+    identificar_almox_origem/fabrica_eh_origem do André - mesma ideia,
+    versão mais simples aqui). Confirma em duas camadas: (1) o almoxarifado
+    desta linha normaliza pra Fábrica, e (2) o texto ANTES do separador
+    "->"/"-->" no movimento (a origem textual) menciona fábrica - se o texto
+    antes da seta falar de outro lugar, a Fábrica é o DESTINO desse
+    movimento, não a origem, e fica fora do escopo deste motor."""
+    if not movimento:
+        return False
+    if normalizar_almoxarifado(almoxarifado_raw or "") != ALMOXARIFADO_FABRICA:
+        return False
+    partes = re.split(r"-+>", str(movimento))
+    if len(partes) < 2:
+        return False
+    origem_texto = partes[0].strip().lower()
+    return any(p in origem_texto for p in ("fabrica", "fábrica", "frabrica", "frabica"))
+
+
+def _linha_movimentacao_lote_para_campos(linha: dict, arquivo_origem: str) -> dict | None:
+    data_val = _data_valor(linha.get("Data"))
+    if data_val is None:
+        return None
+    return {
+        "data": data_val,
+        "sku": parse_sku(linha.get("id_produto")),
+        "descricao_produto": limpar_texto(linha.get("descricao")),
+        "documento": limpar_texto(linha.get("doc")),
+        "movimento": limpar_texto(linha.get("desc_movimento")),
+        "almoxarifado_raw": limpar_texto(linha.get("desc_almox")),
+        "quantidade": parse_decimal(linha.get("qtd")),
+        "lote_movimentado": limpar_texto(linha.get("id_lote")),
+        "arquivo_origem": arquivo_origem,
+    }
+
+
+def importar_movimentacao_lote_diaria(db: Session, linhas: list[dict], arquivo_origem: str, usuario: str) -> dict:
+    """Importa a planilha bruta de movimentação por lote (um arquivo pode
+    trazer vários dias de uma vez, é assim que o sistema de origem exporta).
+    Reimportar substitui só os dias presentes no arquivo novo (escopo por
+    data) - remove primeiro as ChecagemFefoMovimento que dependem desses
+    dias (FK), depois a movimentação bruta, e recalcula na sequência."""
+    campos_validos = [c for c in (_linha_movimentacao_lote_para_campos(l, arquivo_origem) for l in linhas) if c is not None]
+    ignoradas = len(linhas) - len(campos_validos)
+
+    datas = sorted({c["data"] for c in campos_validos})
+    linhas_substituidas = 0
+    for d in datas:
+        ids_do_dia = [id_ for (id_,) in db.query(models.MovimentacaoLoteDiaria.id).filter_by(data=d).all()]
+        if ids_do_dia:
+            db.query(models.ChecagemFefoMovimento).filter(
+                models.ChecagemFefoMovimento.movimentacao_lote_diaria_id.in_(ids_do_dia)
+            ).delete(synchronize_session=False)
+        linhas_substituidas += db.query(models.MovimentacaoLoteDiaria).filter_by(data=d).delete()
+
+    for campos in campos_validos:
+        db.add(models.MovimentacaoLoteDiaria(**campos, importado_por=usuario))
+    db.flush()
+
+    resultado_recalculo = recalcular_quebra_fefo_nativa(db, datas=datas)
+
+    return {
+        "dias_importados": [str(d) for d in datas],
+        "linhas_importadas": len(campos_validos),
+        "linhas_ignoradas_sem_data": ignoradas,
+        "linhas_substituidas": linhas_substituidas,
+        **resultado_recalculo,
+    }
+
+
+def _avaliar_quebra_fefo(
+    mov: "models.MovimentacaoLoteDiaria",
+    validade_por_lote: dict,
+    lotes_fabrica_por_sku: dict,
+    skus_fabrica_com_lote_sem_validade: set,
+) -> dict:
+    """Avalia UM movimento de saída da Fábrica contra os lotes do mesmo SKU
+    que continuam lá - "pegue tudo que saiu da fábrica e compare com o lote
+    mais próximo da data de vencimento. Se lote não for igual, quebra de
+    FEFO" (instrução literal do usuário). Espelha analisar_fefo() do André:
+    a validade do lote que saiu é procurada GLOBALMENTE (qualquer
+    almoxarifado - é o mesmo lote físico em qualquer lugar do sistema);
+    os candidatos "deveria ter saído primeiro" são só os lotes do mesmo SKU
+    que estão HOJE na Fábrica, com validade conhecida e quantidade > 0."""
+    base = {
+        "data": mov.data,
+        "sku": mov.sku,
+        "descricao_produto": mov.descricao_produto,
+        "movimento": mov.movimento,
+        "almoxarifado_destino": extrair_destino_movimento(mov.movimento),
+        "lote_movimentado": mov.lote_movimentado,
+        "qtd_lote_movimentado": mov.quantidade,
+    }
+
+    validade_movido = validade_por_lote.get(mov.lote_movimentado) if mov.lote_movimentado else None
+    base["validade_lote_movimentado"] = validade_movido
+
+    sem_resultado = {
+        "lote_mais_antigo_disponivel": None,
+        "qtd_lote_mais_antigo_disponivel": None,
+        "validade_mais_antiga_disponivel": None,
+    }
+
+    if validade_movido is None:
+        return {**base, **sem_resultado, "quebra_fefo": False, "status": STATUS_SEM_VALIDADE_LOTE_MOVIMENTADO}
+
+    candidatos = [l for l in lotes_fabrica_por_sku.get(mov.sku, []) if l.lote != mov.lote_movimentado]
+    if not candidatos:
+        status = STATUS_INCONCLUSIVO if mov.sku in skus_fabrica_com_lote_sem_validade else STATUS_OK_ALMOX_VAZIO
+        return {**base, **sem_resultado, "quebra_fefo": False, "status": status}
+
+    mais_antigos = [l for l in candidatos if l.data_validade < validade_movido]
+    if not mais_antigos:
+        return {**base, **sem_resultado, "quebra_fefo": False, "status": STATUS_OK}
+
+    lote_antigo = min(mais_antigos, key=lambda l: l.data_validade)
+    return {
+        **base,
+        "quebra_fefo": True,
+        "status": STATUS_QUEBRA_NATIVA,
+        "lote_mais_antigo_disponivel": lote_antigo.lote,
+        "qtd_lote_mais_antigo_disponivel": lote_antigo.quantidade,
+        "validade_mais_antiga_disponivel": lote_antigo.data_validade,
+    }
+
+
+def recalcular_quebra_fefo_nativa(db: Session, datas: list[date] | None = None) -> dict:
+    """Recalcula ChecagemFefoMovimento - todo o histórico de
+    MovimentacaoLoteDiaria (chamado sem argumento, ex: pelo agendador diário
+    em scheduler.py, pra refletir o LoteShelfLife mais atual mesmo em dias
+    sem reimportação nova) ou só os dias informados em `datas` (chamado
+    depois de importar um arquivo novo). Idempotente: apaga e recria as
+    ChecagemFefoMovimento dos dias recalculados antes de gravar de novo."""
+    q = db.query(models.MovimentacaoLoteDiaria)
+    if datas:
+        q = q.filter(models.MovimentacaoLoteDiaria.data.in_(datas))
+    movimentos = q.all()
+
+    validade_por_lote: dict[str, date] = {}
+    lotes_fabrica_por_sku: dict[str, list] = defaultdict(list)
+    skus_fabrica_com_lote_sem_validade: set[str] = set()
+
+    for l in db.query(models.LoteShelfLife).filter(models.LoteShelfLife.ativo.is_(True)).all():
+        if l.lote and l.data_validade and l.lote not in validade_por_lote:
+            validade_por_lote[l.lote] = l.data_validade
+        if l.almoxarifado == ALMOXARIFADO_FABRICA and l.sku and (l.quantidade or 0) > 0:
+            if l.data_validade:
+                lotes_fabrica_por_sku[l.sku].append(l)
+            else:
+                skus_fabrica_com_lote_sem_validade.add(l.sku)
+
+    datas_afetadas = sorted({m.data for m in movimentos})
+    if movimentos:
+        ids_afetados = [m.id for m in movimentos]
+        db.query(models.ChecagemFefoMovimento).filter(
+            models.ChecagemFefoMovimento.movimentacao_lote_diaria_id.in_(ids_afetados)
+        ).delete(synchronize_session=False)
+
+    total_avaliados = 0
+    total_quebras = 0
+    for mov in movimentos:
+        if not _movimento_eh_origem_fabrica(mov.movimento, mov.almoxarifado_raw):
+            continue  # Fábrica é destino (ou almoxarifado não identificado) - fora do escopo deste motor
+        total_avaliados += 1
+        campos = _avaliar_quebra_fefo(mov, validade_por_lote, lotes_fabrica_por_sku, skus_fabrica_com_lote_sem_validade)
+        if campos["quebra_fefo"]:
+            total_quebras += 1
+        db.add(models.ChecagemFefoMovimento(movimentacao_lote_diaria_id=mov.id, **campos))
+
+    return {
+        "movimentos_avaliados": total_avaliados,
+        "quebras_detectadas": total_quebras,
+        "dias_recalculados": [str(d) for d in datas_afetadas],
+    }
+
+
+def calcular_resumo_checagem_fefo_movimento(db: Session) -> dict:
+    """Agrega ChecagemFefoMovimento pro card do dashboard/MBR - MESMOS
+    nomes de campo do resumo antigo (baseado em ChecagemFefo), de propósito,
+    pra não precisar tocar no frontend que já consome esse contrato (só o
+    texto do rótulo mudou - ver claude/checagens-fefo-heuristica-quebrada.md).
+    O que muda de fato é a fonte e o critério por trás de cada número."""
+    checagens = db.query(models.ChecagemFefoMovimento).all()
+    total = len(checagens)
+    quebras = [c for c in checagens if c.quebra_fefo]
+    sem_dado = [c for c in checagens if c.status in (STATUS_SEM_VALIDADE_LOTE_MOVIMENTADO, STATUS_INCONCLUSIVO)]
+
+    top_skus = Counter(c.sku for c in quebras if c.sku).most_common(10)
+    top_destinos = Counter(c.almoxarifado_destino for c in quebras if c.almoxarifado_destino).most_common(10)
+
+    avaliaveis = total - len(sem_dado)
+
+    return {
+        "total_transferencias_avaliadas": total,
+        "total_quebras_fefo": len(quebras),
+        "total_dentro_do_criterio": total - len(quebras) - len(sem_dado),
+        "total_sem_dado_suficiente": len(sem_dado),
+        "taxa_quebra_pct": round(len(quebras) / avaliaveis * 100, 2) if avaliaveis else None,
+        "top_skus_com_quebra": [{"sku": sku, "quebras": qtd} for sku, qtd in top_skus],
+        "top_destinos_com_quebra": [{"almoxarifado_destino": destino, "quebras": qtd} for destino, qtd in top_destinos],
     }

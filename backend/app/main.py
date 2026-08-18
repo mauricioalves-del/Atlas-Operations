@@ -35,6 +35,7 @@ with SessionLocal() as _db_seed:
 
 from . import scheduler
 scheduler.iniciar_agendador()
+scheduler.iniciar_agendador_fefo()
 
 
 def _bootstrap_admin_inicial():

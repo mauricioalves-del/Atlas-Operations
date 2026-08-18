@@ -1,83 +1,138 @@
 """
 Módulo FEFO (First-Expired-First-Out) - detecção de quebras na
-movimentação de saída da Fábrica (18/08/2026). Ver app/fefo.py pra regra
-de cálculo (documentada lá, com a suposição sinalizada pra validação do
-usuário) e models.ChecagemFefo pro formato do resultado guardado.
+movimentação de saída da Fábrica (18/08/2026). Motor de cálculo nativo
+(20/08/2026) baseado em lote movimentado (ver app/fefo.py e
+claude/checagens-fefo-heuristica-quebrada.md pra histórico/regra completa);
+models.ChecagemFefo/Transferencia (heurística antiga) e a "Auditoria FEFO
+importada" (relatórios já prontos do André) continuam existindo como
+features separadas - ver docstrings correspondentes.
 """
 import io
-from collections import Counter
 from datetime import date
 from typing import Optional
 import openpyxl
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models
 from ..database import get_db
 from ..deps import obter_usuario_atual, requer_papel
 from ..audit import registrar_log
 from .. import fefo
-from ..fefo import recalcular_checagens_fefo
 
 router = APIRouter(prefix="/fefo", tags=["fefo"])
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# Motor NATIVO de checagem de FEFO por lote movimentado (20/08/2026) - ver
+# docstring da seção equivalente em app/fefo.py e
+# claude/checagens-fefo-heuristica-quebrada.md no Atlas Operations pro
+# porquê disso substituir o cálculo antigo baseado em Transferencia/
+# ChecagemFefo (desativado, 89,85% de falso positivo).
+# ═════════════════════════════════════════════════════════════════════════
+
+@router.post("/movimentacao/importar")
+async def importar_movimentacao_lote(
+    arquivos: list[UploadFile] = File(...),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Importa um ou mais Excels de movimentação bruta POR LOTE
+    ("Movimentação - Lt.xlsx", a mesma exportação que o André já usa no
+    processo dele - ver Auditar_FEFO.ipynb, ler_movimentacao()). Um arquivo
+    pode trazer vários dias de uma vez; reimportar substitui só os dias
+    presentes no arquivo novo. Recalcula a checagem de FEFO automaticamente
+    ao final de cada importação (além do recálculo diário automático em
+    background - ver scheduler.py)."""
+    resultados = []
+    for arquivo in arquivos:
+        conteudo = await arquivo.read()
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+        except Exception as e:
+            resultados.append({"arquivo": arquivo.filename, "erro": f"Não consegui abrir o Excel: {e}"})
+            continue
+        ws = wb[wb.sheetnames[0]]
+        linhas_brutas = list(ws.iter_rows(values_only=True))
+        if not linhas_brutas:
+            resultados.append({"arquivo": arquivo.filename, "erro": "Planilha vazia."})
+            continue
+        cabecalho = [str(c).strip() if c is not None else "" for c in linhas_brutas[0]]
+        faltando = [c for c in fefo.COLUNAS_MOVIMENTACAO_LOTE_DIARIA if c not in cabecalho]
+        if faltando:
+            resultados.append({
+                "arquivo": arquivo.filename,
+                "erro": f"Colunas obrigatórias não encontradas: {faltando}. Cabeçalho encontrado: {cabecalho}",
+            })
+            continue
+        linhas = [dict(zip(cabecalho, linha)) for linha in linhas_brutas[1:] if any(v is not None for v in linha)]
+        resultado = fefo.importar_movimentacao_lote_diaria(db, linhas, arquivo.filename, usuario.username)
+        resultados.append({"arquivo": arquivo.filename, **resultado})
+
+    db.commit()
+    registrar_log(db, usuario.username, "importar_movimentacao_lote", detalhes={"arquivos": [r["arquivo"] for r in resultados]})
+    total_importadas = sum(r.get("linhas_importadas", 0) for r in resultados)
+    total_quebras = sum(r.get("quebras_detectadas", 0) for r in resultados)
+    total_erros = sum(1 for r in resultados if "erro" in r)
+    return {"arquivos_processados": len(resultados), "arquivos_com_erro": total_erros,
+            "linhas_importadas": total_importadas, "quebras_detectadas": total_quebras, "detalhe": resultados}
+
+
 @router.post("/recalcular")
 def recalcular(usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
-    """Roda a checagem de FEFO pra toda transferência elegível (origem =
-    Fábrica) e atualiza o resultado guardado - chamar depois de reimportar
-    a planilha de lotes (Lote_Sistema) ou o livro-caixa bruto/
-    transferências, pra refletir o estado mais recente."""
-    resultado = recalcular_checagens_fefo(db)
+    """Roda o motor nativo de checagem de FEFO (compara o lote que de fato
+    saiu da Fábrica contra os lotes do mesmo SKU que ficaram lá) pra todo o
+    histórico de movimentação por lote importado, e atualiza o resultado
+    guardado - chamar depois de reimportar a planilha de lotes
+    (Lote_Sistema), mesmo sem reimportar movimentação nova."""
+    resultado = fefo.recalcular_quebra_fefo_nativa(db)
     registrar_log(db, usuario.username, "recalcular_fefo", detalhes=resultado)
     db.commit()
     return resultado
 
 
-@router.get("/checagens", response_model=list[schemas.ChecagemFefoOut])
+@router.get("/checagens")
 def listar_checagens(
-    resultado: Optional[str] = Query(None, description="Quebra_Fefo | Dentro_Do_Criterio | Sem_Dado_Suficiente"),
+    apenas_quebras: bool = False,
     sku: Optional[str] = None,
     almoxarifado_destino: Optional[str] = None,
     usuario: models.Usuario = Depends(obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.ChecagemFefo)
-    if resultado:
-        q = q.filter(models.ChecagemFefo.resultado == resultado)
+    """Detalhamento do motor nativo (ChecagemFefoMovimento) - um registro
+    por movimento de saída da Fábrica avaliado, com o lote que de fato
+    saiu e, quando houve quebra, o lote mais antigo que deveria ter saído."""
+    q = db.query(models.ChecagemFefoMovimento)
+    if apenas_quebras:
+        q = q.filter(models.ChecagemFefoMovimento.quebra_fefo.is_(True))
     if sku:
-        q = q.filter(models.ChecagemFefo.sku == sku)
+        q = q.filter(models.ChecagemFefoMovimento.sku == sku)
     if almoxarifado_destino:
-        q = q.filter(models.ChecagemFefo.almoxarifado_destino == almoxarifado_destino)
-    return q.order_by(models.ChecagemFefo.data_saida.desc()).all()
+        q = q.filter(models.ChecagemFefoMovimento.almoxarifado_destino == almoxarifado_destino)
+    registros = q.order_by(models.ChecagemFefoMovimento.data.desc(), models.ChecagemFefoMovimento.id.desc()).limit(2000).all()
+    return [
+        {
+            "id": r.id, "data": str(r.data), "sku": r.sku, "descricao_produto": r.descricao_produto,
+            "movimento": r.movimento, "almoxarifado_destino": r.almoxarifado_destino,
+            "lote_movimentado": r.lote_movimentado, "qtd_lote_movimentado": r.qtd_lote_movimentado,
+            "validade_lote_movimentado": str(r.validade_lote_movimentado) if r.validade_lote_movimentado else None,
+            "quebra_fefo": r.quebra_fefo, "status": r.status,
+            "lote_mais_antigo_disponivel": r.lote_mais_antigo_disponivel,
+            "qtd_lote_mais_antigo_disponivel": r.qtd_lote_mais_antigo_disponivel,
+            "validade_mais_antiga_disponivel": str(r.validade_mais_antiga_disponivel) if r.validade_mais_antiga_disponivel else None,
+        }
+        for r in registros
+    ]
 
 
 @router.get("/dashboard/resumo")
 def dashboard_resumo(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
-    """Total de transferências avaliadas (saídas da Fábrica com checagem
-    já calculada), quantas quebraram o critério de FEFO, taxa de quebra,
-    e os SKUs/destinos mais frequentes nas quebras - pro indicador do
-    MBR. Rodar POST /fefo/recalcular antes se os dados de transferência ou
-    de lotes tiverem mudado desde a última checagem."""
-    checagens = db.query(models.ChecagemFefo).all()
-    total = len(checagens)
-    quebras = [c for c in checagens if c.resultado == "Quebra_Fefo"]
-    sem_dado = [c for c in checagens if c.resultado == "Sem_Dado_Suficiente"]
-
-    top_skus = Counter(c.sku for c in quebras).most_common(10)
-    top_destinos = Counter(c.almoxarifado_destino for c in quebras if c.almoxarifado_destino).most_common(10)
-
-    avaliaveis = total - len(sem_dado)  # taxa de quebra só faz sentido sobre o que pôde ser avaliado
-
-    return {
-        "total_transferencias_avaliadas": total,
-        "total_quebras_fefo": len(quebras),
-        "total_dentro_do_criterio": total - len(quebras) - len(sem_dado),
-        "total_sem_dado_suficiente": len(sem_dado),
-        "taxa_quebra_pct": round(len(quebras) / avaliaveis * 100, 2) if avaliaveis else None,
-        "top_skus_com_quebra": [{"sku": sku, "quebras": qtd} for sku, qtd in top_skus],
-        "top_destinos_com_quebra": [{"almoxarifado_destino": destino, "quebras": qtd} for destino, qtd in top_destinos],
-    }
+    """Total de movimentos avaliados (saídas da Fábrica com checagem já
+    calculada pelo motor nativo), quantos quebraram o critério de FEFO,
+    taxa de quebra, e os SKUs/destinos mais frequentes nas quebras - pro
+    indicador do MBR. Rodar POST /fefo/recalcular antes se os dados de
+    movimentação ou de lotes tiverem mudado desde a última checagem."""
+    return fefo.calcular_resumo_checagem_fefo_movimento(db)
 
 
 # ═════════════════════════════════════════════════════════════════════════

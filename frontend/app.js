@@ -6118,6 +6118,46 @@ document.getElementById("btn-importar-shelf-life").addEventListener("click", asy
   }
 });
 
+// ---------- Movimentação por Lote (FEFO nativo, 20/08/2026) ----------
+// Alimenta o motor de checagem de FEFO por lote (ver app/fefo.py,
+// recalcular_quebra_fefo_nativa) - a movimentação diária normal não guarda
+// qual lote saiu, então essa é a única fonte que dá pra comparar de fato
+// "o lote que saiu" contra "o lote que deveria ter saído primeiro".
+document.getElementById("btn-importar-mvlote").addEventListener("click", async () => {
+  const input = document.getElementById("mvlote-input-arquivos");
+  const resultado = document.getElementById("mvlote-resultado-importacao");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione ao menos um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  Array.from(input.files).forEach((f) => form.append("arquivos", f));
+  const btn = document.getElementById("btn-importar-mvlote");
+  btn.disabled = true;
+  resultado.textContent = `Importando ${input.files.length} arquivo(s)...`;
+  try {
+    const res = await apiFetch(`${API}/fefo/movimentacao/importar`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const erros = (data.detalhe || []).filter((d) => d.erro);
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) em ${data.arquivos_processados - data.arquivos_com_erro} arquivo(s) · ${data.quebras_detectadas} quebra(s) detectada(s)${
+      data.arquivos_com_erro ? ` · ${data.arquivos_com_erro} arquivo(s) com erro: ${erros.map((e) => `${e.arquivo} (${e.erro})`).join("; ")}` : ""
+    }`;
+    input.value = "";
+    // se a tela FEFO já foi carregada nesta sessão, atualiza os dados dela também
+    if (typeof carregarFefo === "function" && document.getElementById("fefo-kpi-row")) {
+      carregarFefo();
+    }
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ---------- hub orbital (tela inicial) ----------
 function renderizarHub() {
   const container = document.getElementById("hub-nodes");
@@ -7054,10 +7094,12 @@ document.getElementById("btn-atualizar-historico-movimentados").addEventListener
 
 document.getElementById("btn-ver-fefo-detalhe").addEventListener("click", () => mostrarView("fefo"));
 
-// ---------- FEFO (18/08/2026) ----------
+// ---------- FEFO (18/08/2026 - motor antigo por Transferencia; 20/08/2026:
+// substituído pelo motor nativo por lote movimentado, ver app/fefo.py e
+// claude/checagens-fefo-heuristica-quebrada.md) ----------
 async function carregarFefo() {
-  const resultado = document.getElementById("fefo-filtro-resultado").value;
-  const qs = resultado ? "?" + new URLSearchParams({ resultado }).toString() : "";
+  const apenasQuebras = document.getElementById("fefo-filtro-resultado").value === "quebras";
+  const qs = apenasQuebras ? "?" + new URLSearchParams({ apenas_quebras: "true" }).toString() : "";
 
   const [dashboard, checagens] = await Promise.all([
     apiFetch(`${API}/fefo/dashboard/resumo`).then((r) => r.json()),
@@ -7065,7 +7107,7 @@ async function carregarFefo() {
   ]);
 
   document.getElementById("fefo-kpi-row").innerHTML = [
-    { label: "Transferências avaliadas", value: dashboard.total_transferencias_avaliadas },
+    { label: "Movimentos avaliados", value: dashboard.total_transferencias_avaliadas },
     { label: "Quebras de FEFO", value: dashboard.total_quebras_fefo, cor: "var(--critico)" },
     { label: "Taxa de quebra", value: dashboard.taxa_quebra_pct != null ? dashboard.taxa_quebra_pct + "%" : "—", cor: "var(--critico)" },
     { label: "Dentro do critério", value: dashboard.total_dentro_do_criterio, cor: "var(--sucesso, #2e7d32)" },
@@ -7078,20 +7120,18 @@ async function carregarFefo() {
     ? dashboard.top_skus_com_quebra.map((s) => `<tr><td>${s.sku}</td><td>${s.quebras}</td></tr>`).join("")
     : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
 
-  const corResultado = { Quebra_Fefo: "var(--critico)", Dentro_Do_Criterio: "var(--sucesso, #2e7d32)", Sem_Dado_Suficiente: "var(--muted)" };
   document.querySelector("#tabela-fefo-checagens tbody").innerHTML = checagens.length
     ? checagens
         .map(
           (c) => `<tr>
-            <td>${c.sku}</td><td class="col-descricao">${c.descricao_produto || "—"}</td><td>${c.almoxarifado_destino || "—"}</td>
-            <td>${c.data_saida ? formatarDataCurta(c.data_saida) : "—"}</td><td>${c.quantidade_transferida ?? "—"}</td>
-            <td>${c.lote_mais_antigo_sku || "—"}</td><td>${c.validade_lote_mais_antigo ? formatarDataCurta(c.validade_lote_mais_antigo) : "—"}</td>
-            <td>${c.dias_uteis_em_aberto ?? "—"}</td>
-            <td style="color:${corResultado[c.resultado] || "inherit"}">${c.resultado.replace(/_/g, " ")}</td>
+            <td>${c.sku || "—"}</td><td class="col-descricao">${c.descricao_produto || "—"}</td><td>${c.movimento || "—"}</td>
+            <td>${c.lote_movimentado || "—"}</td><td>${c.validade_lote_movimentado ? formatarDataCurta(c.validade_lote_movimentado) : "—"}</td>
+            <td>${c.lote_mais_antigo_disponivel || "—"}</td><td>${c.validade_mais_antiga_disponivel ? formatarDataCurta(c.validade_mais_antiga_disponivel) : "—"}</td>
+            <td style="color:${c.quebra_fefo ? "var(--critico)" : "inherit"}">${c.status || "—"}</td>
           </tr>`
         )
         .join("")
-    : `<tr><td colspan="9" style="color:var(--muted)">Nenhuma checagem calculada ainda - clique em "Recalcular".</td></tr>`;
+    : `<tr><td colspan="8" style="color:var(--muted)">Nenhuma checagem calculada ainda - importe a "Movimentação por Lote (FEFO)" na tela Importar e clique em "Recalcular".</td></tr>`;
 
   carregarAuditoriaFefo();
 }

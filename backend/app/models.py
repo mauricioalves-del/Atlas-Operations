@@ -700,9 +700,21 @@ class ChecagemFefo(Base):
     (First-Expired-First-Out) sobre uma Transferencia que saiu do
     almoxarifado de Fábrica pra outro almoxarifado (18/08/2026).
 
-    Regra implementada (documentada pra validação/ajuste com o usuário -
-    ver conversa de 18/08/2026 sobre a lógica de FEFO): pra cada
-    Transferencia com origem = Fábrica, olha em LoteShelfLife todos os
+    DESATIVADA em 20/08/2026 - a tela "FEFO — Quebras na Movimentação" não
+    escreve/lê mais esta tabela (ver ChecagemFefoMovimento abaixo). Motivo:
+    o cálculo abaixo nunca comparou de fato o lote que saiu contra o lote
+    mais antigo - só checava "já passaram 5 dias úteis desde a data da
+    transferência (não importa se foi ontem ou há 8 meses) E existe algum
+    lote desse SKU com estoque na Fábrica hoje", o que classificava quase
+    toda transferência antiga como quebra (89,85% no relatório que o
+    usuário mostrou, contra ~4,6% da Auditoria FEFO importada, que usa
+    dado real de lote). Causa raiz e decisão documentadas no Atlas
+    Operations (claude/checagens-fefo-heuristica-quebrada.md). Classe e
+    tabela mantidas só pra não quebrar quem eventualmente já tenha linhas
+    históricas gravadas aqui - não é mais escrita.
+
+    Regra ORIGINAL (mantida no código só como registro histórico): pra
+    cada Transferencia com origem = Fábrica, olha em LoteShelfLife todos os
     lotes do mesmo SKU que estavam na Fábrica com data_validade ANTERIOR
     à do lote mais provável de ter sido movido (não é possível saber com
     certeza QUAL lote fisicamente saiu, porque a importação diária de
@@ -711,11 +723,7 @@ class ChecagemFefo(Base):
     (validade menor) do mesmo SKU que ainda aparece com quantidade > 0 na
     Fábrica depois da transferência, e essa situação persiste por mais
     de 5 dias úteis (a janela operacional mencionada pelo usuário), isso
-    é registrado como quebra. Guardar o resultado calculado (em vez de
-    calcular on-the-fly a cada carregamento de tela) porque o cálculo
-    depende do estado do LoteShelfLife NO MOMENTO da checagem - se a
-    planilha de lotes for reimportada depois, o resultado histórico não
-    deve mudar retroativamente."""
+    é registrado como quebra."""
     __tablename__ = "checagens_fefo"
     id = Column(Integer, primary_key=True, autoincrement=True)
     transferencia_id = Column(Integer, ForeignKey("transferencias.id"), nullable=False, index=True)
@@ -733,6 +741,76 @@ class ChecagemFefo(Base):
     calculado_em = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (UniqueConstraint("transferencia_id", name="uq_checagem_fefo_transferencia"),)
+
+
+class MovimentacaoLoteDiaria(Base):
+    """Movimentação bruta POR LOTE (20/08/2026) - a mesma exportação
+    "Movimentação - Lt.xlsx" que o estagiário (André) já usa no próprio
+    processo de auditoria (ver Auditar_FEFO.ipynb, função
+    ler_movimentacao()). Diferente de Transferencia/MovimentacaoBruta (o
+    resto do Atlas), essa planilha registra QUAL lote se moveu
+    (id_lote), não só SKU/quantidade - é o dado bruto que falta pro Atlas
+    conseguir comparar de fato "o lote que saiu" contra "o lote que
+    deveria ter saído primeiro", em vez de adivinhar (ver
+    fefo.calcular_quebra_fefo_nativa e o histórico do porquê isso
+    substituiu ChecagemFefo em claude/checagens-fefo-heuristica-quebrada.md
+    no Atlas Operations).
+
+    Um arquivo pode trazer vários dias de uma vez (é assim que o sistema de
+    origem exporta). Reimportar substitui só os dias presentes no arquivo
+    novo (escopo por data, igual à Auditoria FEFO importada) - não apaga
+    outros dias já importados antes."""
+    __tablename__ = "movimentacoes_lote_diaria"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data = Column(Date, index=True, nullable=False)
+    sku = Column(String, index=True, nullable=True)
+    descricao_produto = Column(String, nullable=True)
+    documento = Column(String, nullable=True)
+    movimento = Column(String, nullable=True)  # texto bruto "Origem -> Destino" (desc_movimento)
+    almoxarifado_raw = Column(String, nullable=True)  # desc_almox bruto da planilha de origem
+    quantidade = Column(Float, nullable=True)
+    lote_movimentado = Column(String, index=True, nullable=True)  # id_lote - o dado que faltava em Transferencia
+    arquivo_origem = Column(String, nullable=True)
+    importado_por = Column(String, nullable=True)
+    importado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class ChecagemFefoMovimento(Base):
+    """Resultado do motor NATIVO de checagem de FEFO (20/08/2026) -
+    substitui ChecagemFefo/calcular_checagem_fefo (ver docstring de
+    ChecagemFefo pro porquê). Pra cada movimento de saída da Fábrica em
+    MovimentacaoLoteDiaria, compara o lote que de fato saiu
+    (lote_movimentado) contra os lotes do mesmo SKU que continuam na
+    Fábrica com validade MAIS ANTIGA e estoque positivo (LoteShelfLife) -
+    se existir um lote assim que não seja o que saiu, é quebra de FEFO.
+    Mesma lógica que Auditar_FEFO.ipynb do André usa (analisar_fefo) -
+    ver fefo.py pro detalhamento e pra a taxonomia de status.
+
+    Recalculado automaticamente a cada importação nova de
+    MovimentacaoLoteDiaria, e uma vez por dia em background (ver
+    scheduler.py) - reflete sempre o LoteShelfLife mais recente, então
+    reimportar Lote_Sistema.xlsx muda o resultado de checagens já
+    calculadas (ao contrário do ChecagemFefo antigo, que congelava o
+    resultado - aqui o resultado É o estado atual, recalculado, não um
+    histórico congelado). Escopo de substituição por DIA, igual à
+    MovimentacaoLoteDiaria."""
+    __tablename__ = "checagens_fefo_movimento"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    movimentacao_lote_diaria_id = Column(Integer, ForeignKey("movimentacoes_lote_diaria.id"), nullable=False, index=True)
+    data = Column(Date, index=True, nullable=False)
+    sku = Column(String, index=True, nullable=True)
+    descricao_produto = Column(String, nullable=True)
+    movimento = Column(String, nullable=True)
+    almoxarifado_destino = Column(String, nullable=True)
+    lote_movimentado = Column(String, nullable=True)
+    qtd_lote_movimentado = Column(Float, nullable=True)
+    validade_lote_movimentado = Column(Date, nullable=True)
+    quebra_fefo = Column(Boolean, default=False, index=True)
+    status = Column(String, nullable=True, index=True)  # mesma taxonomia da Auditoria FEFO importada
+    lote_mais_antigo_disponivel = Column(String, nullable=True)
+    qtd_lote_mais_antigo_disponivel = Column(Float, nullable=True)
+    validade_mais_antiga_disponivel = Column(Date, nullable=True)
+    calculado_em = Column(DateTime, default=datetime.utcnow)
 
 
 class ResumoMovimentacaoMensal(Base):

@@ -639,6 +639,13 @@
               <td><button class="btn-secundario" id="btn-importar-shelf-life">Importar</button></td>
               <td class="hint" id="sl-resultado-importacao"></td>
             </tr>
+            <tr>
+              <td>Movimentação por Lote (FEFO)</td>
+              <td><input type="file" id="mvlote-input-arquivos" accept=".xlsx,.xlsm" multiple></td>
+              <td>1ª aba do arquivo</td>
+              <td><button class="btn-secundario" id="btn-importar-mvlote">Importar</button></td>
+              <td class="hint" id="mvlote-resultado-importacao"></td>
+            </tr>
           </tbody>
         </table>
         <p class="hint" style="margin-top:8px">
@@ -651,6 +658,14 @@
           também são sempre desconsiderados do indicador, com ou sem a coluna Grupo. Ao contrário das demais fontes desta
           tabela, reimportar <strong>atualiza</strong> os lotes já conhecidos (por SKU + Lote + Almoxarifado) em vez de
           substituir tudo, e não apaga lotes cadastrados manualmente na tela Shelf Life.
+        </p>
+        <p class="hint" style="margin-top:8px">
+          <strong>Movimentação por Lote:</strong> a exportação "Movimentação - Lt.xlsx" (colunas
+          <code>id_produto, descricao, Data, doc, desc_movimento, desc_almox, qtd, id_lote</code>) — é o dado que alimenta o
+          motor nativo de checagem de FEFO na tela FEFO ("Checagens"), porque é a única fonte que registra QUAL lote de fato
+          saiu da Fábrica (a movimentação diária normal não guarda isso). Pode selecionar vários arquivos de uma vez; cada
+          um pode trazer vários dias — reimportar um dia substitui as linhas daquele dia, sem duplicar. A checagem de FEFO é
+          recalculada automaticamente ao final da importação, e também uma vez por dia em segundo plano.
         </p>
       </div>
 
@@ -1355,20 +1370,21 @@
         <h1>FEFO — Quebras na Movimentação</h1>
         <div class="filtros">
           <select id="fefo-filtro-resultado" class="select-filtro">
-            <option value="">Todos os resultados</option>
-            <option value="Quebra_Fefo">Quebra de FEFO</option>
-            <option value="Dentro_Do_Criterio">Dentro do critério</option>
-            <option value="Sem_Dado_Suficiente">Sem dado suficiente</option>
+            <option value="">Todos os movimentos avaliados</option>
+            <option value="quebras">Só quebras de FEFO</option>
           </select>
           <button id="btn-recalcular-fefo" class="btn-secundario">↻ Recalcular</button>
         </div>
       </header>
       <p class="hint">
-        Verifica se, ao transferir um SKU da Fábrica pra outro almoxarifado, existia um lote mais antigo (validade
-        menor) do mesmo SKU ainda parado na Fábrica há mais de 5 dias úteis — sinal de que a saída não seguiu a ordem
-        "primeiro que vence, primeiro que sai" (FEFO). Depende dos lotes cadastrados na tela Importar (linha "Lote de
-        Validade") estarem atualizados — clique em "Recalcular" depois de reimportar a planilha de lotes ou de
-        transferências.
+        Motor nativo (20/08/2026): pega cada saída da Fábrica na movimentação por lote importada e compara o LOTE QUE
+        DE FATO SAIU contra os lotes do mesmo SKU que continuam na Fábrica — se existe um lote com validade mais
+        antiga que não foi o que saiu, é quebra de FEFO ("primeiro que vence, primeiro que sai"). Depende da planilha
+        "Movimentação por Lote (FEFO)" e do "Lote de Validade (Shelf Life)" (tela Importar) estarem atualizados —
+        clique em "Recalcular" depois de reimportar qualquer um dos dois (a checagem também roda automaticamente a
+        cada importação nova e uma vez por dia em segundo plano). Não usa a planilha de exceções manualmente
+        validadas do processo do André — toda quebra detectada aqui é reportada, mesmo que já tenha sido revisada e
+        aprovada por fora do Atlas.
       </p>
 
       <div class="kpi-row" id="fefo-kpi-row"></div>
@@ -1384,7 +1400,7 @@
       <div class="panel">
         <h2>Checagens</h2>
         <table class="tabela" id="tabela-fefo-checagens">
-          <thead><tr><th>SKU</th><th>Descrição</th><th>Destino</th><th>Data saída</th><th>Qtd.</th><th>Lote mais antigo</th><th>Validade lote antigo</th><th>Dias úteis em aberto</th><th>Resultado</th></tr></thead>
+          <thead><tr><th>SKU</th><th>Descrição</th><th>Movimento</th><th>Lote Movimentado</th><th>Validade lote movimentado</th><th>Lote mais antigo disponível</th><th>Validade mais antiga</th><th>Status</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
