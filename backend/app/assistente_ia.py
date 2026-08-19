@@ -140,12 +140,20 @@ def _resumo_obsolescencia(db: Session) -> dict:
     return {"resumo": _calcular_risco_obsolescencia(db)["resumo"]}
 
 
-def montar_contexto(db: Session, usuario) -> dict:
+def montar_contexto(db: Session, usuario, pergunta_padrao: dict | None = None) -> dict:
     """Reúne tudo num "retrato" só do estado atual do Atlas. Cada bloco é
     isolado num try/except pra um problema num indicador (ex: banco muito
     novo, tabela vazia) não impedir os outros de aparecer nem derrubar o
     assistente inteiro - melhor responder com o que dá do que falhar tudo
-    por causa de 1 número."""
+    por causa de 1 número.
+
+    `pergunta_padrao` (opcional) é uma entrada do catálogo em
+    app/assistente_perguntas_padrao.py, já identificada pelo endpoint via
+    identificar_pergunta_padrao(pergunta) - ver módulo de pré-validação.
+    Quando ela tem um `contexto_extra_fn`, o resultado entra numa chave
+    dedicada (`detalhamento_para_esta_pergunta`), só pra essa pergunta - as
+    outras continuam recebendo só os blocos genéricos abaixo, sem o custo
+    extra de calcular um detalhamento que não vão usar."""
     contexto = {"data_hoje": str(date.today())}
 
     def _seguro(chave, calculo):
@@ -163,18 +171,35 @@ def montar_contexto(db: Session, usuario) -> dict:
     _seguro("risco_de_obsolescencia_baixo_giro", lambda: _resumo_obsolescencia(db))
     _seguro("risco_de_validade_shelf_life", lambda: shelf_life.calcular_resumo_shelf_life(db, incluir_itens=False))
     _seguro("fefo_transferencias", lambda: fefo.calcular_resumo_checagem_fefo_movimento(db))
+
+    if pergunta_padrao and pergunta_padrao.get("contexto_extra_fn"):
+        _seguro("detalhamento_para_esta_pergunta", lambda: pergunta_padrao["contexto_extra_fn"](db, usuario))
+
     return contexto
 
 
-def responder_pergunta_assistente(pergunta: str, contexto: dict) -> str:
+def responder_pergunta_assistente(pergunta: str, contexto: dict, pergunta_padrao: dict | None = None) -> str:
     """Manda a pergunta + o retrato atual do Atlas (montar_contexto) pro
     provedor de IA generativa, pedindo uma resposta curta, em português
     falado (sem markdown, sem listas com marcadores) - a resposta é lida em
     voz alta pelo navegador (ver falarResumoModulo em app.js), então texto
     corrido e direto funciona muito melhor que um formato de "relatório".
     Levanta ia_generativa.IAGenerativaIndisponivel se a IA não estiver
-    configurada ou a chamada falhar - o endpoint trata isso como 503."""
+    configurada ou a chamada falhar - o endpoint trata isso como 503.
+
+    `pergunta_padrao` (opcional, ver app/assistente_perguntas_padrao.py) dá
+    um "norte" extra pro prompt - a instrucao_extra da entrada do catálogo
+    que bateu com essa pergunta, indicando pra IA onde focar/qual bloco do
+    retrato usar. Sem isso, a IA depende só do bom senso pra achar o que
+    interessa dentro do retrato inteiro."""
     modulos_txt = "\n".join(f"- {m['modulo']}: {m['conteudo']}" for m in MAPA_MODULOS)
+    instrucao_padrao_txt = ""
+    if pergunta_padrao and pergunta_padrao.get("instrucao_extra"):
+        instrucao_padrao_txt = (
+            f"\nEssa pergunta foi reconhecida como uma pergunta padrão do tipo "
+            f"\"{pergunta_padrao['rotulo']}\" - siga esta orientação específica pra responder: "
+            f"{pergunta_padrao['instrucao_extra']}\n"
+        )
     prompt = f"""Você é o assistente de voz do Atlas, o sistema de inteligência de estoque da Magio Chocolates.
 Alguém acabou de te fazer esta pergunta, falando em voz alta: "{pergunta}"
 
@@ -188,7 +213,7 @@ aqui. Se a pergunta pedir algo que não está neste retrato (ex: um SKU específ
 ou um período diferente de hoje), diga isso claramente e indique em qual módulo da
 lista abaixo a pessoa provavelmente encontra essa informação, em vez de arriscar
 um palpite.
-
+{instrucao_padrao_txt}
 Retrato atual do Atlas (hoje é {contexto.get('data_hoje')}):
 {_json.dumps(contexto, ensure_ascii=False, indent=2, default=str)}
 

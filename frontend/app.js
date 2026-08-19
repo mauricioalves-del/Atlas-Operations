@@ -7060,6 +7060,18 @@ function _ehGatilhoAssistente(textoSemAtivacaoNormalizado) {
   return GATILHOS_ASSISTENTE_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
 }
 
+// (09/08/2026 - pedido do Maurício) Segunda forma de acionar o assistente por
+// voz, além de dizer "Atlas, [a pergunta toda]" numa frase só: dizer só
+// "Atlas, Assistente", esperar o convite ("Pois não. Pode perguntar.") e
+// então falar a pergunta separadamente, SEM precisar repetir "Atlas" antes
+// dela. Funciona com uma janela de tempo: quando o gatilho "Atlas,
+// Assistente" é reconhecido, guardamos até quando (Date.now() + janela) a
+// PRÓXIMA fala reconhecida deve ser tratada como a pergunta em si, não como
+// um novo comando de navegação. Zerada assim que consumida (uma pergunta por
+// acionamento) ou quando a janela expira sem nada ser dito.
+window.__atlasAguardandoPerguntaAssistenteAte = 0;
+const JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS = 10000; // 10s dá tempo do convite falado terminar (bloqueado por __atlasFalando) + a pessoa pensar e falar
+
 // Abre o hub (se não estiver nele) e rola/foca o painel do Assistente Atlas -
 // usado tanto pelo gatilho de voz "Atlas, Assistente" quanto por qualquer
 // botão equivalente. Fala um convite curto (respeitando window.__atlasFalando,
@@ -7166,6 +7178,23 @@ function configurarComandoDeVoz() {
         if (window.__atlasFalando) continue;
 
         const transcricao = resultado[0].transcript;
+
+        // (09/08/2026) Janela de "pergunta direta" aberta por um "Atlas,
+        // Assistente" anterior - a fala de AGORA é a pergunta em si, mesmo
+        // sem repetir "Atlas" antes. Verificado ANTES do requisito de palavra
+        // de ativação abaixo, exatamente pra dispensar esse requisito aqui.
+        // Consome a janela (só vale pra uma fala) e some se ela já expirou.
+        if (window.__atlasAguardandoPerguntaAssistenteAte > Date.now()) {
+          window.__atlasAguardandoPerguntaAssistenteAte = 0;
+          const perguntaDireta = (_removerPalavraDeAtivacaoTextoOriginal(transcricao) || transcricao).trim();
+          if (perguntaDireta) {
+            status.textContent = `🤔 Perguntando ao assistente: "${perguntaDireta}"...`;
+            perguntarAoAssistenteAtlas(perguntaDireta, { falarResposta: true, origemVoz: true });
+            _registrarComandoDeVozNoBanco(transcricao, null);
+          }
+          continue;
+        }
+
         const alvoNormalizado = _normalizarTextoVoz(transcricao);
         const ouviuPalavraDeAtivacao = _removerPalavraDeAtivacao(alvoNormalizado) !== alvoNormalizado;
         if (!ouviuPalavraDeAtivacao) continue; // ambiente/conversa normal, sem "Atlas" - ignora
@@ -7173,10 +7202,15 @@ function configurarComandoDeVoz() {
         const semAtivacao = _removerPalavraDeAtivacao(alvoNormalizado);
         if (_ehGatilhoAssistente(semAtivacao)) {
           // "Atlas, Assistente" (19/08/2026) - atalho direto pro painel do
-          // Assistente Atlas, sem precisar navegar manualmente até o hub.
-          status.textContent = `✅ "${transcricao}" → abrindo o Assistente Atlas`;
+          // Assistente Atlas, sem precisar navegar manualmente até o hub. Abre
+          // uma janela de "pergunta direta" (09/08/2026, ver
+          // window.__atlasAguardandoPerguntaAssistenteAte acima): a PRÓXIMA
+          // fala reconhecida, dita sem precisar repetir "Atlas", já é tratada
+          // como a pergunta em si.
+          status.textContent = `✅ "${transcricao}" → abrindo o Assistente Atlas. Pode perguntar.`;
           setTimeout(() => abrirPainelAssistenteAtlas(), 400);
           _registrarComandoDeVozNoBanco(transcricao, "hub");
+          window.__atlasAguardandoPerguntaAssistenteAte = Date.now() + JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS;
           continue;
         }
 
