@@ -6927,6 +6927,13 @@ function _removerPalavraDeAtivacao(alvoNormalizado) {
   return alvoNormalizado.replace(/^(e[ai]?\s+)?atlas[,\s]*/, "").trim();
 }
 
+// mesma regex de _removerPalavraDeAtivacao, mas aplicada direto no texto ORIGINAL
+// (sem normalizar) - usada só quando o texto vai ser mandado pro assistente de IA
+// generativa (25/08/2026), pra preservar acentos/maiúsculas da pergunta de verdade.
+function _removerPalavraDeAtivacaoTextoOriginal(transcricao) {
+  return transcricao.replace(/^\s*(e[ai]?\s+)?atlas[,\s]*/i, "").trim();
+}
+
 function _acharViewPorVoz(transcricao) {
   const alvo = _removerPalavraDeAtivacao(_normalizarTextoVoz(transcricao));
   let melhorView = null;
@@ -7013,10 +7020,17 @@ function configurarComandoDeVoz() {
         if (view) {
           status.textContent = `✅ "${transcricao}" → abrindo ${document.querySelector(`.rail-item[data-view="${view}"] .rail-label`)?.textContent || view}`;
           setTimeout(() => mostrarView(view), 400);
+          _registrarComandoDeVozNoBanco(transcricao, view);
         } else {
-          status.textContent = `❓ Ouvi "Atlas", mas não reconheci "${transcricao}" como um módulo.`;
+          // Não bateu com nenhum módulo conhecido - em vez de só dizer "não
+          // reconheci", trata como uma PERGUNTA pro assistente de IA generativa
+          // (25/08/2026, ver app/assistente_ia.py). Cobre "Atlas, resumo do dia",
+          // "Atlas, quais os motivos mais recorrentes de divergência" etc.
+          const pergunta = _removerPalavraDeAtivacaoTextoOriginal(transcricao) || transcricao;
+          status.textContent = `🤔 Ouvi "Atlas" - perguntando ao assistente: "${pergunta}"...`;
+          perguntarAoAssistenteAtlas(pergunta, { falarResposta: true, origemVoz: true });
+          _registrarComandoDeVozNoBanco(transcricao, null);
         }
-        _registrarComandoDeVozNoBanco(transcricao, view);
       }
     });
 
@@ -7089,6 +7103,67 @@ function configurarComandoDeVoz() {
 }
 
 configurarComandoDeVoz();
+
+// ---------- Assistente Atlas por voz/texto (25/08/2026 - ver app/assistente_ia.py) ----------
+// Chamado tanto pelo comando de voz contínuo do hub (ver "result" acima, quando
+// "Atlas, [algo]" não bate com nenhum módulo conhecido) quanto pelos botões/campo
+// de texto do painel "Assistente Atlas" na tela Início. Sempre passa pela mesma
+// rota (POST /assistente/perguntar), que devolve texto pronto pra mostrar E pra
+// falar (reaproveita falarResumoModulo, o mesmo motor de fala usado no resto do
+// Atlas - efeito sonoro de "pensando", voz grave etc.).
+async function perguntarAoAssistenteAtlas(pergunta, opcoes = {}) {
+  const { falarResposta = false, origemVoz = false } = opcoes;
+  const areaResposta = document.getElementById("assistente-atlas-resposta");
+  const statusVoz = document.getElementById("hub-voice-status");
+
+  if (areaResposta) {
+    areaResposta.classList.remove("hidden");
+    areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p class="hint">Pensando...</p>`;
+  }
+
+  try {
+    const res = await apiFetch(`${API}/assistente/perguntar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pergunta }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      const erro = data.detail || "Não foi possível obter uma resposta do assistente agora.";
+      if (areaResposta) {
+        areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p style="color:var(--critico)">⚠️ ${erro}</p>`;
+      }
+      if (origemVoz && statusVoz) statusVoz.textContent = `⚠️ ${erro}`;
+      return;
+    }
+
+    if (areaResposta) {
+      areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p>${data.resposta}</p>`;
+    }
+    if (origemVoz && statusVoz) statusVoz.textContent = `✅ Assistente respondeu a "${pergunta}".`;
+    if (falarResposta) falarResumoModulo(data.resposta);
+  } catch (e) {
+    console.warn("Atlas: falha ao perguntar ao assistente.", e);
+    if (areaResposta) {
+      areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p style="color:var(--critico)">⚠️ Não foi possível contactar o assistente agora.</p>`;
+    }
+    if (origemVoz && statusVoz) statusVoz.textContent = "⚠️ Não foi possível contactar o assistente agora.";
+  }
+}
+
+document.querySelectorAll(".btn-pergunta-rapida-assistente").forEach((btn) =>
+  btn.addEventListener("click", () => perguntarAoAssistenteAtlas(btn.dataset.pergunta, { falarResposta: true }))
+);
+document.getElementById("btn-perguntar-assistente").addEventListener("click", () => {
+  const input = document.getElementById("assistente-atlas-input");
+  const pergunta = input.value.trim();
+  if (!pergunta) return;
+  perguntarAoAssistenteAtlas(pergunta, { falarResposta: true });
+});
+document.getElementById("assistente-atlas-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") document.getElementById("btn-perguntar-assistente").click();
+});
 
 // ---------- Dashboard de Acompanhamento - Controle de Movimentados (19/08/2026) ----------
 // "Movimentação" aqui é Transferência entre almoxarifados (esclarecido pelo

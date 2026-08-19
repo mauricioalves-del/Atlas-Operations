@@ -165,6 +165,24 @@
         Clique num módulo pra abrir, ou diga em qualquer tela "Atlas, [nome do módulo]" — ex: "Atlas, cobertura de conferência". O microfone já escuta sozinho; clique nele só se quiser desligar.
       </p>
 
+      <div class="panel" id="painel-assistente-atlas" style="max-width:900px; margin:24px auto 0">
+        <div class="panel-title-row">
+          <h2>✨ Assistente Atlas</h2>
+          <span class="hint" style="margin:0">Diga "Atlas, resumo do dia" em qualquer tela, ou pergunte aqui</span>
+        </div>
+        <div class="filtros" style="margin-bottom:12px; flex-wrap:wrap">
+          <button class="btn-secundario btn-pergunta-rapida-assistente" data-pergunta="Resumo do dia">Resumo do dia</button>
+          <button class="btn-secundario btn-pergunta-rapida-assistente" data-pergunta="Quais são os motivos mais recorrentes de divergência?">Motivos mais recorrentes de divergência</button>
+          <button class="btn-secundario btn-pergunta-rapida-assistente" data-pergunta="Quais são os principais riscos pro negócio agora?">Riscos pro negócio</button>
+        </div>
+        <div class="filtros" style="margin-bottom:12px">
+          <input type="text" id="assistente-atlas-input" class="select-filtro" placeholder='Ou digite sua pergunta, ex: "onde encontro os pedidos de compra atrasados?"' style="flex:1; min-width:280px">
+          <button class="btn-primario" id="btn-perguntar-assistente">Perguntar</button>
+        </div>
+        <div id="assistente-atlas-resposta" class="hidden"></div>
+        <p class="hint" style="margin-top:8px">O assistente usa um modelo de IA generativa externo (opcional, sujeito a configuração no servidor) e responde só com dados já calculados pelo Atlas — nunca decide nada por conta própria.</p>
+      </div>
+
       <div class="panel" id="painel-mapa-demandas" style="max-width:1100px; margin:28px auto 0">
         <div class="panel-title-row">
           <h2>Mapa de Demandas de Gestão</h2>
@@ -1828,6 +1846,6 @@
   </div>
 </div>
 
-<script src="app.js?v=95"></script>
+<script src="app.js?v=96"></script>
 </body>
 </html>

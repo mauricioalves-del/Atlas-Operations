@@ -11,7 +11,7 @@ from .routers import (
     backup_router, ml_router, compras_router, voz_router,
     baixas_operacionais_router, integracoes_router, shelf_life_router,
     ajustes_inventario_router, producao_router, movimentados_router,
-    fefo_router, dashboards_externos_router,
+    fefo_router, dashboards_externos_router, assistente_router,
 )
 from . import models
 from .auth import hash_senha
@@ -102,6 +102,7 @@ app.include_router(producao_router.router, prefix="/api")
 app.include_router(movimentados_router.router, prefix="/api")
 app.include_router(fefo_router.router, prefix="/api")
 app.include_router(dashboards_externos_router.router, prefix="/api")
+app.include_router(assistente_router.router, prefix="/api")
 
 
 @app.get("/api/health")

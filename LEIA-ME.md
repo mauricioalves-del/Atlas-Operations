@@ -1,135 +1,132 @@
-# Atlas + IA Generativa — classificação e resumo automático de baixas e divergências
+# Atlas — Assistente por voz na tela Início (resumo do dia, dúvidas, navegação)
 
 ## O que você pediu
 
-Adicionar uma inteligência artificial ao Atlas, de forma gratuita — usando um
-token/chave gratuita de outro serviço de IA. E que a escolha do que essa IA
-faz fosse "Classificação/resumo automático de baixas e divergências".
+No módulo Início, com a IA já disponível, você quer usar o comando de voz
+que o Atlas já tem pra fazer perguntas abertas — por exemplo "Resumo do
+dia" trazendo um panorama do que foi feito/está planejado, dúvidas como
+"quais os motivos mais recorrentes de divergência" e riscos pro negócio, e
+ajuda pra encontrar onde alguma informação específica está no sistema.
 
-## O que foi implementado
+## O que já existia (reaproveitado, não recriado)
 
-Uma integração com **Google Gemini** (via Google AI Studio), que tem uma
-camada gratuita sem pedir cartão de crédito. Isso é diferente da "IA" que já
-existe no Atlas: hoje, toda divergência já passa por um motor de regras +
-um modelo estatístico treinado nos próprios dados do Atlas
-(`hipotese_regras`, `hipotese_ml`, `hipotese_ia` — sempre calculados, sem
-depender de nada externo). O que foi adicionado agora é um LLM externo,
-opcional, que só age quando alguém pede — por isso todo campo novo usa o
-prefixo `ia_gen_` (**IA Gen**erativa), bem separado dos campos que já
-existiam.
+O Atlas já tinha um comando de voz contínuo no hub: diga **"Atlas,
+[módulo]"** em qualquer tela (ex: "Atlas, cadastro") e ele navega pra lá —
+com efeito sonoro de "pensando", uma voz sintetizada em português e tudo.
+Antes, se você dissesse "Atlas" seguido de algo que **não** era o nome de
+um módulo, ele só respondia "não reconheci". Isso é exatamente o gancho
+que foi usado agora.
 
-Dois lugares novos na tela:
+## O que foi adicionado
 
-1. **Mapeamento de Passivos → "Ver todos os Passivos"**: cada baixa sem
-   leitura ainda tem um botão **"✨ Analisar"**; depois de analisada, mostra
-   um selo com a prioridade sugerida (Alta/Média/Baixa) e a categoria
-   sugerida (dentro do catálogo oficial de Hipóteses que o Atlas já usa —
-   passe o mouse pra ver o resumo em 1-2 frases). Tem também um botão
-   **"✨ Analisar pendentes com IA"** que processa várias baixas aprovadas de
-   uma vez (as de maior valor primeiro), com uma trava de segurança (no
-   máximo 25 por chamada, com pausa entre cada uma) pra não estourar a cota
-   gratuita.
-2. **Tela de detalhe de uma Divergência**: um painel novo, "Resumo por IA
-   Generativa", com o botão **"✨ Resumir com IA"** — pede pra IA traduzir,
-   numa leitura corrida em português, os sinais que já estão espalhados
-   pelos painéis de Evidências/Casos similares/Distribuição de
-   probabilidades.
+Quando "Atlas, ..." não bate com nenhum módulo conhecido, em vez de dizer
+"não reconheci", o Atlas agora manda essa frase pro **assistente por IA
+generativa** (o mesmo Gemini já integrado na entrega anterior) — que
+responde, e a resposta é **falada em voz alta** pelo mesmo motor de voz que
+já existia, além de aparecer escrita na tela. Cobre os três usos que você
+descreveu:
 
-Em nenhum dos dois casos a IA decide nada em definitivo — é sempre uma
-sugestão revisável, e nunca substitui `hipotese_aplicada` (baixas) ou
-`hipotese_ia`/`confianca_ia` (divergências).
+1. **"Resumo do dia"** — panorama do que já foi feito hoje (divergências
+   detectadas e resolvidas, baixas aprovadas, fechamentos de inventário
+   processados) e do que está planejado/pendente (ações de acompanhamento
+   pós-inventário em aberto e atrasadas).
+2. **Dúvidas de dados** — "quais os motivos mais recorrentes de
+   divergência" (calculado dos últimos 90 dias), "quais os principais
+   riscos pro negócio agora" (cruza passivo de baixas pendentes, risco de
+   obsolescência por baixo giro, risco de validade/Shelf Life e quebras de
+   FEFO — os MESMOS números que já alimentam o painel "Mapa de Demandas de
+   Gestão" da própria tela Início).
+3. **"Onde encontro X"** — o assistente conhece a lista de módulos do
+   Atlas e o que cada um mostra, e indica pra onde ir quando a pergunta é
+   sobre algo que não está no panorama que ele já tem em mãos.
 
-**Sem custo de dependência nova**: a chamada ao Gemini usa só `urllib`
-(biblioteca padrão do Python), o mesmo padrão que o Atlas já usa pra
-chamar a sincronização com o Lovable — não foi adicionado nenhum SDK/pacote
-novo ao `requirements.txt`.
+Também tem um jeito **sem usar voz**: um painel novo na tela Início
+("✨ Assistente Atlas") com 3 botões de pergunta rápida (Resumo do dia /
+Motivos mais recorrentes / Riscos pro negócio) e um campo de texto pra
+perguntar qualquer outra coisa — útil se o microfone não estiver disponível
+ou se você preferir digitar.
 
-## Como pegar a chave gratuita (você mesmo, com sua própria conta Google)
+## Como funciona por dentro (pra você entender o que a IA vê e não vê)
 
-Eu não posso criar contas nem preencher formulários de login/senha em seu
-nome — isso é uma trava de segurança da minha parte. Mas o passo a passo é
-rápido:
+A IA generativa **nunca consulta o banco de dados direto**. O Atlas monta
+primeiro um "retrato" com números já calculados (as mesmas funções que já
+alimentam outras telas — Mapa de Demandas, dashboards de FEFO/Shelf Life —
+mais contagens de hoje e o ranking dos motivos de divergência mais
+recorrentes) e manda esse retrato JUNTO com sua pergunta pra IA. Ou seja:
+a IA só traduz/organiza números que o próprio Atlas já calculou — ela não
+tem acesso a nada além disso, então não tem como "inventar" um dado que
+não exista. Se você perguntar algo fora desse retrato, o assistente admite
+que não tem esse dado à mão e indica em qual tela você provavelmente
+encontra a resposta, em vez de arriscar um palpite.
 
-1. Acesse **https://aistudio.google.com/apikey** e entre com uma conta
-   Google (a mesma do dia a dia serve).
-2. Clique em **"Create API key"** (ou "Criar chave de API").
-3. Copie a chave gerada (uma string longa, algo como `AIzaSy...`).
-4. **Não precisa cartão de crédito** para essa camada gratuita.
+Cada bloco do retrato (divergências, baixas, riscos etc.) é calculado de
+forma isolada — se um deles falhar por algum motivo, os outros continuam
+aparecendo normalmente (testei isso simulando uma falha de propósito).
 
-⚠️ **Importante sobre os limites da camada gratuita**: o Google define
-quantas chamadas por minuto e por dia a camada gratuita aceita, e esse
-número pode mudar com o tempo — confira o valor atual em
-https://ai.google.dev/gemini-api/docs/rate-limits antes de configurar em
-produção. Por isso o botão de análise em lote tem um limite de 25 itens por
-chamada (ajustável, ver `ia_generativa.py`) — analisar um volume muito
-grande de uma vez só pode estourar a cota do dia.
+**Sobre restrição por almoxarifado** (usuários com acesso restrito a
+alguns almoxarifados): os números de divergências/baixas de hoje e os
+motivos mais recorrentes já respeitam essa restrição. Os números de risco
+(obsolescência, Shelf Life, FEFO, passivo pendente) reaproveitados do Mapa
+de Demandas **não filtram por almoxarifado** — mas essa é uma limitação que
+já existe hoje na própria tela Início, não algo introduzido agora; corrigir
+isso é uma mudança maior, em vários módulos, fora do escopo deste pedido.
 
-## Como configurar no Atlas (Render)
+**Sobre permissão de uso**: qualquer usuário logado pode perguntar
+(diferente da análise de baixas/divergências da entrega anterior, que é só
+pra admin/analista) — faz sentido aqui porque perguntar não altera nada no
+sistema, só ajuda a encontrar informação. Toda pergunta é registrada na
+Auditoria (ação `assistente_pergunta`), então dá pra ver quem perguntou o
+quê.
 
-No painel do Render (Environment do serviço do backend), adicione:
-
-- `ATLAS_IA_GENERATIVA_API_KEY` = a chave que você copiou no passo acima.
-  **Sem essa variável, o recurso fica desativado** — os botões de IA
-  continuam aparecendo, mas o clique devolve uma mensagem clara ("IA
-  generativa não configurada neste ambiente...") em vez de dar erro feio ou
-  quebrar a tela.
-- `ATLAS_IA_GENERATIVA_MODELO` (opcional) = por padrão usa
-  `gemini-2.0-flash` (rápido e dentro da cota gratuita pra esse uso). Só
-  precisa mudar se quiser testar outro modelo do Gemini.
-
-Depois de configurar, é só fazer o deploy de novo — nenhuma migração manual
-de banco é necessária, as colunas novas são criadas automaticamente na
-próxima vez que o Atlas subir (mesmo mecanismo de auto-migração que o resto
-do projeto já usa).
+**Não precisa de configuração nova**: usa a mesma chave
+`ATLAS_IA_GENERATIVA_API_KEY` que você já configurou (ou vai configurar) no
+Render, da entrega anterior. Sem essa chave, o assistente responde com uma
+mensagem clara ("IA generativa não configurada") em vez de dar erro feio.
 
 ## Validado
 
-- Subi o Atlas completo (FastAPI + SQLite) num banco isolado e testei de
-  ponta a ponta pela API real (não só a função isolada): status da IA
-  sem/com chave, análise de uma baixa, análise em lote (com e sem
-  pendentes), resumo de uma divergência, e que o papel "leitura" não
-  consegue acionar nenhuma das duas (só admin/analista podem, mesma regra
-  de outras ações que gastam algo externo).
-- Simulei a resposta do Gemini (sem gastar cota real, porque ainda não
-  tenho uma chave sua) pra confirmar que a categoria/prioridade/resumo são
-  gravados certinho e aparecem de volta no Mapeamento de Passivos e na
-  tela de detalhe da divergência.
-- Testei os casos de erro na integração isolada: chave ausente, HTTP 429
-  (cota excedida), HTTP 500, timeout, e resposta que não vem em JSON válido
-  (inclusive envolvida em ` ```json `) — todos tratados com mensagem clara,
-  nenhum quebra o resto do Atlas.
-- Testei que uma categoria ou prioridade fora do catálogo oficial (a IA
-  "inventando" um valor) cai num fallback seguro em vez de gravar lixo no
-  banco.
-- Validei a sintaxe do JavaScript novo (`node --check`) e o HTML do modal
-  (parser HTML) sem erros.
+- Testei `montar_contexto()` isoladamente com dados semeados (divergências
+  de hoje, resolvidas hoje, motivo recorrente, baixa aprovada hoje,
+  fechamento criado hoje, ação pós-inventário atrasada) e confirmei que
+  cada número bate exatamente com o esperado.
+- Testei o endpoint completo (`POST /assistente/perguntar`) via API real:
+  sem chave configurada (503, mensagem clara), pergunta vazia (400), com
+  chave (mock) respondendo "Resumo do dia" e uma pergunta de navegação,
+  registro na Auditoria, e que o papel "leitura" também consegue perguntar
+  (diferente da análise de baixas, que é só admin/analista).
+- Confirmei, pelo mock da chamada à IA, que o prompt enviado realmente leva
+  o retrato completo (inclusive o motivo mais recorrente calculado) E a
+  lista de módulos, e que pede texto livre (não JSON) — apropriado pra ser
+  falado em voz alta.
+- Testei a resiliência: forcei um erro de propósito num dos blocos do
+  retrato e confirmei que os outros blocos continuam calculados
+  normalmente, sem derrubar o assistente inteiro.
+- Validei a sintaxe do JavaScript (`node --check`) e do HTML novo (parser
+  HTML), e bumpei a versão do `app.js?v=96` no `index.html` pra garantir
+  que o navegador carregue a versão nova depois do deploy (cache-busting).
 
-**O que eu NÃO pude testar**: uma chamada real ao Gemini com uma chave de
-verdade, porque isso depende de você criar a sua conta. Recomendo, depois
-de configurar a chave no Render, clicar em "Analisar" numa baixa de teste
-pra confirmar que a resposta real do modelo também vem coerente — o
-comportamento de parsing/gravação já está validado, só a qualidade da
-resposta em si de um caso real ainda não foi vista por mim.
+**O que eu não pude testar**: uma resposta real do Gemini (mesma
+observação da entrega anterior — depende da sua chave), e o reconhecimento
+de voz do navegador em si (webkitSpeechRecognition só existe dentro de um
+navegador de verdade, não no ambiente onde rodo os testes) — mas essa parte
+do código não foi alterada, só o que acontece quando ela NÃO reconhece um
+módulo.
 
 ## Arquivos alterados/criados
 
-- `backend/app/ia_generativa.py` **(novo)** — toda a integração com o
-  provedor de IA generativa (chamada HTTP, parsing, validação, prompts).
-- `backend/app/models.py` — campos novos `ia_gen_*` em `BaixaOperacional` e
-  `Divergencia`.
-- `backend/app/database.py` — migração automática (`ALTER TABLE`) das
-  colunas novas.
-- `backend/app/schemas.py` — `DivergenciaOut` passa a incluir
-  `ia_gen_resumo`/`ia_gen_analisado_em`.
-- `backend/app/routers/baixas_operacionais_router.py` — endpoints
-  `GET /baixas-operacionais/ia-generativa/status`,
-  `POST /baixas-operacionais/{id}/analisar-ia`,
-  `POST /baixas-operacionais/analisar-ia-lote`; `dashboard/itens` agora
-  devolve os campos `ia_gen_*`.
-- `backend/app/routers/divergencias_router.py` — endpoint
-  `POST /divergencias/{id}/resumir-ia`.
-- `frontend/app.js` e `frontend/index.html` — botões "Analisar"/"Analisar
-  pendentes com IA" no modal de Passivos, e painel "Resumo por IA
-  Generativa" na tela de detalhe da divergência.
+- `backend/app/assistente_ia.py` **(novo)** — monta o retrato do estado
+  atual do Atlas e o prompt pro assistente responder.
+- `backend/app/ia_generativa.py` — `_chamar_gemini` ganhou um parâmetro
+  `esperar_json` (o assistente pede texto livre, as duas integrações
+  anteriores continuam pedindo JSON estruturado, sem mudança de
+  comportamento pra elas).
+- `backend/app/routers/assistente_router.py` **(novo)** — endpoint
+  `POST /assistente/perguntar`.
+- `backend/app/main.py` — registra o novo router.
+- `frontend/app.js` — comando de voz sem módulo reconhecido agora pergunta
+  ao assistente (em vez de só dizer "não reconheci"); painel novo
+  "Assistente Atlas" com botões de pergunta rápida + campo de texto.
+- `frontend/index.html` — markup do painel novo; `app.js?v=96` (cache-busting).
 
-Nenhuma migração manual de banco necessária.
+Nenhuma migração de banco necessária (nenhum campo novo em modelo
+existente nesta entrega).

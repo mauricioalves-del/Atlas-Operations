@@ -85,7 +85,12 @@ def status_ia_generativa() -> dict:
     }
 
 
-def _chamar_gemini(prompt: str, timeout_segundos: int = 30) -> str:
+def _chamar_gemini(prompt: str, timeout_segundos: int = 30, esperar_json: bool = True, temperatura: float = 0.2) -> str:
+    """`esperar_json=True` (padrão, usado por classificar_e_resumir_baixa/
+    resumir_divergencia) força o Gemini a devolver só JSON válido. O
+    assistente por voz (app/assistente_ia.py) chama com `esperar_json=False`
+    - quer texto corrido em português, pra ser lido em voz alta, não um
+    objeto estruturado."""
     cfg = _config()
     if not cfg["api_key"]:
         raise IAGenerativaIndisponivel(
@@ -97,9 +102,12 @@ def _chamar_gemini(prompt: str, timeout_segundos: int = 30) -> str:
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{cfg['modelo']}:generateContent?key={cfg['api_key']}"
     )
+    generation_config = {"temperature": temperatura}
+    if esperar_json:
+        generation_config["responseMimeType"] = "application/json"
     corpo = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+        "generationConfig": generation_config,
     }).encode("utf-8")
     requisicao = urllib.request.Request(url, data=corpo, method="POST")
     requisicao.add_header("Content-Type", "application/json")
