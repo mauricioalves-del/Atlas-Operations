@@ -38,9 +38,10 @@ IMPORTANTE - limitações conhecidas e assumidas nesta versão:
     pela operação. Fácil de ajustar depois se não bater com o apetite de
     risco real do time.
 """
+import calendar
 import re
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 
 from pptx import Presentation
@@ -54,6 +55,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from . import shelf_life as shelf_life_mod
+from . import fefo as fefo_mod
 from . import dashboards_externos_extrator as dash_ext
 from .routers import (
     fechamento_router, baixas_operacionais_router, movimentados_router,
@@ -600,6 +602,43 @@ def _extrair_dashboard_externo_por_nome(db: Session, nome_alvo: str, extrator, m
     return resultado
 
 
+def _extrair_resumo_auditoria_fefo(db: Session, mes: str) -> dict:
+    """FEFO do MBR (20/08/2026): pedido do usuário pra trocar a fonte do slide de
+    FEFO do dashboard "Controle de FEFO" (Auditoria > Outros Dashboards,
+    dashboards_externos_extrator.extrair_fefo) pela "Auditoria FEFO importada"
+    (models.AuditoriaFefo / fefo.calcular_resumo_auditoria_fefo) - a mesma base
+    que já alimenta o painel "Auditoria FEFO — histórico importado" na tela FEFO.
+    Motivo (mensagem do usuário): "o mesmo tem mais informações e bases de
+    registro" - de fato o AuditoriaFefo guarda lote movimentado, validade e o
+    lote mais antigo disponível por registro, enquanto o dashboard externo só
+    tinha os totais já agregados pelo estagiário.
+
+    Diferente de _extrair_dashboard_externo (que lê um DashboardExterno.html_content),
+    aqui os dados vêm de linhas já importadas na tabela AuditoriaFefo (Excel diário
+    ou dashboard HTML consolidado do André, importados na própria tela FEFO - ver
+    fefo.importar_auditoria_fefo_diaria/importar_auditoria_fefo_consolidada). Por
+    isso "enviado" aqui significa "existe ALGUMA linha de AuditoriaFefo já
+    importada" (não depende do mês do relatório), enquanto "tem_dados" depende do
+    mês (pode não ter nenhum registro DESTE mês específico)."""
+    algum_registro_existe = db.query(models.AuditoriaFefo.id).first() is not None
+    if not algum_registro_existe:
+        return {"tem_dados": False, "enviado": False, "mes": mes}
+
+    ano_int, mes_int = (int(parte) for parte in mes.split("-"))
+    data_inicio = date(ano_int, mes_int, 1)
+    ultimo_dia = calendar.monthrange(ano_int, mes_int)[1]
+    data_fim = date(ano_int, mes_int, ultimo_dia)
+
+    resumo = fefo_mod.calcular_resumo_auditoria_fefo(db, data_inicio, data_fim)
+    resumo["mes"] = mes
+    resumo["enviado"] = True
+    if not resumo.get("total_auditaveis"):
+        resumo["tem_dados"] = False
+    else:
+        resumo["tem_dados"] = True
+    return resumo
+
+
 # Chaves dos 5 slots nativos (ver dashboards_externos_router.SLOTS) - cada um já
 # tem slide dedicado com extração específica acima; qualquer outra chave de
 # DashboardExterno é um indicador dinâmico (18/08/2026, ver _coletar_dashboards_extras).
@@ -690,10 +729,13 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # Dashboards externos (Auditoria > Outros Dashboards) - substituem/complementam
         # números calculados pelo Atlas por dados reais dos arquivos .html que a equipe
         # já mantém em paralelo, pedido do usuário (20/08/2026, ver dashboards_externos_extrator.py).
-        # FEFO descarta de vez o cálculo do próprio Atlas (fefo_router) - o gerador de RAW
-        # é o dashboard dedicado, que já classifica cada transferência a partir dos arquivos
-        # de auditoria reais, não de uma comparação contra o estoque de lote atual.
-        "fefo_externo": _extrair_dashboard_externo(db, "controle_fefo", dash_ext.extrair_fefo, mes),
+        # FEFO (atualizado 20/08/2026, pedido do usuário: "use o arquivo HTML pra alimentar
+        # a construção do MBR no módulo FEFO, o mesmo tem mais informações e bases de
+        # registro" -> confirmado "Auditoria FEFO importada"): a fonte NÃO é mais o dashboard
+        # "Controle de FEFO" de Outros Dashboards, e sim a tabela AuditoriaFefo (já usada pelo
+        # painel "Auditoria FEFO — histórico importado" da tela FEFO) - ver
+        # _extrair_resumo_auditoria_fefo acima.
+        "fefo_externo": _extrair_resumo_auditoria_fefo(db, mes),
         "testes_industriais_externo": _extrair_dashboard_externo(db, "testes_industriais", dash_ext.extrair_testes_industriais, mes),
         # Os três abaixo não têm uma dimensão de mês limpa no arquivo de origem (ver
         # docstring de dashboards_externos_extrator.py) - entram no MBR como retrato
@@ -850,19 +892,19 @@ def _analise_geral(d: dict):
     elif movimentados.get("itens_analisados"):
         avancos.append(f"Controle de Movimentados ativo: {_fmt_num(movimentados['itens_analisados'])} item(ns) reconciliado(s) neste mês.")
 
-    # FEFO (20/08/2026) - modelo do próprio Atlas descartado por pedido do usuário: o cálculo
-    # antigo comparava a transferência com o estoque de lote ATIVO NO MOMENTO DO CÁLCULO, não
-    # com uma leitura tirada na hora exata da transferência. Agora vem do dashboard de Controle
-    # de FEFO (Auditoria > Outros Dashboards), que já classifica cada transferência a partir dos
-    # arquivos de auditoria reais - por isso entra como fato normal em avanços/atenções, com o
-    # mesmo limiar (_LIMIARES["fefo_quebra_pct"]) já usado no restante do relatório.
+    # FEFO (atualizado 20/08/2026, pedido do usuário: trocar a fonte pra "Auditoria FEFO
+    # importada", ver _extrair_resumo_auditoria_fefo) - histórico importado na própria tela
+    # FEFO (Excel diário ou dashboard HTML consolidado do André), com mais detalhe por
+    # registro (lote movimentado, validade, lote mais antigo disponível) do que o dashboard
+    # "Controle de FEFO" usado antes - por isso entra como fato normal em avanços/atenções,
+    # com o mesmo limiar (_LIMIARES["fefo_quebra_pct"]) já usado no restante do relatório.
     fefo = d["fefo_externo"]
     if fefo.get("tem_dados"):
         label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
         texto_fefo = (
             f"FEFO: taxa de quebra em {_fmt_pct(fefo['taxa_quebra_pct'])} neste mês "
-            f"({_fmt_num(fefo['quebras'])} de {_fmt_num(fefo['total_transferencias'])} transferências avaliadas, "
-            f"dados reais do dashboard de Controle de FEFO)."
+            f"({_fmt_num(fefo['total_quebras'])} de {_fmt_num(fefo['total_auditaveis'])} movimentos auditáveis, "
+            f"dados da Auditoria FEFO importada)."
         )
         if label_fefo == "Em avanço":
             avancos.append(texto_fefo)
@@ -872,13 +914,11 @@ def _analise_geral(d: dict):
             atencoes.append(texto_fefo + " — acima do limiar aceitável.")
     elif not fefo.get("enviado"):
         decisoes.append(
-            "Controle de FEFO ainda não foi enviado em Auditoria > Outros Dashboards — sem esse arquivo, o FEFO não "
-            "entra neste relatório com dado real."
+            "Auditoria FEFO importada ainda não tem nenhum histórico importado na tela FEFO — sem esse arquivo, o "
+            "FEFO não entra neste relatório com dado real."
         )
-    elif fefo.get("erro_extracao"):
-        decisoes.append("Controle de FEFO: não foi possível ler o arquivo enviado em Auditoria > Outros Dashboards — reenviar o .html.")
     else:
-        decisoes.append(f"Controle de FEFO: nenhuma transferência avaliada no arquivo enviado para {_nome_mes(fefo.get('mes', ''))}.")
+        decisoes.append(f"Auditoria FEFO importada: nenhum movimento auditável importado para {_nome_mes(fefo.get('mes', ''))}.")
 
     if not decisoes:
         decisoes.append("Manter a cadência atual de fechamento e monitoramento — sem decisão crítica pendente neste recorte.")
@@ -1722,44 +1762,53 @@ def _slide_externo_indisponivel(slide, dado: dict, nome_dashboard: str) -> bool:
 
 
 def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """FEFO (20/08/2026): modelo de cálculo do próprio Atlas DESCARTADO por pedido
-    do usuário (comparava a transferência com o estoque de lote ATIVO NO MOMENTO
-    DO CÁLCULO, não com uma leitura tirada na hora exata da transferência). Os
-    números agora vêm do dashboard de Controle de FEFO (Auditoria > Outros
-    Dashboards), que já classifica cada transferência a partir dos arquivos de
-    auditoria reais - filtrado pelo mês deste relatório
-    (ver dashboards_externos_extrator.extrair_fefo)."""
+    """FEFO (atualizado 20/08/2026, pedido do usuário: "use o arquivo HTML pra
+    alimentar a construção do MBR no módulo FEFO, o mesmo tem mais informações e
+    bases de registro" -> confirmado "Auditoria FEFO importada"). Fonte trocada do
+    dashboard "Controle de FEFO" (Auditoria > Outros Dashboards) pra AuditoriaFefo
+    - o histórico importado direto na tela FEFO (painel "Auditoria FEFO — histórico
+    importado"), com lote movimentado/validade/lote mais antigo disponível por
+    registro (ver fefo.calcular_resumo_auditoria_fefo e
+    _extrair_resumo_auditoria_fefo acima). NÃO reaproveita _slide_externo_indisponivel
+    porque essa fonte não vem de um DashboardExterno - o caminho de importação é a
+    tela FEFO, não Auditoria > Outros Dashboards."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "FEFO", mes_label, pagina, "Dados reais do dashboard de Controle de FEFO — filtrado pelo mês deste relatório")
+    _cabecalho(slide, "FEFO", mes_label, pagina, "Dados reais da Auditoria FEFO importada — filtrado pelo mês deste relatório")
 
     fefo = d["fefo_externo"]
 
-    if _slide_externo_indisponivel(slide, fefo, "Controle de FEFO"):
-        return slide
-
-    if not fefo.get("tem_dados"):
+    if not fefo.get("enviado"):
         _caixa_leitura(
-            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem transferências avaliadas em {mes_label}",
-            "O dashboard de Controle de FEFO enviado não tem transferências registradas para este mês — confira se o "
-            "arquivo está atualizado em Auditoria > Outros Dashboards.",
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Auditoria FEFO ainda não importada",
+            "Nenhum histórico foi importado ainda no painel \"Auditoria FEFO — histórico importado\" da tela FEFO "
+            "(Excel diário ou dashboard HTML consolidado) — sem esse histórico, o FEFO não entra neste relatório "
+            "com dado real.",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
         )
         return slide
 
-    transf = d["resumo_transferencias"]
+    if not fefo.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem movimentos auditáveis em {mes_label}",
+            "A Auditoria FEFO importada não tem movimentos auditáveis registrados para este mês — confira se o "
+            "histórico do período está importado no painel \"Auditoria FEFO — histórico importado\" da tela FEFO.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
     label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_num(transf["total_transferencias"]), "rotulo": "Transferências Registradas (Atlas)"},
-        {"valor": _fmt_num(fefo["total_transferencias"]), "rotulo": "Avaliadas no Mês (Controle de FEFO)", "cor": COR_INFO},
-        {"valor": _fmt_num(fefo["quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["quebras"] else COR_SUCESSO},
+        {"valor": _fmt_num(fefo["total_auditaveis"]), "rotulo": "Movimentos Auditáveis no Mês", "cor": COR_INFO},
+        {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
         {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
+        {"valor": _fmt_num(fefo.get("total_sem_correspondencia")), "rotulo": "Sem Correspondência no Mês"},
     ], altura=1.25)
 
-    top = fefo.get("top_produtos_quebra") or []
+    top = fefo.get("top_produtos_com_quebra") or []
     if top:
         categorias = [t["produto"][:26] for t in reversed(top)]
-        valores = [t["qtd"] for t in reversed(top)]
+        valores = [t["quebras"] for t in reversed(top)]
         _texto(slide, MARGEM_IN, 3.05, 6.3, 0.26, "PRODUTOS COM MAIS QUEBRAS NO MÊS", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
         _grafico_categoria(slide, MARGEM_IN, 3.35, 6.3, 2.55, categorias, "Quebras", valores,
                             tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='0')
@@ -1770,18 +1819,23 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
     x_direita = MARGEM_IN + 6.3 + 0.35
     largura_direita = LARGURA_IN - MARGEM_IN - x_direita
     _texto(slide, x_direita, 3.05, largura_direita, 0.26, "QUEBRAS POR DESTINO", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    por_destino = fefo.get("por_destino") or []
+    por_destino = fefo.get("top_destinos_com_quebra") or []
     if por_destino:
-        linhas = [[pd["destino"][:24], _fmt_num(pd["total"]), _fmt_num(pd["quebras"]), _fmt_pct(pd["taxa_pct"])] for pd in por_destino]
-        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Destino", "Total", "Quebras", "Taxa"], linhas,
-                larguras_relativas=[2.2, 1.0, 1.0, 1.0], tamanho_fonte=10.5)
+        linhas = [[pd["destino"][:30], _fmt_num(pd["quebras"])] for pd in por_destino]
+        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Destino", "Quebras"], linhas,
+                larguras_relativas=[2.6, 1.0], tamanho_fonte=10.5)
     else:
         _caixa_leitura(slide, x_direita, 3.35, largura_direita, 2.25, "Por destino", "Sem dados de destino neste mês.")
 
+    fontes = fefo.get("fontes_no_periodo") or []
+    fontes_label = " + ".join(
+        "auditoria diária" if f == "auditoria_diaria" else "dashboard consolidado" if f == "dashboard_consolidado" else f
+        for f in fontes
+    ) or "—"
     _texto(
         slide, MARGEM_IN, 6.15, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        f"Fonte: dashboard de Controle de FEFO (Auditoria > Outros Dashboards), enviado em {fefo.get('enviado_em') or '—'} — "
-        f"{_fmt_num(fefo.get('inconclusivos'))} transferência(s) inconclusiva(s) neste mês não entram na taxa de quebra.",
+        f"Fonte: Auditoria FEFO importada (tela FEFO), origem no mês: {fontes_label} — "
+        f"{_fmt_num(fefo.get('total_sem_correspondencia'))} movimento(s) sem correspondência neste mês não entram na taxa de quebra.",
         tamanho=10, cor=CINZA_TEXTO,
     )
     return slide

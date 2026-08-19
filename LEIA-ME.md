@@ -1,72 +1,84 @@
-# Shelf Life — lotes já baixados continuavam no Farol como "Vencido"
+# MBR — slide de FEFO agora usa a Auditoria FEFO importada
 
-## O problema
+## O pedido
 
-Você mostrou a tela "Lotes em risco" com 3 itens de sorvete (SKUs
-05004156, 05004157, 05004158, lotes "V.06052026...") aparecendo como
-"Vencido" — mesmo já tendo sido baixados/consumidos no sistema real (não
-aparecem mais na planilha `Lote_Sistema.xlsx` mais recente).
+Você pediu: "Use o arquivo HTML para alimentar a construção do MBR no módulo
+FEFO. O mesmo tem mais informações e bases de registro." Como havia duas
+fontes de FEFO possíveis no Atlas hoje, perguntei qual — e você confirmou
+**"Auditoria FEFO importada"**: a mesma base que já alimenta o painel
+"Auditoria FEFO — histórico importado" na tela FEFO (importada por lá via
+Excel diário do André ou pelo dashboard HTML consolidado dele).
 
-## Causa raiz
+## O que mudou
 
-O importador da planilha de Lote de Validade (`importar_linhas_lote_sistema`)
-foi construído de propósito pra NUNCA apagar nada que não estivesse na
-planilha nova — a ideia original era proteger lotes cadastrados manualmente
-na tela. Só que isso também significava que um lote vindo de uma
-importação ANTERIOR, e que sumiu da planilha porque foi consumido/baixado
-no sistema real, ficava marcado como ativo pra sempre — reimportar a
-planilha atualizava os lotes que continuavam lá, mas nunca desativava os
-que saíram dela. Confirmei isso diretamente: os 3 SKUs do seu print não
-aparecem em nenhuma linha do arquivo `Lote_Sistema.xlsx` mais recente que
-você já tinha enviado — ou seja, são resíduo de uma importação mais
-antiga.
+Antes, o slide de FEFO do MBR (e o bloco de FEFO no Resumo Executivo) vinham
+do dashboard "Controle de FEFO", enviado em Auditoria > Outros Dashboards —
+um arquivo com só os totais já agregados pelo estagiário.
 
-## Correção
+Agora os dois vêm da tabela **Auditoria FEFO importada**, que tem muito mais
+detalhe por registro: lote movimentado, validade do lote, e qual seria o
+lote mais antigo disponível na Fábrica. Isso é a mesma base já usada no
+painel "Auditoria FEFO — histórico importado" da própria tela FEFO — não
+precisa importar nada de novo pra alimentar o MBR, só manter esse painel
+atualizado como você já faz.
 
-Agora, toda vez que você reimporta a planilha de Lote de Validade, qualquer
-lote que:
+### Slide de FEFO
 
-- tenha vindo de uma importação de planilha anterior (não cadastro manual), **e**
-- não apareça em NENHUMA linha da planilha nova,
+- KPIs trocados: "Movimentos Auditáveis no Mês", "Quebras de FEFO", "Taxa de
+  Quebra" e "Sem Correspondência no Mês" (antes comparava com o total de
+  transferências do Atlas, o que não fazia mais sentido com a fonte nova).
+- Gráfico de produtos com mais quebras: mesma ideia, agora a partir da
+  Auditoria FEFO importada.
+- Tabela de quebras por destino: simplificada pra Destino + Quebras (a fonte
+  nova não tem o "total movimentado por destino" que o dashboard antigo
+  trazia — só quantas quebras por destino).
+- Rodapé mostra a origem dos dados do mês (auditoria diária e/ou dashboard
+  consolidado) e quantos movimentos ficaram sem correspondência (não contam
+  na taxa de quebra).
+- Se a Auditoria FEFO importada nunca recebeu nenhum histórico, o slide
+  mostra um aviso apontando pro painel certo ("Auditoria FEFO — histórico
+  importado" na tela FEFO) — não mais pra Outros Dashboards, que não é o
+  caminho certo pra essa fonte.
+- Se o histórico existe mas não tem nenhum movimento auditável NO MÊS do
+  relatório, mostra um aviso separado (sem confundir com "nunca foi
+  importado").
 
-é automaticamente **desativado** (sai do Farol e do Mapeamento de Risco de
-Obsolescência). Não apago a linha do banco — só marco como inativo, pra
-manter o histórico e pra o caso de o item voltar a aparecer numa planilha
-futura (ex: reposição de estoque), quando ele é reativado automaticamente
-com a validade/quantidade novas.
+### Resumo Executivo
 
-**Lotes cadastrados manualmente na tela Shelf Life continuam protegidos** —
-uma importação de planilha nunca desativa um lote manual, só os que vieram
-de uma importação anterior.
+O texto de FEFO em Avanços/Atenções/Decisões foi atualizado pros mesmos
+números (movimentos auditáveis, quebras, taxa) e pra citar "Auditoria FEFO
+importada" em vez do dashboard antigo.
 
-O resultado da importação agora também informa quantos itens foram
-desativados (ex: "1.060 atualizado(s) · 3 desativado(s) (não aparecem mais
-na planilha)").
+## O que NÃO mudou
+
+O dashboard "Controle de FEFO" continua existindo em Auditoria > Outros
+Dashboards, se você ainda quiser consultá-lo por lá — só não alimenta mais o
+MBR. Não precisei remover nada dessa tela pra fazer essa troca.
 
 ## Validado
 
-Reproduzi exatamente o seu cenário num banco de teste: inseri os 3 lotes
-de sorvete como estavam na sua tela (ativos, "Vencido") e reimportei o
-`Lote_Sistema.xlsx` mais recente que você já tinha enviado. Resultado:
-1.060 lotes atualizados normalmente, e os 3 lotes de sorvete corretamente
-desativados — confirmei que eles não aparecem mais na lista de "Lotes em
-risco" depois da reimportação.
+Testei os três cenários possíveis do slide num banco de teste com histórico
+real de Auditoria FEFO (maio a agosto de 2026, 1.298 registros):
 
-Testei também os dois casos que não podiam quebrar: um lote cadastrado
-manualmente continuou ativo depois de reimportar a planilha (não foi
-tocado), e um lote que eu simulei "voltando a aparecer" numa planilha
-seguinte foi reativado normalmente com a validade e quantidade da nova
-linha.
+- **Mês com dado real** (julho/2026): 353 movimentos auditáveis, 22 quebras
+  (6,2%), 45 sem correspondência — slide e Resumo Executivo consistentes,
+  conferi visualmente (sem sobreposição, sem corte de texto).
+- **Histórico existe mas sem dado NESSE mês** (abril/2026, fora do período
+  importado): mostra o aviso certo, sem confundir com "nunca foi
+  importado".
+- **Nenhum histórico importado ainda**: mostra o aviso apontando pro painel
+  "Auditoria FEFO — histórico importado" da tela FEFO.
 
-## Arquivos alterados
+Também gerei o MBR completo (19 slides) pra julho/2026 e revisei o arquivo
+inteiro (`markitdown` + validador de estrutura do arquivo) sem nenhum
+problema.
 
-- `backend/app/shelf_life.py` — `importar_linhas_lote_sistema` agora
-  desativa lotes de importação que saíram da planilha.
-- `backend/app/routers/shelf_life_router.py` — docstring do endpoint
-  atualizada.
-- `frontend/app.js` — mostra a contagem de itens desativados no resultado
-  da importação.
-- `frontend/index.html` — hint da tela Importar explicando o novo
-  comportamento.
+## Arquivo alterado
 
-Nenhuma migração de banco necessária.
+- `backend/app/mbr_generator.py` — nova função
+  `_extrair_resumo_auditoria_fefo`, `_slide_fefo` reescrito, bloco de FEFO
+  do Resumo Executivo atualizado, e a coleta de dados do MBR (`fefo_externo`)
+  agora chama a fonte nova.
+
+Nenhuma migração de banco necessária — a tabela de Auditoria FEFO importada
+já existe e você já usa pra alimentar o painel da tela FEFO.
