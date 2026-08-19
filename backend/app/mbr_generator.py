@@ -41,6 +41,7 @@ IMPORTANTE - limitações conhecidas e assumidas nesta versão:
 import calendar
 import re
 import unicodedata
+from collections import defaultdict
 from datetime import date, datetime
 from io import BytesIO
 
@@ -59,7 +60,7 @@ from . import fefo as fefo_mod
 from . import dashboards_externos_extrator as dash_ext
 from .routers import (
     fechamento_router, baixas_operacionais_router, movimentados_router,
-    divergencias_router,
+    divergencias_router, cadastros_router,
 )
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,34 @@ def _status_menor_melhor(valor, bom, atencao):
     if valor <= atencao:
         return ("Atenção", COR_ATENCAO)
     return ("Crítico", COR_ERRO)
+
+
+def _status_evolucao(delta, menor_e_melhor=False, limiar=0.5):
+    """Classifica uma VARIAÇÃO (mês atual vs. anterior), não um nível absoluto
+    — usado pelos Scorecards de evolução/involução (Inventário por Almoxarifado,
+    Mapeamento de Riscos, 20/08/2026), que precisam responder "melhorou ou
+    piorou desde o mês passado", pergunta diferente de "está numa faixa boa
+    hoje" (essa segunda already respondida por _status_maior_melhor/
+    _status_menor_melhor). `menor_e_melhor=True` pra métricas onde cair é bom
+    (taxa de quebra, taxa de furo, gasto) — inverte o sinal antes de comparar
+    contra o limiar de relevância (pontos percentuais ou %, conforme a métrica;
+    variações menores que o limiar são tratadas como ruído, não avanço/involução
+    real)."""
+    if delta is None:
+        return ("Sem histórico", COR_SEM_DADO)
+    direcao = -delta if menor_e_melhor else delta
+    if direcao >= limiar:
+        return ("Evolução", COR_SUCESSO)
+    if direcao <= -limiar:
+        return ("Involução", COR_ERRO)
+    return ("Estável", COR_INFO)
+
+
+def _mes_anterior(mes: str) -> str:
+    ano, m = (int(parte) for parte in mes.split("-"))
+    if m == 1:
+        return f"{ano - 1}-12"
+    return f"{ano}-{m - 1:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +668,234 @@ def _extrair_resumo_auditoria_fefo(db: Session, mes: str) -> dict:
     return resumo
 
 
+def _coletar_scorecard_inventario_almoxarifado(db: Session, usuario: models.Usuario, mes: str) -> list:
+    """Scorecard de Inventário por Almoxarifado (20/08/2026, pedido do usuário:
+    "traga uma análise por almoxarifado, mostrando as evoluções e involuções.
+    Com um plano de ação para cada setor, baseado no histórico de inventários
+    e na conciliação de movimentados"). Combina, POR almoxarifado:
+    - Acurácia item-a-item do mês e a variação vs. o mês anterior
+      (fechamento_router.dashboard_evolucao_por_almox_mensal - já quebrado por
+      almoxarifado E mês; nenhuma outra função do Painel de Inventário tem as
+      duas dimensões ao mesmo tempo, ver claude/scorecards-inventario-riscos.md).
+    - IAP (acurácia ponderada por valor) do mês
+      (fechamento_router.dashboard_comparativo_por_almoxarifado - só o mês, sem
+      série, por isso não entra na variação, só como leitura complementar).
+    - Acurácia da reconciliação diária de Movimentados do mês e sua variação
+      (movimentados_router.dashboard_evolucao_mensal(almoxarifado=X) - só
+      devolve a série de UM almoxarifado por chamada, por isso o loop abaixo).
+    Não inventa "plano de ação" livre - a leitura e o próximo passo de cada
+    linha são montados por regra a partir desses mesmos números (ver
+    _linha_scorecard_almoxarifado)."""
+    almoxarifados = cadastros_router.listar_almoxarifados_cadastro(incluir_inativos=False, usuario=usuario, db=db)
+    comparativo_mes = {
+        item["almoxarifado"]: item
+        for item in fechamento_router.dashboard_comparativo_por_almoxarifado(mes=mes, usuario=usuario, db=db)
+    }
+    evolucao_fech_por_almox = defaultdict(list)
+    for linha in fechamento_router.dashboard_evolucao_por_almox_mensal(usuario=usuario, db=db):
+        evolucao_fech_por_almox[linha["almoxarifado"]].append(linha)
+
+    resultado = []
+    for almox in almoxarifados:
+        codigo = almox.codigo
+        serie_fech = sorted(
+            (l for l in evolucao_fech_por_almox.get(codigo, []) if l["mes"] <= mes), key=lambda l: l["mes"]
+        )
+        acuracia_pct = serie_fech[-1]["acuracia_pct"] if serie_fech else None
+        delta_acuracia_pp = None
+        if len(serie_fech) >= 2 and serie_fech[-1]["acuracia_pct"] is not None and serie_fech[-2]["acuracia_pct"] is not None:
+            delta_acuracia_pp = round(serie_fech[-1]["acuracia_pct"] - serie_fech[-2]["acuracia_pct"], 2)
+
+        serie_mov = sorted(
+            (l for l in movimentados_router.dashboard_evolucao_mensal(almoxarifado=codigo, usuario=usuario, db=db) if l["mes"] <= mes),
+            key=lambda l: l["mes"],
+        )
+        movimentados_pct = serie_mov[-1]["pct_acuracia"] if serie_mov else None
+        delta_movimentados_pp = None
+        if len(serie_mov) >= 2 and serie_mov[-1]["pct_acuracia"] is not None and serie_mov[-2]["pct_acuracia"] is not None:
+            delta_movimentados_pp = round(serie_mov[-1]["pct_acuracia"] - serie_mov[-2]["pct_acuracia"], 2)
+
+        comp = comparativo_mes.get(codigo)
+        resultado.append({
+            "almoxarifado": codigo,
+            "nome_exibicao": almox.nome_exibicao or codigo,
+            "acuracia_pct": acuracia_pct,
+            "delta_acuracia_pp": delta_acuracia_pp,
+            "iap_pct": comp.get("iap_pct") if comp else None,
+            "movimentados_pct": movimentados_pct,
+            "delta_movimentados_pp": delta_movimentados_pp,
+        })
+    return resultado
+
+
+def _linha_scorecard_almoxarifado(item: dict) -> dict:
+    """Classifica e escreve a leitura/próximo passo de UMA linha do Scorecard
+    de Inventário por Almoxarifado, por regra (sem heurística nova de negócio -
+    reaproveita os mesmos limiares de acurácia (_LIMIARES) já usados no resto
+    do MBR). Prioriza o pior dos dois sinais (fechamento vs. movimentados) pra
+    decidir o status da linha - um almoxarifado só está "em avanço" se os dois
+    estiverem, no mínimo, estáveis."""
+    delta_fech = item["delta_acuracia_pp"]
+    delta_mov = item["delta_movimentados_pp"]
+    label_fech, cor_fech = _status_evolucao(delta_fech)
+    label_mov, cor_mov = _status_evolucao(delta_mov)
+    ordem = {"Involução": 0, "Sem histórico": 1, "Estável": 2, "Evolução": 3}
+    if ordem[label_fech] <= ordem[label_mov]:
+        status_label, status_cor = label_fech, cor_fech
+    else:
+        status_label, status_cor = label_mov, cor_mov
+
+    partes_leitura = [f"Acurácia {_fmt_pct(item['acuracia_pct'])}"]
+    if delta_fech is not None:
+        sinal = "+" if delta_fech >= 0 else ""
+        partes_leitura.append(f"({sinal}{_fmt_pct(delta_fech)} vs. mês anterior)")
+    partes_leitura.append(f"· Movimentados {_fmt_pct(item['movimentados_pct'])}")
+    if delta_mov is not None:
+        sinal = "+" if delta_mov >= 0 else ""
+        partes_leitura.append(f"({sinal}{_fmt_pct(delta_mov)})")
+    if item.get("iap_pct") is not None:
+        partes_leitura.append(f"· IAP {_fmt_pct(item['iap_pct'])}")
+    leitura = " ".join(partes_leitura)
+
+    acuracia_critica = item["acuracia_pct"] is not None and item["acuracia_pct"] < _LIMIARES["acuracia"][1]
+    if label_fech == "Involução" and label_mov == "Involução":
+        proximo_passo = "Reconferência prioritária: acurácia e conciliação de movimentados pioraram juntas neste almoxarifado."
+    elif label_fech == "Involução":
+        proximo_passo = "Investigar causa raiz das divergências recorrentes de fechamento neste almoxarifado."
+    elif label_mov == "Involução":
+        proximo_passo = "Reforçar a conciliação diária de movimentados — reconciliação piorou vs. o mês anterior."
+    elif acuracia_critica:
+        proximo_passo = "Intensificar a cadência de conferência até a acurácia voltar pra faixa saudável."
+    elif label_fech == "Sem histórico" and label_mov == "Sem histórico":
+        proximo_passo = "Sem histórico suficiente ainda — acompanhar a partir do próximo fechamento."
+    else:
+        proximo_passo = "Manter a cadência atual de fechamento e conciliação — sem sinal de piora no mês."
+
+    return {
+        "frente": item["nome_exibicao"], "status_label": status_label, "status_cor": status_cor,
+        "leitura": leitura, "proximo_passo": proximo_passo,
+    }
+
+
+def _coletar_scorecard_mapeamento_riscos(db: Session, usuario: models.Usuario, mes: str, dados: dict) -> list:
+    """Scorecard de Mapeamento de Riscos (20/08/2026, pedido do usuário: "faça
+    o Scorecard por ação de mapeamento e controle [...] o indicador de
+    Dispersão de lote tem que ser apurado junto [...] bem como os testes
+    industriais e o mapeamento de FEFO que implicam em riscos para o
+    negócio [...] evoluções e involuções [...] e sugestão de próximos
+    passos"). Uma linha por ação de mapeamento/controle - reaproveita os
+    dicts já coletados em `dados` (resumo_shelf_life, mapeamento_risco_
+    obsolescencia, dispersao_ficha_tecnica_externo, testes_industriais_externo,
+    fefo_externo) e busca o MESMO indicador do mês anterior pra calcular a
+    variação, usando as mesmas funções de extração já existentes
+    (_extrair_resumo_auditoria_fefo, _extrair_dashboard_externo,
+    _extrair_dashboard_externo_por_nome) - só troca o `mes`. Shelf Life é
+    fotografia do dia (sem série mensal persistida, ver docstring de
+    shelf_life.py) - entra sem variação, avaliado só pelo nível atual."""
+    mes_ant = _mes_anterior(mes)
+    linhas = []
+
+    shelf = dados["resumo_shelf_life"]
+    risco_obs = dados["mapeamento_risco_obsolescencia"]
+    if risco_obs.get("quantidade_criticos"):
+        status_label, status_cor = "Crítico", COR_ERRO
+    elif shelf.get("total_lotes_em_risco"):
+        status_label, status_cor = "Atenção", COR_ATENCAO
+    else:
+        status_label, status_cor = "Em avanço", COR_SUCESSO
+    leitura = (
+        f"{_fmt_num(shelf.get('total_lotes_em_risco'))} lote(s) em risco ({_fmt_moeda(shelf.get('valor_total'))}) · "
+        f"{_fmt_num(risco_obs.get('quantidade_criticos'))} crítico(s) por giro zero — foto do dia, sem série mensal."
+    )
+    if risco_obs.get("quantidade_criticos"):
+        proximo_passo = "Ação comercial/promocional imediata nos itens críticos (giro zero) antes do vencimento."
+    elif shelf.get("total_lotes_em_risco"):
+        proximo_passo = "Priorizar consumo/transferência dos lotes vencidos ou a vencer em até 90 dias."
+    else:
+        proximo_passo = "Manter monitoramento — sem lote em risco relevante neste recorte."
+    linhas.append({"frente": "Shelf Life (Farol + Obsolescência)", "status_label": status_label,
+                   "status_cor": status_cor, "leitura": leitura, "proximo_passo": proximo_passo})
+
+    dispersao_atual = dados["dispersao_ficha_tecnica_externo"]
+    dispersao_ant = _extrair_dashboard_externo_por_nome(db, "Dispersão de Ficha Técnica", dash_ext.extrair_dispersao_ficha_tecnica, mes_ant)
+    linhas.append(_linha_risco_com_evolucao(
+        "Dispersão de Ficha Técnica (Produção)", dispersao_atual, dispersao_ant,
+        campo_pct="taxa_furo_pct", menor_e_melhor=True,
+        rotulo_pct="taxa de furo", tela_upload="Auditoria > Outros Dashboards",
+        texto_extra=lambda d: f"{_fmt_num(d.get('ops_criticas'))} OP(s) crítica(s), impacto líquido {_fmt_moeda(d.get('impacto_liquido'))}.",
+        passo_involucao="Investigar causa raiz nos materiais crônicos que mais furaram no mês.",
+        passo_estavel="Manter a auditoria de ficha técnica nos materiais críticos já mapeados.",
+    ))
+
+    testes_atual = dados["testes_industriais_externo"]
+    testes_ant = _extrair_dashboard_externo(db, "testes_industriais", dash_ext.extrair_testes_industriais, mes_ant)
+    linhas.append(_linha_risco_com_evolucao(
+        "Testes Industriais", testes_atual, testes_ant,
+        campo_pct="gasto_total", menor_e_melhor=True, eh_moeda=True,
+        rotulo_pct="gasto no mês", tela_upload="Auditoria > Outros Dashboards",
+        texto_extra=lambda d: f"{_fmt_num(d.get('ops'))} OP(s) testada(s), custo médio {_fmt_moeda(d.get('custo_medio_op'))} por OP.",
+        passo_involucao="Revisar consumo de matéria-prima em teste — gasto subiu além do esperado.",
+        passo_estavel="Manter o acompanhamento de custo por OP testada.",
+    ))
+
+    fefo_atual = dados["fefo_externo"]
+    fefo_ant = _extrair_resumo_auditoria_fefo(db, mes_ant)
+    linhas.append(_linha_risco_com_evolucao(
+        "FEFO (Auditoria importada)", fefo_atual, fefo_ant,
+        campo_pct="taxa_quebra_pct", menor_e_melhor=True,
+        rotulo_pct="taxa de quebra", tela_upload="tela FEFO ('Auditoria FEFO — histórico importado')",
+        texto_extra=lambda d: f"{_fmt_num(d.get('total_quebras'))} quebra(s) em {_fmt_num(d.get('total_auditaveis'))} movimento(s) auditável(is).",
+        passo_involucao="Investigar destinos com mais quebras registradas no mês (ver slide FEFO).",
+        passo_estavel="Manter a auditoria FEFO importada atualizada mês a mês.",
+    ))
+
+    return linhas
+
+
+def _linha_risco_com_evolucao(nome_frente, atual, anterior, campo_pct, menor_e_melhor, rotulo_pct,
+                               tela_upload, texto_extra, passo_involucao, passo_estavel, eh_moeda=False):
+    """Monta uma linha do Scorecard de Mapeamento de Riscos pra um indicador
+    externo (Dispersão de Ficha Técnica, Testes Industriais, FEFO) comparando
+    o mês do relatório com o anterior - trata de forma explícita os 3 estados
+    "sem dado real" que _slide_externo_indisponivel já usa nos slides
+    dedicados (nunca importado / erro de leitura / sem dado neste mês), pra
+    não fabricar uma leitura de "Estável"/"Evolução" sobre dado que não existe."""
+    fmt = _fmt_moeda if eh_moeda else _fmt_pct
+    if not atual.get("enviado"):
+        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
+                "leitura": f"Ainda não importado — sem dado real de {rotulo_pct} neste relatório.",
+                "proximo_passo": f"Importar/enviar este indicador em {tela_upload}."}
+    if atual.get("erro_extracao"):
+        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
+                "leitura": "Arquivo enviado não pôde ser lido (formato inesperado).",
+                "proximo_passo": f"Reenviar o arquivo em {tela_upload}."}
+    if not atual.get("tem_dados"):
+        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
+                "leitura": f"Nenhum dado neste mês para {rotulo_pct}.",
+                "proximo_passo": "Confirmar se o arquivo/histórico do período está atualizado."}
+
+    valor_atual = atual.get(campo_pct)
+    valor_anterior = anterior.get(campo_pct) if (anterior.get("enviado") and anterior.get("tem_dados") and not anterior.get("erro_extracao")) else None
+    delta = round(valor_atual - valor_anterior, 2) if (valor_atual is not None and valor_anterior is not None) else None
+    status_label, status_cor = _status_evolucao(delta, menor_e_melhor=menor_e_melhor)
+
+    partes = [f"{rotulo_pct.capitalize()} {fmt(valor_atual)}"]
+    if delta is not None:
+        sinal = "+" if delta >= 0 else ""
+        partes.append(f"({sinal}{fmt(delta)} vs. mês anterior)")
+    leitura = " ".join(partes) + " · " + texto_extra(atual)
+
+    if status_label == "Involução":
+        proximo_passo = passo_involucao
+    elif status_label == "Sem histórico":
+        proximo_passo = "Sem mês anterior para comparar — leitura de evolução aparece a partir do próximo mês."
+    else:
+        proximo_passo = passo_estavel
+
+    return {"frente": nome_frente, "status_label": status_label, "status_cor": status_cor,
+            "leitura": leitura, "proximo_passo": proximo_passo}
+
+
 # Chaves dos 5 slots nativos (ver dashboards_externos_router.SLOTS) - cada um já
 # tem slide dedicado com extração específica acima; qualquer outra chave de
 # DashboardExterno é um indicador dinâmico (18/08/2026, ver _coletar_dashboards_extras).
@@ -770,6 +1027,14 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     dados["dashboards_extras"] = _coletar_dashboards_extras(
         db, chaves_excluir={chave_dispersao_ficha} if chave_dispersao_ficha else None
     )
+
+    # Scorecards por almoxarifado/ação de mapeamento (20/08/2026, pedido do
+    # usuário) - montados depois do dict principal porque o de Riscos
+    # reaproveita indicadores já coletados acima (resumo_shelf_life,
+    # mapeamento_risco_obsolescencia, dispersao_ficha_tecnica_externo,
+    # testes_industriais_externo, fefo_externo) em vez de recalculá-los.
+    dados["scorecard_inventario_almoxarifado"] = _coletar_scorecard_inventario_almoxarifado(db, usuario, mes)
+    dados["scorecard_mapeamento_riscos"] = _coletar_scorecard_mapeamento_riscos(db, usuario, mes, dados)
 
     return dados
 
@@ -1672,6 +1937,40 @@ def _slide_mapeamento_risco_obsolescencia(prs: Presentation, mes_label: str, pag
     return slide
 
 
+def _slide_scorecard_mapeamento_riscos(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Scorecard de Mapeamento de Riscos (20/08/2026, pedido do usuário: "faça
+    o Scorecard por ação de mapeamento e controle [...] o indicador de
+    Dispersão de lote tem que ser apurado junto [...] bem como os testes
+    industriais e o mapeamento de FEFO que implicam em riscos para o
+    negócio [...] evoluções e involuções [...] e sugestão de próximos
+    passos"). Uma linha por ação de mapeamento/controle (Shelf Life,
+    Dispersão de Ficha Técnica, Testes Industriais, FEFO) - ver
+    _coletar_scorecard_mapeamento_riscos pra como cada linha é montada."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Scorecard de Mapeamento de Riscos", mes_label, pagina,
+               "Shelf Life, Dispersão de Ficha Técnica, Testes Industriais e FEFO — evolução vs. o mês anterior e próximo passo")
+
+    linhas_scorecard = d["scorecard_mapeamento_riscos"]
+    linhas_tabela = [
+        [(l["frente"], AZUL_INSTITUCIONAL, True), (l["status_label"], l["status_cor"], True),
+         (l["leitura"], CINZA_TEXTO, False), (l["proximo_passo"], CINZA_TEXTO, False)]
+        for l in linhas_scorecard
+    ]
+    _tabela(slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 3.6,
+            ["Ação de Mapeamento/Controle", "Status", "Leitura Executiva", "Próximo Passo"], linhas_tabela,
+            larguras_relativas=[1.8, 1.0, 3.6, 3.1], tamanho_fonte=12.5)
+
+    _texto(
+        slide, MARGEM_IN, 5.5, LARGURA_IN - 2 * MARGEM_IN, 0.7,
+        "Shelf Life é fotografia do dia (sem série mensal persistida) — avaliado pelo nível atual, não por variação. "
+        "Dispersão de Ficha Técnica, Testes Industriais e FEFO comparam o mês deste relatório com o mês anterior, "
+        "a partir dos mesmos arquivos/histórico já importados nas telas correspondentes.",
+        tamanho=10, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
 def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int, d: dict):
     """Controle de Movimentados (20/08/2026, pedido do usuário) - slide
     próprio, separado de FEFO: mede a reconciliação diária sistema x físico
@@ -1731,6 +2030,44 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
         texto_impacto = "Ainda não há dado suficiente pra comparar com o ponto de partida da implantação."
     _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.65, "Impacto da Implantação", texto_impacto,
                    cor_fundo=OFF_WHITE, tamanho_texto=12)
+    return slide
+
+
+def _slide_scorecard_inventario_almoxarifado(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Scorecard de Inventário por Almoxarifado (20/08/2026, pedido do
+    usuário: "traga uma análise por almoxarifado, mostrando as evoluções e
+    involuções. Com um plano de ação para cada setor, baseado no histórico
+    de inventários e na conciliação de movimentados"). Mesmo formato de
+    tabela do Scorecard do Mês (Seção 1) - Status aqui é sobre VARIAÇÃO vs.
+    o mês anterior (evolução/involução), não sobre nível absoluto (ver
+    _status_evolucao) - pergunta diferente da do Painel de Inventário, que
+    já mostra o nível atual por almoxarifado no slide anterior."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Scorecard de Inventário — por Almoxarifado", mes_label, pagina,
+               "Evolução vs. o mês anterior e plano de ação por almoxarifado, cruzando fechamento e Controle de Movimentados")
+
+    itens = d["scorecard_inventario_almoxarifado"]
+    if not itens:
+        _caixa_leitura(slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Sem almoxarifado cadastrado",
+                       "Nenhum almoxarifado ativo encontrado no Cadastro — sem base para montar o scorecard por setor.",
+                       cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13)
+        return slide
+
+    linhas_scorecard = [_linha_scorecard_almoxarifado(item) for item in itens]
+    ordem_status = {"Involução": 0, "Sem histórico": 1, "Estável": 2, "Evolução": 3}
+    linhas_scorecard.sort(key=lambda l: ordem_status.get(l["status_label"], 1))
+
+    linhas_tabela = [
+        [(l["frente"], AZUL_INSTITUCIONAL, True), (l["status_label"], l["status_cor"], True),
+         (l["leitura"], CINZA_TEXTO, False), (l["proximo_passo"], CINZA_TEXTO, False)]
+        for l in linhas_scorecard
+    ]
+    n = len(linhas_tabela)
+    tamanho_fonte = 11.5 if n <= 8 else (10.5 if n <= 11 else 9.5)
+    _tabela(slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, min(5.35, ALTURA_IN - 1.95),
+            ["Almoxarifado", "Status", "Leitura Executiva", "Próximo Passo"], linhas_tabela,
+            larguras_relativas=[1.6, 1.0, 3.6, 3.3], tamanho_fonte=tamanho_fonte)
     return slide
 
 
@@ -2285,6 +2622,119 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
     return slide
 
 
+def _slide_atlas_stock_savvy_visao(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Atlas + Stock Savvy (20/08/2026, pedido do usuário: "Análise também o
+    Controle desenvolvido em paralelo no lovable, o aplicativo 'Stock
+    Savvy'... venda a ideia de ambos os projetos na construção de um
+    controle robusto e eficiente"). Conteúdo baseado em navegação real pelo
+    Stock Savvy (stockswift-sync-75.lovable.app, workspace Lovable "Stock
+    Savvy" - ver claude/sincronizacao-lovable-baixas.md pro histórico da
+    integração já existente entre os dois sistemas), não só na descrição
+    do usuário - confirmei estrutura e dado real de cada módulo citado
+    (Produção, Shelf Life, Gestão) direto nas telas.
+
+    Posicionamento: os dois sistemas não competem - operam em camadas
+    diferentes da mesma operação. Stock Savvy é onde a ação acontece (
+    solicitar, escanear, aprovar com assinatura dupla, registrar uma ação de
+    lote com custo e recuperação); Atlas é onde as frentes se cruzam num
+    relatório executivo único, com histórico mensal e plano de ação — a
+    maior parte do que o Atlas já consome de Stock Savvy hoje (Farol de
+    Shelf, Dashboard Shelf Life/Recuperação, Dashboard de Baixas, Dispersão
+    de Lote) entra via os mesmos exports HTML que o Stock Savvy já gera."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Atlas + Stock Savvy", mes_label, pagina,
+               "Dois sistemas, duas camadas de controle — por que manter os dois é o que dá robustez")
+
+    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
+    _caixa_leitura(
+        slide, MARGEM_IN, 1.55, largura_col, 3.15, "Stock Savvy — Camada Operacional",
+        "Onde a ação acontece, dia a dia, no chão de fábrica e na loja: solicitar uma baixa escaneando o QR do lote, "
+        "aprovar com assinatura dupla (Diretor de Operações + Coordenador Financeiro), registrar uma ação de "
+        "recuperação de lote (desconto, doação, anúncio) e acompanhar seu custo e retorno em tempo real. É o sistema "
+        "de registro e rastreabilidade — cada baixa, cada ação de lote, cada auditoria de ficha técnica nasce lá.",
+        cor_fundo=OFF_WHITE, cor_rotulo=AZUL_INSTITUCIONAL, tamanho_texto=12.5,
+    )
+    x_direita = MARGEM_IN + largura_col + 0.35
+    _caixa_leitura(
+        slide, x_direita, 1.55, largura_col, 3.15, "Atlas — Camada de Inteligência Executiva",
+        "Onde as frentes se cruzam: Inventário, Movimentados, FEFO, Shelf Life, Passivos e os controles paralelos da "
+        "equipe (incluindo os exports do próprio Stock Savvy) chegam num único relatório mensal, com histórico "
+        "real, evolução mês a mês e plano de ação por frente e por almoxarifado — não um retrato isolado de um "
+        "módulo, e sim a leitura de como a operação inteira está andando.",
+        cor_fundo=OFF_WHITE, cor_rotulo=VERDE_AMAZONIA, tamanho_texto=12.5,
+    )
+
+    texto_por_que = (
+        "Um sem o outro deixa uma lacuna real: só Stock Savvy dá execução granular e rastreável, mas sem visão "
+        "cruzada entre frentes nem histórico executivo; só Atlas dá a leitura consolidada, mas precisa de onde "
+        "vêm os dados operacionais de origem. Juntos, formam um controle de ponta a ponta — o dado nasce com "
+        "rastreabilidade e governança no Stock Savvy (quem pediu, quem aprovou, quando), e chega consolidado, "
+        "comparável mês a mês e com plano de ação no Atlas. Essa é a base de controle mais robusta possível hoje "
+        "para o estoque da Mágio: operação rastreada + inteligência executiva, sem depender de planilha solta "
+        "entre uma ponta e outra."
+    )
+    # Altura fixa (1.85) cortava esse texto pela rede de segurança de
+    # _caber_no_espaco - calcula a altura real necessária (com folga de
+    # 0.15 acima do mínimo teórico) em vez de chutar um valor fixo (mesmo
+    # padrão já usado em _slide_resumo_executivo, ver _altura_necessaria_
+    # caixa_leitura).
+    altura_por_que = max(1.85, _altura_necessaria_caixa_leitura(
+        texto_por_que, LARGURA_IN - 2 * MARGEM_IN, 12.5) + 0.15)
+    _caixa_leitura(
+        slide, MARGEM_IN, 4.95, LARGURA_IN - 2 * MARGEM_IN, altura_por_que, "Por que manter os dois",
+        texto_por_que,
+        cor_fundo=OFF_WHITE, cor_rotulo=COR_SUCESSO, tamanho_texto=12.5,
+    )
+    return slide
+
+
+def _slide_atlas_stock_savvy_modulos(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Módulos recentes do Stock Savvy citados pelo usuário (Produção,
+    Shelf Life, Gestão) - conteúdo confirmado navegando nas telas reais
+    (20/08/2026), não apenas na descrição recebida."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Stock Savvy — Módulos Recentes", mes_label, pagina,
+               "O que cada módulo executa no Stock Savvy e como já se conecta ao Atlas hoje")
+
+    linhas = [
+        [
+            ("Produção", AZUL_INSTITUCIONAL, True),
+            "Dispersão de Lote (Ficha Técnica x consumo real por OP, com Ações Corretivas rastreadas por "
+            "responsável/status) e Auditoria de Ficha Técnica (cobertura de cadastro de BOM por produto).",
+            "Alimenta o slide de Dispersão de Ficha Técnica do MBR e o Scorecard de Mapeamento de Riscos "
+            "(taxa de furo, materiais crônicos, impacto líquido).",
+        ],
+        [
+            ("Shelf Life", AZUL_INSTITUCIONAL, True),
+            "Mapeamento de Risco por almoxarifado, Ações de Lote (desconto, doação, anúncio — com custo e valor "
+            "recuperado por ação) e Farol de Shelf, consolidados no Dashboard Shelf Life com ROI operacional e "
+            "Saving recuperado.",
+            "Os mesmos exports HTML (Farol de Shelf, Dashboard Shelf Life) já alimentam os slides de Farol de "
+            "Shelf-Life e Recuperação de Shelf do MBR.",
+        ],
+        [
+            ("Gestão", AZUL_INSTITUCIONAL, True),
+            "Baixas Operacionais com fluxo completo de solicitação (scanner QR/EAN), fila de aprovação com "
+            "assinatura dupla e histórico, além do Dashboard de Baixas por motivo/setor/grupo.",
+            "Já sincronizado ao vivo com o módulo de Baixas Operacionais do Atlas (Mapeamento de Passivos) via "
+            "rota própria — integração automática, sem exportação manual de arquivo.",
+        ],
+    ]
+    _tabela(slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 4.7,
+            ["Módulo", "Execução no Stock Savvy", "Conexão com o Atlas"], linhas,
+            larguras_relativas=[1.1, 3.6, 3.0], tamanho_fonte=12)
+
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        "Levantamento feito navegando diretamente nas telas do Stock Savvy (workspace Lovable \"Stock Savvy\") "
+        "em 20/08/2026 — não é uma descrição de segunda mão.",
+        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
 def _slide_proximos_passos(prs: Presentation, mes_label: str, pagina: int, d: dict):
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
@@ -2370,20 +2820,22 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _secao(2, "Inventários e Movimentados",
            "Acurácia de fechamento, ponderação por valor e reconciliação diária sistema x físico.",
            ["Painel de Inventário", "Acurácia Ponderada", "Acurácia Ponderada — Concentração de Risco",
-            "Controle de Movimentados"])
+            "Controle de Movimentados", "Scorecard de Inventário por Almoxarifado"])
     _slide_painel_inventario(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_detalhe(prs, mes_label, _pag(), dados)
     _slide_controle_movimentados(prs, mes_label, _pag(), dados)
+    _slide_scorecard_inventario_almoxarifado(prs, mes_label, _pag(), dados)
 
     _secao(3, "Mapeamento de Riscos e Passivos",
            "Passivos aprovados, validade de lotes e risco de obsolescência por giro insuficiente.",
            ["Mapeamento de Passivos", "Passivos — Evolução e Concentração", "Shelf Life",
-            "Mapeamento de Risco — Obsolescência"])
+            "Mapeamento de Risco — Obsolescência", "Scorecard de Mapeamento de Riscos"])
     _slide_mapeamento_passivos(prs, mes_label, _pag(), dados)
     _slide_passivos_evolucao(prs, mes_label, _pag(), dados)
     _slide_shelf_life(prs, mes_label, _pag(), dados)
     _slide_mapeamento_risco_obsolescencia(prs, mes_label, _pag(), dados)
+    _slide_scorecard_mapeamento_riscos(prs, mes_label, _pag(), dados)
 
     _secao(4, "FEFO", "Aderência ao First Expired, First Out nas transferências do período.", ["FEFO"])
     _slide_fefo(prs, mes_label, _pag(), dados)
@@ -2418,8 +2870,10 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
 
     _secao(7, "Atlas",
            "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
-           ["Impacto do Atlas", "Próximos Passos"])
+           ["Impacto do Atlas", "Atlas + Stock Savvy", "Módulos Recentes do Stock Savvy", "Próximos Passos"])
     _slide_impacto_atlas(prs, mes_label, _pag(), dados)
+    _slide_atlas_stock_savvy_visao(prs, mes_label, _pag(), dados)
+    _slide_atlas_stock_savvy_modulos(prs, mes_label, _pag(), dados)
     _slide_proximos_passos(prs, mes_label, _pag(), dados)
 
     buffer = BytesIO()
