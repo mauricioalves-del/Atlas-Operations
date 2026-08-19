@@ -83,6 +83,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _sem_cache_para_casca_do_frontend(request, call_next):
+    """(09/08/2026) Evita que index.html/app.js/style.css/sw.js fiquem
+    "escondidos" atrás de uma cópia antiga em cache depois de um deploy novo.
+
+    Investigando um relato de "depois de aplicar a atualização, uma tela
+    nova não aparecia", percebi que os arquivos da casca do frontend (index.html,
+    app.js etc, servidos pelo StaticFiles abaixo) não mandavam nenhum
+    Cache-Control - só ETag/Last-Modified. Sem um Cache-Control explícito, o
+    navegador aplica cache HEURÍSTICO (guarda uma cópia por conta própria,
+    sem perguntar ao servidor) - e pior, o service worker (ver sw.js) faz
+    fetch() dentro do seu handler de "network-first" achando que está sempre
+    pegando a versão mais nova da rede, mas esse fetch() também podia cair
+    nesse mesmo cache do navegador em vez de bater no servidor de verdade.
+    Resultado possível: um Ctrl+Shift+R não resolve, porque o service worker
+    (que já assumiu o controle da página) intercepta o carregamento e serve
+    uma versão antiga sem nunca perguntar ao servidor. Este middleware força
+    `Cache-Control: no-cache, must-revalidate` em qualquer resposta que não
+    seja de /api/ - o navegador ainda pode usar o ETag pra um 304 rápido
+    (sem baixar tudo de novo), mas sempre CONSULTA o servidor primeiro, nunca
+    responde só do cache local. Não afeta /api/ (dados dinâmicos, que já não
+    deviam ser cacheados de qualquer forma)."""
+    resposta = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        resposta.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resposta
+
+
 app.include_router(auth_router.router, prefix="/api")
 app.include_router(usuarios_router.router, prefix="/api")
 app.include_router(auditoria_router.router, prefix="/api")

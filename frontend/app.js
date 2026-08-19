@@ -89,6 +89,10 @@ function aplicarPermissoesNaUI() {
   if (btnGerarCiencia) btnGerarCiencia.classList.toggle("hidden", usuarioAtual.papel === "leitura");
   const btnCriarPedido = document.getElementById("btn-criar-pedido");
   if (btnCriarPedido) btnCriarPedido.classList.toggle("hidden", usuarioAtual.papel === "leitura");
+
+  // Configuração de perguntas padrão do assistente (09/08/2026) - só admin
+  const btnConfigPerguntasPadrao = document.getElementById("btn-config-perguntas-padrao");
+  if (btnConfigPerguntasPadrao) btnConfigPerguntasPadrao.classList.toggle("hidden", usuarioAtual.papel !== "admin");
 }
 
 document.getElementById("form-login").addEventListener("submit", async (ev) => {
@@ -7357,6 +7361,8 @@ async function perguntarAoAssistenteAtlas(pergunta, opcoes = {}) {
 // dentro de mostrarApp() (depois do login) - se a chamada falhar (ex: IA
 // não configurada, backend antigo sem essa rota ainda), o painel some os
 // botões em silêncio e o campo de texto livre continua funcionando normal.
+let _atlasPerguntasPadraoCache = [];
+
 async function carregarPerguntasPadraoAssistente() {
   const lista = document.getElementById("assistente-perguntas-padrao-lista");
   if (!lista) return;
@@ -7364,6 +7370,7 @@ async function carregarPerguntasPadraoAssistente() {
     const res = await apiFetch(`${API}/assistente/perguntas-padrao`);
     if (!res.ok) return;
     const perguntas = await res.json();
+    _atlasPerguntasPadraoCache = perguntas;
     lista.innerHTML = "";
     perguntas.forEach((p) => {
       const btn = document.createElement("button");
@@ -7373,10 +7380,137 @@ async function carregarPerguntasPadraoAssistente() {
       btn.addEventListener("click", () => perguntarAoAssistenteAtlas(p.pergunta, { falarResposta: true }));
       lista.appendChild(btn);
     });
+    _renderizarListaConfigPerguntasPadrao();
   } catch (e) {
     console.warn("Atlas: não consegui carregar as perguntas padrão do assistente.", e);
   }
 }
+
+// ---------- Configuração de perguntas padrão (09/08/2026 - pedido do Maurício) ----------
+// Módulo pra criar/editar/excluir perguntas padrão do assistente PELO PRÓPRIO
+// APP, sem depender de uma alteração de código (ver
+// app/assistente_perguntas_padrao.py e as rotas POST/PUT/DELETE
+// /assistente/perguntas-padrao no backend). Restrito a admin - o botão que
+// abre este painel só aparece pra esse papel (ver aplicarPermissoesNaUI()).
+// As perguntas do catálogo FIXO (personalizada:false) aparecem aqui só como
+// referência (não editáveis por esta tela); as personalizadas
+// (personalizada:true) têm editar/excluir.
+function _renderizarListaConfigPerguntasPadrao() {
+  const alvo = document.getElementById("lista-config-perguntas-padrao");
+  if (!alvo) return;
+  if (!_atlasPerguntasPadraoCache.length) {
+    alvo.innerHTML = "<p class=\"hint\">Nenhuma pergunta padrão carregada ainda.</p>";
+    return;
+  }
+  alvo.innerHTML = _atlasPerguntasPadraoCache
+    .map((p) => {
+      const selo = p.personalizada
+        ? '<span class="hint" style="margin:0">personalizada</span>'
+        : '<span class="hint" style="margin:0">padrão do sistema</span>';
+      const acoes = p.personalizada
+        ? `<button class="btn-secundario" data-editar-pergunta="${p.chave}">Editar</button>
+           <button class="btn-secundario" data-excluir-pergunta="${p.chave}">Excluir</button>`
+        : "";
+      return `<div class="atlas-pendencia-item" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <strong style="flex:1; min-width:200px">${p.rotulo}</strong>
+        ${selo}
+        ${acoes}
+      </div>`;
+    })
+    .join("");
+
+  alvo.querySelectorAll("[data-excluir-pergunta]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const chave = btn.dataset.excluirPergunta;
+      if (!confirm("Excluir esta pergunta padrão? Ela deixa de aparecer como atalho e não será mais reconhecida por voz/texto.")) return;
+      try {
+        const res = await apiFetch(`${API}/assistente/perguntas-padrao/${encodeURIComponent(chave)}`, { method: "DELETE" });
+        if (!res.ok) {
+          const erro = await res.json().catch(() => ({}));
+          alert(erro.detail || "Não foi possível excluir.");
+          return;
+        }
+        await carregarPerguntasPadraoAssistente();
+      } catch (e) {
+        console.warn("Atlas: falha ao excluir pergunta padrão.", e);
+        alert("Não foi possível excluir agora.");
+      }
+    });
+  });
+
+  alvo.querySelectorAll("[data-editar-pergunta]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const chave = btn.dataset.editarPergunta;
+      const entrada = _atlasPerguntasPadraoCache.find((p) => p.chave === chave);
+      if (!entrada) return;
+      // o GET não devolve gatilhos/instrucao_extra (só chave/rotulo/pergunta) -
+      // por simplicidade, o formulário de edição parte só do rótulo/pergunta
+      // já carregados, deixando gatilhos/instrução em branco pra serem
+      // preenchidos de novo (evita mais uma chamada de rede só pra isso).
+      document.getElementById("config-pergunta-chave-em-edicao").value = entrada.chave;
+      document.getElementById("config-pergunta-rotulo").value = entrada.rotulo;
+      document.getElementById("config-pergunta-texto").value = entrada.pergunta;
+      document.getElementById("config-pergunta-gatilhos").value = "";
+      document.getElementById("config-pergunta-gatilhos").placeholder = "Repita as frases-gatilho (o formulário de edição não pré-carrega as atuais)";
+      document.getElementById("config-pergunta-instrucao").value = "";
+      document.getElementById("btn-salvar-pergunta-padrao").textContent = "Salvar edição";
+      document.getElementById("btn-cancelar-edicao-pergunta-padrao").classList.remove("hidden");
+      document.getElementById("config-pergunta-rotulo").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
+}
+
+function _cancelarEdicaoPerguntaPadrao() {
+  document.getElementById("form-nova-pergunta-padrao").reset();
+  document.getElementById("config-pergunta-chave-em-edicao").value = "";
+  document.getElementById("config-pergunta-gatilhos").placeholder = 'Frases-gatilho (separadas por vírgula), ex: "estoque parado, itens parados"';
+  document.getElementById("btn-salvar-pergunta-padrao").textContent = "Adicionar pergunta padrão";
+  document.getElementById("btn-cancelar-edicao-pergunta-padrao").classList.add("hidden");
+}
+
+document.getElementById("btn-config-perguntas-padrao")?.addEventListener("click", () => {
+  document.getElementById("painel-config-perguntas-padrao").classList.remove("hidden");
+  _renderizarListaConfigPerguntasPadrao();
+});
+document.getElementById("btn-fechar-config-perguntas-padrao")?.addEventListener("click", () => {
+  document.getElementById("painel-config-perguntas-padrao").classList.add("hidden");
+  _cancelarEdicaoPerguntaPadrao();
+});
+document.getElementById("btn-cancelar-edicao-pergunta-padrao")?.addEventListener("click", _cancelarEdicaoPerguntaPadrao);
+
+document.getElementById("form-nova-pergunta-padrao")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const chaveEmEdicao = document.getElementById("config-pergunta-chave-em-edicao").value;
+  const rotulo = document.getElementById("config-pergunta-rotulo").value.trim();
+  const pergunta = document.getElementById("config-pergunta-texto").value.trim();
+  const gatilhos = document.getElementById("config-pergunta-gatilhos").value.split(",").map((g) => g.trim()).filter(Boolean);
+  const instrucao_extra = document.getElementById("config-pergunta-instrucao").value.trim() || null;
+
+  if (!rotulo || !pergunta || !gatilhos.length) {
+    alert("Preencha o rótulo, a pergunta e ao menos uma frase-gatilho.");
+    return;
+  }
+
+  const corpo = { rotulo, pergunta, gatilhos, instrucao_extra };
+  const url = chaveEmEdicao
+    ? `${API}/assistente/perguntas-padrao/${encodeURIComponent(chaveEmEdicao)}`
+    : `${API}/assistente/perguntas-padrao`;
+  const metodo = chaveEmEdicao ? "PUT" : "POST";
+
+  try {
+    const res = await apiFetch(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+    if (!res.ok) {
+      const erro = await res.json().catch(() => ({}));
+      alert(erro.detail || "Não foi possível salvar essa pergunta padrão.");
+      return;
+    }
+    _cancelarEdicaoPerguntaPadrao();
+    await carregarPerguntasPadraoAssistente();
+  } catch (e) {
+    console.warn("Atlas: falha ao salvar pergunta padrão.", e);
+    alert("Não foi possível salvar agora.");
+  }
+});
 
 document.getElementById("btn-perguntar-assistente").addEventListener("click", () => {
   const input = document.getElementById("assistente-atlas-input");

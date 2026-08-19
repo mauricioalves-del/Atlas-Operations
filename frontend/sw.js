@@ -56,7 +56,17 @@ self.addEventListener("fetch", (evento) => {
   if (evento.request.method !== "GET" || url.pathname.includes("/api/")) return;
 
   evento.respondWith(
-    fetch(evento.request)
+    // (09/08/2026) "cache: no-store" explícito - sem isso, este fetch() usa o
+    // modo padrão do navegador, que pode responder com uma cópia do CACHE
+    // HTTP comum (heurístico, baseado em Last-Modified - ver main.py, os
+    // arquivos estáticos não mandam Cache-Control) em vez de ir à rede de
+    // verdade. Isso quebrava a promessa de "network-first" deste service
+    // worker: um deploy novo podia ficar escondido atrás de uma cópia antiga
+    // do index.html/app.js já em cache no navegador, mesmo com o SW tentando
+    // buscar "a versão mais nova" - Ctrl+Shift+R nem sempre resolve isso
+    // sozinho quando um service worker já está no controle da página. Ver
+    // main.py (middleware de Cache-Control) pra a outra metade da correção.
+    fetch(evento.request, { cache: "no-store" })
       .then((resposta) => {
         const copia = resposta.clone();
         caches

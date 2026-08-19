@@ -105,6 +105,38 @@ class Hipotese(Base):
     ativo = Column(Boolean, default=True)
 
 
+class PerguntaPadraoPersonalizada(Base):
+    """Módulo de configuração de perguntas padrão do Assistente Atlas
+    (09/08/2026 - pedido do Maurício). O catálogo ORIGINAL de perguntas
+    padrão (ver app/assistente_perguntas_padrao.py, PERGUNTAS_PADRAO) é
+    fixo no código - pra adicionar uma pergunta nova ali, era preciso pedir
+    uma alteração de código. Esta tabela guarda perguntas padrão CRIADAS
+    PELO PRÓPRIO USUÁRIO (administradores, ver requer_papel("admin") em
+    routers/assistente_router.py), sem precisar de uma nova versão do
+    Atlas. As duas fontes (catálogo fixo + esta tabela) são combinadas em
+    listar_perguntas_padrao()/identificar_pergunta_padrao() - ver esse
+    arquivo pra entender a junção.
+
+    Diferença deliberada em relação ao catálogo fixo: uma entrada aqui
+    NUNCA tem um "contexto_extra_fn" (aquilo é uma função Python, não dá
+    pra guardar num campo de banco) - só gatilhos + uma instrução textual
+    pra IA generativa focar a resposta. Ainda é reconhecida e melhora a
+    resposta (mesmo texto de "instrucao_extra" usado no catálogo fixo),
+    só não ganha um bloco de dados extra pré-calculado como
+    "risco_por_almoxarifado" ganha.
+    """
+    __tablename__ = "perguntas_padrao_personalizadas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chave = Column(String, unique=True, nullable=False, index=True)
+    rotulo = Column(String, nullable=False)  # texto do botão de atalho na tela Início
+    pergunta = Column(String, nullable=False)  # pergunta "oficial" enviada quando clicam no botão
+    gatilhos = Column(JSON, nullable=False)  # lista de strings - frases que disparam esta pergunta por voz/texto
+    instrucao_extra = Column(Text, nullable=True)
+    ativo = Column(Boolean, default=True)
+    criado_por = Column(String, nullable=True)  # username de quem criou (auditoria simples)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+
 class LoteImportacao(Base):
     """Um lote de importação de movimentação (CSV ou Excel) - permite
     desfazer uma importação inteira sem precisar apagar linha por linha."""

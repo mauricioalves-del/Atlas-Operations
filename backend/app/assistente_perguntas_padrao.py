@@ -35,7 +35,23 @@ catálogo): só acrescentar uma entrada em PERGUNTAS_PADRAO. Se ela precisar
 de dados mais específicos que o retrato genérico já cobre, escreva uma
 função `_contexto_de_algo(db, usuario)` e aponte em `contexto_extra_fn` -
 senão deixe `None` (a pergunta ainda é reconhecida e ganha a
-`instrucao_extra`, só não ganha um bloco de dados extra)."""
+`instrucao_extra`, só não ganha um bloco de dados extra).
+
+Módulo de configuração (09/08/2026 - pedido do Maurício): além deste
+catálogo fixo (que só muda com uma alteração de código, feita numa sessão
+como esta), administradores podem criar/editar/excluir perguntas padrão
+PELO PRÓPRIO APP, sem depender de uma nova versão - ver
+`models.PerguntaPadraoPersonalizada`, os endpoints em
+`routers/assistente_router.py` (`POST/PUT/DELETE /assistente/perguntas-padrao`,
+restritos a admin via `requer_papel("admin")`) e o painel "⚙️ Configurar
+perguntas padrão" no frontend. `listar_perguntas_padrao(db)` e
+`identificar_pergunta_padrao(pergunta, db)` combinam as duas fontes: o
+catálogo fixo é checado primeiro (preserva a ordem/comportamento de antes
+pra quem já dependia disso), depois as personalizadas ativas. Uma entrada
+personalizada nunca tem `contexto_extra_fn` (é uma função Python, não dá
+pra guardar em banco) - só gatilhos + instrução textual pra IA, igual às
+entradas do catálogo fixo que também não têm detalhamento extra."""
+import re
 import unicodedata
 from datetime import date
 
@@ -183,20 +199,130 @@ PERGUNTAS_PADRAO = [
 ]
 
 
-def identificar_pergunta_padrao(pergunta: str) -> dict | None:
-    """Compara a pergunta contra os gatilhos de cada entrada do catálogo -
-    primeira que bater, ganha (não tenta achar "a melhor", só a primeira
-    compatível; a ordem em PERGUNTAS_PADRAO importa um pouco pra casos
-    ambíguos, mas os gatilhos foram escolhidos pra não se sobreporem)."""
+def _entradas_personalizadas_ativas(db: Session) -> list:
+    """Busca as perguntas personalizadas (ver models.PerguntaPadraoPersonalizada)
+    e devolve no MESMO formato de dict das entradas fixas de PERGUNTAS_PADRAO,
+    pra poderem ser tratadas de forma idêntica pelo resto deste módulo e por
+    assistente_ia.py. `contexto_extra_fn` é sempre None aqui - ver docstring
+    do módulo."""
+    if db is None:
+        return []
+    linhas = db.query(models.PerguntaPadraoPersonalizada).filter_by(ativo=True).order_by(
+        models.PerguntaPadraoPersonalizada.criado_em
+    ).all()
+    return [
+        {
+            "chave": linha.chave,
+            "rotulo": linha.rotulo,
+            "pergunta": linha.pergunta,
+            "gatilhos": linha.gatilhos or [],
+            "instrucao_extra": linha.instrucao_extra,
+            "contexto_extra_fn": None,
+            "personalizada": True,
+        }
+        for linha in linhas
+    ]
+
+
+def identificar_pergunta_padrao(pergunta: str, db: Session | None = None) -> dict | None:
+    """Compara a pergunta contra os gatilhos de cada entrada - primeiro o
+    catálogo FIXO (PERGUNTAS_PADRAO, primeira que bater ganha - preserva o
+    comportamento de antes desta função existir), depois as personalizadas
+    criadas via app (ver _entradas_personalizadas_ativas). `db` é opcional
+    só pra não quebrar quem já chamava esta função sem banco (nesse caso,
+    simplesmente não considera as personalizadas)."""
     alvo = _normalizar(pergunta)
     for entrada in PERGUNTAS_PADRAO:
+        for gatilho in entrada["gatilhos"]:
+            if _normalizar(gatilho) in alvo:
+                return entrada
+    for entrada in _entradas_personalizadas_ativas(db):
         for gatilho in entrada["gatilhos"]:
             if _normalizar(gatilho) in alvo:
                 return entrada
     return None
 
 
-def listar_perguntas_padrao() -> list:
+def listar_perguntas_padrao(db: Session | None = None) -> list:
     """Formato seguro pra expor via API (sem a função contexto_extra_fn,
-    que não é serializável) - usado pelo endpoint GET /assistente/perguntas-padrao."""
-    return [{"chave": e["chave"], "rotulo": e["rotulo"], "pergunta": e["pergunta"]} for e in PERGUNTAS_PADRAO]
+    que não é serializável) - usado pelo endpoint GET /assistente/perguntas-padrao.
+    Junta o catálogo fixo (sempre `personalizada: False`, não editável por
+    aqui) com as perguntas personalizadas ativas (`personalizada: True`,
+    admin pode editar/excluir - ver routers/assistente_router.py)."""
+    fixas = [{"chave": e["chave"], "rotulo": e["rotulo"], "pergunta": e["pergunta"], "personalizada": False} for e in PERGUNTAS_PADRAO]
+    personalizadas = [
+        {"chave": e["chave"], "rotulo": e["rotulo"], "pergunta": e["pergunta"], "personalizada": True}
+        for e in _entradas_personalizadas_ativas(db)
+    ]
+    return fixas + personalizadas
+
+
+CHAVES_FIXAS = {e["chave"] for e in PERGUNTAS_PADRAO}
+
+
+def _gerar_chave_unica(db: Session, rotulo: str) -> str:
+    """Deriva uma chave (slug) a partir do rótulo digitado pelo admin,
+    garantindo que não colide nem com o catálogo fixo nem com outra
+    pergunta personalizada já existente - acrescenta um sufixo numérico se
+    precisar."""
+    base = _normalizar(rotulo)
+    base = re.sub(r"[^a-z0-9]+", "_", base).strip("_") or "pergunta_personalizada"
+    chave = base
+    sufixo = 2
+    while chave in CHAVES_FIXAS or db.query(models.PerguntaPadraoPersonalizada).filter_by(chave=chave).first():
+        chave = f"{base}_{sufixo}"
+        sufixo += 1
+    return chave
+
+
+def criar_pergunta_personalizada(db: Session, usuario, rotulo: str, pergunta: str, gatilhos: list, instrucao_extra: str | None) -> models.PerguntaPadraoPersonalizada:
+    rotulo = (rotulo or "").strip()
+    pergunta = (pergunta or "").strip()
+    gatilhos_limpos = [g.strip() for g in (gatilhos or []) if g and g.strip()]
+    if not rotulo or not pergunta:
+        raise ValueError("Rótulo e pergunta são obrigatórios.")
+    if not gatilhos_limpos:
+        raise ValueError("Informe pelo menos uma frase-gatilho (o que a pessoa precisa dizer/digitar pra acionar esta pergunta).")
+    linha = models.PerguntaPadraoPersonalizada(
+        chave=_gerar_chave_unica(db, rotulo),
+        rotulo=rotulo,
+        pergunta=pergunta,
+        gatilhos=gatilhos_limpos,
+        instrucao_extra=(instrucao_extra or "").strip() or None,
+        ativo=True,
+        criado_por=getattr(usuario, "username", None),
+    )
+    db.add(linha)
+    db.commit()
+    db.refresh(linha)
+    return linha
+
+
+def atualizar_pergunta_personalizada(db: Session, chave: str, rotulo: str, pergunta: str, gatilhos: list, instrucao_extra: str | None) -> models.PerguntaPadraoPersonalizada:
+    if chave in CHAVES_FIXAS:
+        raise ValueError("Essa pergunta faz parte do catálogo padrão do sistema e não pode ser editada por aqui.")
+    linha = db.query(models.PerguntaPadraoPersonalizada).filter_by(chave=chave).first()
+    if not linha:
+        raise ValueError("Pergunta personalizada não encontrada.")
+    gatilhos_limpos = [g.strip() for g in (gatilhos or []) if g and g.strip()]
+    if not (rotulo or "").strip() or not (pergunta or "").strip():
+        raise ValueError("Rótulo e pergunta são obrigatórios.")
+    if not gatilhos_limpos:
+        raise ValueError("Informe pelo menos uma frase-gatilho.")
+    linha.rotulo = rotulo.strip()
+    linha.pergunta = pergunta.strip()
+    linha.gatilhos = gatilhos_limpos
+    linha.instrucao_extra = (instrucao_extra or "").strip() or None
+    db.commit()
+    db.refresh(linha)
+    return linha
+
+
+def excluir_pergunta_personalizada(db: Session, chave: str) -> None:
+    if chave in CHAVES_FIXAS:
+        raise ValueError("Essa pergunta faz parte do catálogo padrão do sistema e não pode ser excluída por aqui.")
+    linha = db.query(models.PerguntaPadraoPersonalizada).filter_by(chave=chave).first()
+    if not linha:
+        raise ValueError("Pergunta personalizada não encontrada.")
+    db.delete(linha)
+    db.commit()

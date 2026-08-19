@@ -172,6 +172,7 @@
         <div class="panel-title-row">
           <h2>✨ Assistente Atlas</h2>
           <span class="hint" style="margin:0">Diga "Atlas, resumo do dia" em qualquer tela, ou "Atlas, Assistente" seguido da pergunta — ou pergunte aqui</span>
+          <button class="btn-secundario hidden" id="btn-config-perguntas-padrao" style="margin-left:auto" title="Configurar perguntas padrão (só admin)">⚙️ Perguntas padrão</button>
         </div>
         <div class="filtros" style="margin-bottom:12px; flex-wrap:wrap" id="assistente-perguntas-padrao-lista">
           <!-- Botões preenchidos dinamicamente por carregarPerguntasPadraoAssistente() em app.js,
@@ -184,6 +185,39 @@
         </div>
         <div id="assistente-atlas-resposta" class="hidden"></div>
         <p class="hint" style="margin-top:8px">O assistente usa um modelo de IA generativa externo (opcional, sujeito a configuração no servidor) e responde só com dados já calculados pelo Atlas — nunca decide nada por conta própria.</p>
+
+        <!-- Painel de configuração de perguntas padrão (09/08/2026 - pedido do
+             Maurício: um jeito de criar perguntas padrão novas pelo próprio
+             app, sem precisar de uma alteração de código). Só admin vê o
+             botão que abre isto (ver aplicarPermissoesNaUI() em app.js). -->
+        <div class="panel hidden" id="painel-config-perguntas-padrao" style="margin-top:16px; background:var(--fundo-alt, rgba(127,127,127,0.06))">
+          <div class="panel-title-row">
+            <h3 style="margin:0">⚙️ Configurar perguntas padrão</h3>
+            <button class="btn-secundario" id="btn-fechar-config-perguntas-padrao" style="margin-left:auto">Fechar</button>
+          </div>
+          <p class="hint">As perguntas "padrão do sistema" vêm prontas com o Atlas e só mudam numa atualização. As perguntas que você cria aqui ficam disponíveis pra todo mundo, como botão de atalho e por comando de voz (dizendo qualquer uma das frases-gatilho).</p>
+          <div id="lista-config-perguntas-padrao"></div>
+          <h4 style="margin:16px 0 8px">Nova pergunta padrão</h4>
+          <form id="form-nova-pergunta-padrao">
+            <input type="hidden" id="config-pergunta-chave-em-edicao" value="">
+            <div class="filtros" style="margin-bottom:8px">
+              <input type="text" id="config-pergunta-rotulo" class="select-filtro" placeholder="Rótulo do botão, ex: Estoque parado há mais de 90 dias" style="flex:1; min-width:280px" required>
+            </div>
+            <div class="filtros" style="margin-bottom:8px">
+              <input type="text" id="config-pergunta-texto" class="select-filtro" placeholder="Pergunta enviada ao assistente, ex: Quais itens estão parados há mais de 90 dias?" style="flex:1; min-width:280px" required>
+            </div>
+            <div class="filtros" style="margin-bottom:8px">
+              <input type="text" id="config-pergunta-gatilhos" class="select-filtro" placeholder='Frases-gatilho (separadas por vírgula), ex: "estoque parado, itens parados"' style="flex:1; min-width:280px" required>
+            </div>
+            <div class="filtros" style="margin-bottom:8px">
+              <input type="text" id="config-pergunta-instrucao" class="select-filtro" placeholder="Instrução extra pra IA focar a resposta (opcional)" style="flex:1; min-width:280px">
+            </div>
+            <div class="filtros">
+              <button type="submit" class="btn-primario" id="btn-salvar-pergunta-padrao">Adicionar pergunta padrão</button>
+              <button type="button" class="btn-secundario hidden" id="btn-cancelar-edicao-pergunta-padrao">Cancelar edição</button>
+            </div>
+          </form>
+        </div>
       </div>
 
       <div class="panel" id="painel-pendencias-externas" style="max-width:900px; margin:24px auto 0">
@@ -1872,6 +1906,6 @@
   </div>
 </div>
 
-<script src="app.js?v=99"></script>
+<script src="app.js?v=100"></script>
 </body>
 </html>
