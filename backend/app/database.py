@@ -33,6 +33,35 @@ def garantir_colunas_novas():
     inspecao = inspect(engine)
     if not inspecao.has_table("divergencias"):
         return  # banco novo - Base.metadata.create_all já cria certo
+
+    # IMPORTANTE (bug corrigido em 19/08/2026, causou falha de deploy em produção):
+    # os blocos de ALTER TABLE de baixas_operacionais/divergencias (colunas ia_gen_*
+    # - ver app/ia_generativa.py) precisam rodar AQUI NO TOPO, antes de QUALQUER
+    # outro código desta função que faça uma consulta ORM de entidade inteira
+    # (ex: _remover_duplicatas_status_baixa_operacional() mais abaixo, que faz
+    # `db.query(models.BaixaOperacional).order_by(...).all()`). Um SELECT desses
+    # sempre inclui TODAS as colunas que o modelo Python declara, mesmo antes do
+    # ALTER TABLE ter rodado - se o bloco de ALTER TABLE vier depois dessa consulta
+    # no arquivo, a consulta quebra com "no such column"/"column does not exist"
+    # porque a coluna ainda não existe na tabela real quando ela é executada. Novas
+    # colunas em BaixaOperacional/Divergencia devem sempre ser adicionadas aqui no
+    # topo por esse motivo - não misturar com os blocos de baixo.
+    colunas_divergencias = {c["name"] for c in inspecao.get_columns("divergencias")}
+    if "ia_gen_resumo" not in colunas_divergencias:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_resumo TEXT"))
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
+            conn.commit()
+    if inspecao.has_table("baixas_operacionais"):
+        colunas_baixas = {c["name"] for c in inspecao.get_columns("baixas_operacionais")}
+        if "ia_gen_categoria" not in colunas_baixas:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_categoria VARCHAR"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_prioridade VARCHAR"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_resumo TEXT"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
+                conn.commit()
+
     colunas_existentes = {c["name"] for c in inspecao.get_columns("divergencias")}
     if "observacao_origem" not in colunas_existentes:
         with engine.connect() as conn:
@@ -224,26 +253,8 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE lotes_shelf_life ADD COLUMN grupo_produto VARCHAR"))
                 conn.commit()
 
-    # Classificação/resumo por IA GENERATIVA (25/08/2026 - ver app/ia_generativa.py e
-    # app/models.py). Campos opcionais, só preenchidos quando alguém aciona "Analisar
-    # com IA"/"Resumir com IA" na tela - continuam NULL em qualquer instalação que não
-    # configure ATLAS_IA_GENERATIVA_API_KEY.
-    if inspecao.has_table("baixas_operacionais"):
-        colunas_baixas = {c["name"] for c in inspecao.get_columns("baixas_operacionais")}
-        if "ia_gen_categoria" not in colunas_baixas:
-            with engine.connect() as conn:
-                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_categoria VARCHAR"))
-                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_prioridade VARCHAR"))
-                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_resumo TEXT"))
-                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
-                conn.commit()
-
-    colunas_divergencias = {c["name"] for c in inspecao.get_columns("divergencias")}
-    if "ia_gen_resumo" not in colunas_divergencias:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_resumo TEXT"))
-            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
-            conn.commit()
+    # (as colunas ia_gen_* de baixas_operacionais/divergencias foram movidas pro
+    # topo desta função em 19/08/2026 - ver o comentário lá explicando por quê)
 
 
 def _backfill_lotes_ajuste_inventario_legado():
