@@ -1,123 +1,135 @@
-# MBR — 3 ajustes a partir do seu feedback nas capturas de tela
+# Atlas + IA Generativa — classificação e resumo automático de baixas e divergências
 
 ## O que você pediu
 
-Depois de ver as primeiras capturas do MBR novo, você apontou três coisas:
+Adicionar uma inteligência artificial ao Atlas, de forma gratuita — usando um
+token/chave gratuita de outro serviço de IA. E que a escolha do que essa IA
+faz fosse "Classificação/resumo automático de baixas e divergências".
 
-1. No Scorecard de Inventário por Almoxarifado, Box, Box 2, Ativação e Loja
-   apareciam sempre como "Sem histórico", mesmo tendo dado de acurácia real
-   — porque o Atlas não faz controle de Movimentados nesses almoxarifados,
-   e você pediu pra desconsiderar essa premissa nessa análise.
-2. No Mapeamento de Passivos, tudo que foi baixado por inventário no
-   período devia cair na barra "Mapeada via Inventário Mensal" — e estava
-   caindo inteiro em "Aprovada, aguardando divergência".
-3. Adicionar, no slide "Atlas", a visão da Rotina Master (seu diário de
-   bordo) — entrando no sistema (rotinabusiness.lovable.app), filtrando
-   pelo mês de fechamento (1º ao último dia), com um indicador novo de
-   curva de evolução ligado a constância e disciplina em manter as tarefas
-   em dia.
+## O que foi implementado
 
-## 1. Scorecard de Inventário por Almoxarifado — Movimentados não aplicável
+Uma integração com **Google Gemini** (via Google AI Studio), que tem uma
+camada gratuita sem pedir cartão de crédito. Isso é diferente da "IA" que já
+existe no Atlas: hoje, toda divergência já passa por um motor de regras +
+um modelo estatístico treinado nos próprios dados do Atlas
+(`hipotese_regras`, `hipotese_ml`, `hipotese_ia` — sempre calculados, sem
+depender de nada externo). O que foi adicionado agora é um LLM externo,
+opcional, que só age quando alguém pede — por isso todo campo novo usa o
+prefixo `ia_gen_` (**IA Gen**erativa), bem separado dos campos que já
+existiam.
 
-A regra de status usava "o pior dos dois sinais" (fechamento vs.
-Movimentados). Isso fazia sentido pra almoxarifados que fazem os dois
-controles — mas Box, Box_2, Ativação e Loja nunca vão ter dado de
-Movimentados (decisão operacional sua, não uma lacuna de dado), então a
-regra os travava em "Sem histórico" pra sempre, escondendo evolução real de
-acurácia de fechamento.
+Dois lugares novos na tela:
 
-Corrigido reaproveitando o cadastro que já existe pra isso:
-`Almoxarifado.participa_contagem_diaria` — o mesmo campo que já exclui
-esses almoxarifados da Cobertura de Conferência. Quando esse campo é
-`False`, o Scorecard agora usa **só o sinal de fechamento** pra decidir o
-status daquele almoxarifado, e a leitura mostra "Movimentados: não
-aplicável a este almoxarifado" em vez de um "—" que parecia lacuna de dado.
-Almoxarifados que fazem os dois controles continuam com a regra original
-(pior dos dois sinais).
+1. **Mapeamento de Passivos → "Ver todos os Passivos"**: cada baixa sem
+   leitura ainda tem um botão **"✨ Analisar"**; depois de analisada, mostra
+   um selo com a prioridade sugerida (Alta/Média/Baixa) e a categoria
+   sugerida (dentro do catálogo oficial de Hipóteses que o Atlas já usa —
+   passe o mouse pra ver o resumo em 1-2 frases). Tem também um botão
+   **"✨ Analisar pendentes com IA"** que processa várias baixas aprovadas de
+   uma vez (as de maior valor primeiro), com uma trava de segurança (no
+   máximo 25 por chamada, com pausa entre cada uma) pra não estourar a cota
+   gratuita.
+2. **Tela de detalhe de uma Divergência**: um painel novo, "Resumo por IA
+   Generativa", com o botão **"✨ Resumir com IA"** — pede pra IA traduzir,
+   numa leitura corrida em português, os sinais que já estão espalhados
+   pelos painéis de Evidências/Casos similares/Distribuição de
+   probabilidades.
 
-## 2. Mapeamento de Passivos — baixas de inventário mensal sem vínculo formal
+Em nenhum dos dois casos a IA decide nada em definitivo — é sempre uma
+sugestão revisável, e nunca substitui `hipotese_aplicada` (baixas) ou
+`hipotese_ia`/`confianca_ia` (divergências).
 
-O motivo raiz: uma baixa só era classificada como "Mapeada via Inventário
-Mensal" se estivesse formalmente vinculada (`divergencia_vinculada_id`) a
-uma divergência de fechamento, e esse vínculo automático só acontece
-dentro de uma janela de poucos dias (1 dia antes a 4 dias depois) entre a
-data da baixa e a data da divergência. Essa janela foi calibrada pra
-reconciliação DIÁRIA de Movimentados — faz sentido lá, porque a baixa
-correspondente costuma ser aprovada poucos dias depois.
+**Sem custo de dependência nova**: a chamada ao Gemini usa só `urllib`
+(biblioteca padrão do Python), o mesmo padrão que o Atlas já usa pra
+chamar a sincronização com o Lovable — não foi adicionado nenhum SDK/pacote
+novo ao `requirements.txt`.
 
-Fechamento mensal não se encaixa nessa janela: a divergência só é detectada
-no dia do fechamento (geralmente fim do mês), enquanto a baixa
-correspondente pode ter sido aprovada em qualquer dia daquele mês, semanas
-antes. Por isso, praticamente nenhuma baixa de inventário mensal ganhava o
-vínculo formal, e todas ficavam presas em "Aprovada, aguardando
-divergência" mesmo sendo, de fato, inventário.
+## Como pegar a chave gratuita (você mesmo, com sua própria conta Google)
 
-Corrigido sem tocar no vínculo formal nem na resolução automática de
-divergências (isso continua exigindo o casamento de sempre, com sua
-janela de dias — não queria arriscar mexer nisso, que afeta pesos de ML e
-resolução real de divergências). A correção é só na classificação/exibição:
-se existe qualquer divergência de fechamento mensal pro mesmo SKU +
-almoxarifado no mesmo mês da baixa, ela conta como "Mapeada via Inventário
-Mensal" na tela e no MBR, mesmo sem o vínculo formal. Essa correção está no
-único endpoint por trás da tela Mapeamento de Passivos
-(`/dashboard/resumo-executivo`) e em todos os outros painéis que usam a
-mesma categorização (KPIs, motivos, drill-down de itens) — não só no MBR.
+Eu não posso criar contas nem preencher formulários de login/senha em seu
+nome — isso é uma trava de segurança da minha parte. Mas o passo a passo é
+rápido:
 
-## 3. Novo slide: Constância e Disciplina — Diário de Bordo
+1. Acesse **https://aistudio.google.com/apikey** e entre com uma conta
+   Google (a mesma do dia a dia serve).
+2. Clique em **"Create API key"** (ou "Criar chave de API").
+3. Copie a chave gerada (uma string longa, algo como `AIzaSy...`).
+4. **Não precisa cartão de crédito** para essa camada gratuita.
 
-Adicionado na Seção 7 (Atlas), logo depois de "Impacto do Atlas". Entrei na
-Rotina Master (rotinabusiness.lovable.app) com o filtro de período já em
-01/07/26 a 31/07/26 (mês de fechamento) e trouxe:
+⚠️ **Importante sobre os limites da camada gratuita**: o Google define
+quantas chamadas por minuto e por dia a camada gratuita aceita, e esse
+número pode mudar com o tempo — confira o valor atual em
+https://ai.google.dev/gemini-api/docs/rate-limits antes de configurar em
+produção. Por isso o botão de análise em lote tem um limite de 25 itens por
+chamada (ajustável, ver `ia_generativa.py`) — analisar um volume muito
+grande de uma vez só pode estourar a cota do dia.
 
-- Cumprimento geral do mês (97%, 294 de 302 rotinas) e conclusões no prazo
-  vs. em atraso.
-- Um indicador novo — que você pediu — de constância: separei os dias
-  úteis dos fins de semana (fim de semana não tem rotina devida naquele
-  app, então cumprimento 0% ali não é uma falha, é ausência de tarefa) e
-  calculei a média só nos dias úteis (84,7%), a maior sequência de dias
-  úteis consecutivos a 100% (8 dias) e os lapsos pontuais do mês (09/07,
-  10/07 e 30/07 — sempre recuperados no dia útil seguinte, sem se
-  arrastar).
-- Uma curva de evolução semanal (5 pontos, só dias úteis) que mostra
-  claramente a queda na semana de 06 a 10/07 (58,6%, por causa dos dois
-  lapsos consecutivos) e a recuperação total nas semanas seguintes.
+## Como configurar no Atlas (Render)
 
-**Importante sobre este indicador**: ele não vem de uma consulta ao banco
-do Atlas como todo o resto do MBR — a Rotina Master é um app separado,
-sem integração automática ainda. Os números vieram de uma coleta manual
-feita agora (21/08/2026), navegando direto no Dashboard de Performance
-daquele app. Se quiser esse indicador em todo MBR futuro, alguém precisa
-repetir essa coleta manual a cada mês (ou construir uma integração
-automática entre os dois sistemas, que não existe hoje) — deixei isso
-registrado no rodapé do próprio slide e no código, pra não passar a
-impressão de que é um dado ao vivo.
+No painel do Render (Environment do serviço do backend), adicione:
+
+- `ATLAS_IA_GENERATIVA_API_KEY` = a chave que você copiou no passo acima.
+  **Sem essa variável, o recurso fica desativado** — os botões de IA
+  continuam aparecendo, mas o clique devolve uma mensagem clara ("IA
+  generativa não configurada neste ambiente...") em vez de dar erro feio ou
+  quebrar a tela.
+- `ATLAS_IA_GENERATIVA_MODELO` (opcional) = por padrão usa
+  `gemini-2.0-flash` (rápido e dentro da cota gratuita pra esse uso). Só
+  precisa mudar se quiser testar outro modelo do Gemini.
+
+Depois de configurar, é só fazer o deploy de novo — nenhuma migração manual
+de banco é necessária, as colunas novas são criadas automaticamente na
+próxima vez que o Atlas subir (mesmo mecanismo de auto-migração que o resto
+do projeto já usa).
 
 ## Validado
 
-- Scorecard de Almoxarifado: testado com um almoxarifado sintético (Box)
-  sem controle de Movimentados e com evolução real de acurácia (+30 p.p.)
-  — confirmei que ele agora aparece como "Evolução" (antes ficava "Sem
-  histórico").
-- Mapeamento de Passivos: testado com uma baixa aprovada 21 dias antes do
-  fechamento do mês (fora da janela de poucos dias) — confirmei que ela
-  agora entra em "Mapeada via Inventário Mensal", e que uma baixa sem
-  fechamento correspondente continua em "Aprovada, aguardando
-  divergência" (a correção não é indiscriminada).
-- Slide de Diário de Bordo: testado nos dois estados (mês com coleta e mês
-  sem coleta) e revisado visualmente — corrigi um rótulo de KPI que estava
-  quebrando em 2 linhas e ficando colado na borda do card.
-- Gerei o MBR completo de novo (31 slides) e revisei a estrutura do
-  arquivo e o texto de todos os slides afetados — sem sobreposição, sem
-  corte de texto, sem problema de validação.
+- Subi o Atlas completo (FastAPI + SQLite) num banco isolado e testei de
+  ponta a ponta pela API real (não só a função isolada): status da IA
+  sem/com chave, análise de uma baixa, análise em lote (com e sem
+  pendentes), resumo de uma divergência, e que o papel "leitura" não
+  consegue acionar nenhuma das duas (só admin/analista podem, mesma regra
+  de outras ações que gastam algo externo).
+- Simulei a resposta do Gemini (sem gastar cota real, porque ainda não
+  tenho uma chave sua) pra confirmar que a categoria/prioridade/resumo são
+  gravados certinho e aparecem de volta no Mapeamento de Passivos e na
+  tela de detalhe da divergência.
+- Testei os casos de erro na integração isolada: chave ausente, HTTP 429
+  (cota excedida), HTTP 500, timeout, e resposta que não vem em JSON válido
+  (inclusive envolvida em ` ```json `) — todos tratados com mensagem clara,
+  nenhum quebra o resto do Atlas.
+- Testei que uma categoria ou prioridade fora do catálogo oficial (a IA
+  "inventando" um valor) cai num fallback seguro em vez de gravar lixo no
+  banco.
+- Validei a sintaxe do JavaScript novo (`node --check`) e o HTML do modal
+  (parser HTML) sem erros.
 
-## Arquivos alterados
+**O que eu NÃO pude testar**: uma chamada real ao Gemini com uma chave de
+verdade, porque isso depende de você criar a sua conta. Recomendo, depois
+de configurar a chave no Render, clicar em "Analisar" numa baixa de teste
+pra confirmar que a resposta real do modelo também vem coerente — o
+comportamento de parsing/gravação já está validado, só a qualidade da
+resposta em si de um caso real ainda não foi vista por mim.
 
-- `backend/app/mbr_generator.py` — `_linha_scorecard_almoxarifado` agora
-  ignora o sinal de Movimentados quando não aplicável; novo indicador
-  `_coletar_indicador_diario_bordo` + slide `_slide_diario_bordo`.
-- `backend/app/routers/baixas_operacionais_router.py` —
-  `_categoria_mapeamento` reconhece inventário mensal por mês/SKU/
-  almoxarifado quando não há vínculo formal ainda; nova função
-  `_mapa_fechamentos_mensais_por_sku_almox`.
+## Arquivos alterados/criados
 
-Nenhuma migração de banco necessária.
+- `backend/app/ia_generativa.py` **(novo)** — toda a integração com o
+  provedor de IA generativa (chamada HTTP, parsing, validação, prompts).
+- `backend/app/models.py` — campos novos `ia_gen_*` em `BaixaOperacional` e
+  `Divergencia`.
+- `backend/app/database.py` — migração automática (`ALTER TABLE`) das
+  colunas novas.
+- `backend/app/schemas.py` — `DivergenciaOut` passa a incluir
+  `ia_gen_resumo`/`ia_gen_analisado_em`.
+- `backend/app/routers/baixas_operacionais_router.py` — endpoints
+  `GET /baixas-operacionais/ia-generativa/status`,
+  `POST /baixas-operacionais/{id}/analisar-ia`,
+  `POST /baixas-operacionais/analisar-ia-lote`; `dashboard/itens` agora
+  devolve os campos `ia_gen_*`.
+- `backend/app/routers/divergencias_router.py` — endpoint
+  `POST /divergencias/{id}/resumir-ia`.
+- `frontend/app.js` e `frontend/index.html` — botões "Analisar"/"Analisar
+  pendentes com IA" no modal de Passivos, e painel "Resumo por IA
+  Generativa" na tela de detalhe da divergência.
+
+Nenhuma migração manual de banco necessária.

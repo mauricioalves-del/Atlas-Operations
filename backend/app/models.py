@@ -172,6 +172,16 @@ class Divergencia(Base):
     criado_em = Column(DateTime, default=datetime.utcnow)
     resolvido_em = Column(DateTime, nullable=True)
 
+    # Resumo por IA GENERATIVA (LLM externo, 25/08/2026 - ver app/ia_generativa.py).
+    # Propositalmente com prefixo `ia_gen_` bem diferente de hipotese_ia/confianca_ia
+    # acima - aqueles são a hipótese final reconciliada por regras + modelo estatístico
+    # treinado no próprio Atlas (investigation.py/ml/predict.py), calculados sempre.
+    # ia_gen_resumo é opcional, só existe quando alguém pede ("Resumir com IA" na tela de
+    # detalhe) e uma chave de IA generativa está configurada - nunca substitui nem
+    # recalcula a hipótese, só traduz os sinais já existentes numa leitura corrida.
+    ia_gen_resumo = Column(Text, nullable=True)
+    ia_gen_analisado_em = Column(DateTime, nullable=True)
+
 
 class Transferencia(Base):
     __tablename__ = "transferencias"
@@ -466,6 +476,16 @@ class BaixaOperacional(Base):
     payload_bruto = Column(JSON, nullable=True)  # linha crua recebida do Lovable, pra depuração
     divergencia_vinculada_id = Column(Integer, ForeignKey("divergencias.id"), nullable=True, index=True)
     recebido_em = Column(DateTime, default=datetime.utcnow)
+
+    # Classificação/resumo por IA GENERATIVA (LLM externo, 25/08/2026 - pedido do
+    # Maurício, ver app/ia_generativa.py). Sugestão opcional e revisável - só existe
+    # depois que alguém pede ("Analisar com IA") e uma chave está configurada
+    # (ATLAS_IA_GENERATIVA_API_KEY). Nunca roda sozinho nem sobrescreve
+    # hipotese_aplicada (o de-para determinístico feito a partir do motivo bruto).
+    ia_gen_categoria = Column(String, nullable=True)  # um código do catálogo de Hipotese (hipoteses_config.py)
+    ia_gen_prioridade = Column(String, nullable=True)  # Alta | Média | Baixa
+    ia_gen_resumo = Column(Text, nullable=True)
+    ia_gen_analisado_em = Column(DateTime, nullable=True)
 
 
 class LoteAjusteInventario(Base):

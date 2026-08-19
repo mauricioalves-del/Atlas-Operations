@@ -42,6 +42,12 @@ class DivergenciaOut(BaseModel):
     tempo_resolucao_minutos: Optional[float]
     status: str
     tem_investigacao_pendente: bool = False
+    # Resumo por IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py).
+    # Não confundir com hipotese_ia/confianca_ia acima (regra + modelo estatístico
+    # interno, sempre calculado) - isto só existe depois de alguém clicar em
+    # "Resumir com IA" na tela de detalhe, e só se o Atlas tiver uma chave configurada.
+    ia_gen_resumo: Optional[str] = None
+    ia_gen_analisado_em: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -10,6 +10,7 @@ from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
 from ..deps import requer_papel, obter_usuario_atual, filtrar_por_almoxarifado_permitido
 from ..audit import registrar_log
+from .. import ia_generativa
 
 router = APIRouter(prefix="/divergencias", tags=["divergencias"])
 
@@ -370,6 +371,32 @@ def detalhar(div_id: int, usuario: models.Usuario = Depends(obter_usuario_atual)
     div = db.query(models.Divergencia).get(div_id)
     if not div:
         raise HTTPException(404, "Divergência não encontrada")
+    _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    return div
+
+
+@router.post("/{div_id}/resumir-ia", response_model=schemas.DivergenciaOut)
+def resumir_divergencia_com_ia(
+    div_id: int,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Chama a IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py)
+    pra traduzir num resumo executivo curto os sinais já calculados desta
+    divergência (hipótese de regras + modelo estatístico + evidências +
+    casos similares). Não recalcula nem substitui hipotese_ia/confianca_ia -
+    só preenche ia_gen_resumo, sempre revisável, sob pedido explícito."""
+    div = db.query(models.Divergencia).get(div_id)
+    if not div:
+        raise HTTPException(404, "Divergência não encontrada")
+    try:
+        resultado = ia_generativa.resumir_divergencia(div)
+    except ia_generativa.IAGenerativaIndisponivel as erro:
+        raise HTTPException(503, str(erro))
+    div.ia_gen_resumo = resultado["resumo"]
+    div.ia_gen_analisado_em = datetime.utcnow()
+    db.commit()
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
     return div

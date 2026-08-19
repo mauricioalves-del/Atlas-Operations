@@ -7,7 +7,7 @@ este router só lê o que já foi importado - é pra tela de relatório, não
 pra receber webhook."""
 import io
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Body, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -19,6 +19,8 @@ from .. import models
 from ..database import get_db
 from ..deps import obter_usuario_atual, requer_papel, filtrar_por_almoxarifado_permitido
 from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote, importar_planilha_historico_lovable
+from .. import ia_generativa
+from ..hipoteses_config import HIPOTESES as _HIPOTESES_CATALOGO
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
 
@@ -854,6 +856,9 @@ def dashboard_passivos_itens(
             "data_baixa": str(b.data_baixa) if b.data_baixa else None,
             "divergencia_vinculada_id": b.divergencia_vinculada_id,
             "categoria_mapeamento": _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais),
+            "ia_gen_categoria": b.ia_gen_categoria, "ia_gen_prioridade": b.ia_gen_prioridade,
+            "ia_gen_resumo": b.ia_gen_resumo,
+            "ia_gen_analisado_em": b.ia_gen_analisado_em.isoformat() if b.ia_gen_analisado_em else None,
         }
         for b in baixas
     ]
@@ -869,6 +874,105 @@ def dashboard_passivos_itens(
         item["tem_justificativa"] = item["id"] in baixas_com_justificativa
 
     return {"itens": itens, "total": len(itens), "valor_total": round(sum(b.valor_total or 0 for b in baixas), 2)}
+
+
+# ---------------------------------------------------------------------------
+# IA GENERATIVA - classificação/resumo automático de baixas (25/08/2026,
+# pedido explícito do Maurício). Ver app/ia_generativa.py pro que é chamado
+# aqui e por que os campos usam o prefixo ia_gen_ - não é a mesma coisa que
+# hipotese_ia/confianca_ia de Divergencia (aquilo é regra + modelo
+# estatístico interno do Atlas, sempre calculado; isto é um LLM externo,
+# opcional, só sob pedido explícito de quem está usando a tela).
+# ---------------------------------------------------------------------------
+
+@router.get("/ia-generativa/status")
+def ia_generativa_status(usuario: models.Usuario = Depends(obter_usuario_atual)):
+    """Usado pelo frontend pra decidir se mostra o botão "Analisar com IA"
+    ou um aviso de que o recurso não está configurado neste ambiente - nunca
+    falha mesmo sem chave configurada, só informa configurada=False."""
+    return ia_generativa.status_ia_generativa()
+
+
+def _codigos_hipoteses_ativos(db: Session) -> list[str]:
+    ativos = sorted({h.codigo for h in db.query(models.Hipotese).filter(models.Hipotese.ativo.is_(True)).all()})
+    if ativos:
+        return ativos
+    # fallback pro catálogo fixo do código (hipoteses_config.py) - caso raro de um banco
+    # recém-criado, antes do bootstrap semear a tabela Hipotese
+    return [codigo for codigo, _nome, _descricao in _HIPOTESES_CATALOGO]
+
+
+@router.post("/{baixa_id}/analisar-ia")
+def analisar_baixa_com_ia(
+    baixa_id: int,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Chama a IA generativa pra sugerir categoria + prioridade + resumo de
+    UMA baixa (botão "Analisar com IA" na tela de Mapeamento de Passivos).
+    Grava só a sugestão - sempre revisável, nunca decide nada em definitivo
+    nem sobrescreve hipotese_aplicada."""
+    baixa = db.query(models.BaixaOperacional).filter(models.BaixaOperacional.id == baixa_id).first()
+    if not baixa:
+        raise HTTPException(404, "Baixa não encontrada.")
+    try:
+        resultado = ia_generativa.classificar_e_resumir_baixa(baixa, _codigos_hipoteses_ativos(db))
+    except ia_generativa.IAGenerativaIndisponivel as erro:
+        raise HTTPException(503, str(erro))
+
+    baixa.ia_gen_categoria = resultado["categoria_sugerida"]
+    baixa.ia_gen_prioridade = resultado["prioridade"]
+    baixa.ia_gen_resumo = resultado["resumo"]
+    baixa.ia_gen_analisado_em = datetime.utcnow()
+    db.commit()
+    return {
+        "id": baixa.id, "ia_gen_categoria": baixa.ia_gen_categoria, "ia_gen_prioridade": baixa.ia_gen_prioridade,
+        "ia_gen_resumo": baixa.ia_gen_resumo, "ia_gen_analisado_em": baixa.ia_gen_analisado_em.isoformat(),
+    }
+
+
+@router.post("/analisar-ia-lote")
+def analisar_baixas_ia_lote(
+    limite: int = Query(
+        15, ge=1, le=ia_generativa.LIMITE_MAXIMO_LOTE,
+        description="Quantas baixas pendentes analisar nesta chamada (trava de segurança pra não estourar a cota gratuita)",
+    ),
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Analisa em lote as baixas Aprovadas ainda sem leitura da IA
+    generativa (ia_gen_analisado_em IS NULL) - usado pelo botão "Analisar
+    pendentes com IA" da tela. Prioriza os itens de maior valor primeiro,
+    já que a camada gratuita do provedor tem cota limitada por minuto/dia
+    (ver app/ia_generativa.py) - com muitos pendentes, pode ser preciso
+    chamar este endpoint mais de uma vez."""
+    pendentes = (
+        db.query(models.BaixaOperacional)
+        .filter(models.BaixaOperacional.status_fluxo == "APROVADA")
+        .filter(models.BaixaOperacional.ia_gen_analisado_em.is_(None))
+        .order_by(models.BaixaOperacional.valor_total.desc())
+        .limit(limite)
+        .all()
+    )
+    if not pendentes:
+        return {"analisadas": 0, "erros": [], "restantes": 0}
+
+    resultado = ia_generativa.analisar_baixas_pendentes_em_lote(pendentes, _codigos_hipoteses_ativos(db), limite)
+    agora = datetime.utcnow()
+    for baixa, dados in resultado["analisadas"]:
+        baixa.ia_gen_categoria = dados["categoria_sugerida"]
+        baixa.ia_gen_prioridade = dados["prioridade"]
+        baixa.ia_gen_resumo = dados["resumo"]
+        baixa.ia_gen_analisado_em = agora
+    db.commit()
+
+    restantes = (
+        db.query(models.BaixaOperacional)
+        .filter(models.BaixaOperacional.status_fluxo == "APROVADA")
+        .filter(models.BaixaOperacional.ia_gen_analisado_em.is_(None))
+        .count()
+    )
+    return {"analisadas": len(resultado["analisadas"]), "erros": resultado["erros"], "restantes": restantes}
 
 
 # ---------------------------------------------------------------------------

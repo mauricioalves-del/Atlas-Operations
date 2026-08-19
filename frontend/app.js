@@ -1446,6 +1446,17 @@ async function abrirDetalhe(id) {
         <p>Valor estimado: <strong>${formatarMoeda(d.valor_estimado)}</strong>${d.valor_estimado === 0 ? " <span class='hint' style='display:inline'>(sem custo cadastrado para este SKU)</span>" : ""}</p>
         <p>Data de detecção: <strong>${formatarDataCurta(d.data_deteccao)}</strong></p>
       </div>
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Resumo por IA Generativa</h2>
+          ${podeEditar ? `<button class="btn-secundario" id="btn-resumir-ia">${d.ia_gen_resumo ? "🔄 Atualizar resumo" : "✨ Resumir com IA"}</button>` : ""}
+        </div>
+        ${
+          d.ia_gen_resumo
+            ? `<p>${d.ia_gen_resumo}</p><p class="hint">Gerado em ${new Date(d.ia_gen_analisado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })} por um modelo de IA generativa externo — sugestão, sempre revisável, não substitui a hipótese reconciliada acima.</p>`
+            : `<p class="hint">Ainda sem resumo gerado. Um modelo de IA generativa externo (opcional, configurado pelo administrador do Atlas) pode traduzir os sinais acima — hipóteses, evidências, casos similares — numa leitura corrida, em português.</p>`
+        }
+      </div>
       <div class="panel"><h2>Observação original (planilha)</h2>${obsHtml}</div>
       <div class="panel"><h2>Evidências</h2>${evidenciasHtml}</div>
       <div class="panel"><h2>Casos similares</h2>${casosHtml}</div>
@@ -1528,6 +1539,23 @@ async function abrirDetalhe(id) {
         abrirDetalhe(d.id);
       });
     }
+  }
+  const btnResumirIA = document.getElementById("btn-resumir-ia");
+  if (btnResumirIA) {
+    btnResumirIA.addEventListener("click", async () => {
+      const textoOriginal = btnResumirIA.textContent;
+      btnResumirIA.disabled = true;
+      btnResumirIA.textContent = "Gerando resumo...";
+      const res = await apiFetch(`${API}/divergencias/${d.id}/resumir-ia`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.detail || "Não foi possível gerar o resumo com IA.");
+        btnResumirIA.disabled = false;
+        btnResumirIA.textContent = textoOriginal;
+        return;
+      }
+      abrirDetalhe(d.id);
+    });
   }
   tentarRenderizar(() => renderHistoricoSku(historico));
   tentarRenderizar(() => renderProjecaoSku(historico));
@@ -5271,7 +5299,28 @@ document.getElementById("btn-ver-todos-inventario").addEventListener("click", ()
   abrirModalFluxoInventarioItens(params, "Todos os Ajustes de Inventário do período");
 });
 
+// IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py no backend) -
+// classificação/resumo automático de baixas, pedido explícito do Maurício
+// (25/08/2026). `renderCelulaIA` mostra o botão "Analisar" pra item ainda sem
+// leitura, ou um badge com prioridade+categoria sugeridas (tooltip com o
+// resumo) pra item já analisado - nunca decide nada por conta própria, é
+// sempre uma sugestão revisável.
+function renderCelulaIA(i) {
+  if (i.ia_gen_analisado_em) {
+    const classeBadge =
+      i.ia_gen_prioridade === "Alta" ? "badge-aberta" : i.ia_gen_prioridade === "Média" ? "badge-em_investigacao" : i.ia_gen_prioridade === "Baixa" ? "badge-resolvida" : "badge-nao";
+    const resumo = (i.ia_gen_resumo || "Sem resumo.").replace(/"/g, "&quot;");
+    return `<span class="badge ${classeBadge}" title="${resumo}">${i.ia_gen_prioridade || "—"} · ${rotulo(i.ia_gen_categoria)}</span>`;
+  }
+  return `<button class="btn-secundario btn-analisar-ia-item" data-id="${i.id}" style="font-size:11px; padding:4px 10px">✨ Analisar</button>`;
+}
+
+let _filtrosAtuaisModalPassivos = null;
+let _tituloAtualModalPassivos = null;
+
 async function abrirModalPassivosItens(filtros, titulo) {
+  _filtrosAtuaisModalPassivos = filtros;
+  _tituloAtualModalPassivos = titulo;
   const params = new URLSearchParams(filtros);
   const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/itens?${params.toString()}`).then((r) => r.json());
 
@@ -5301,9 +5350,10 @@ async function abrirModalPassivosItens(filtros, titulo) {
           <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
           <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
           <td><button class="btn-secundario btn-justificar-passivo-item" data-id="${i.id}">Justificar</button></td>
+          <td>${renderCelulaIA(i)}</td>
         </tr>`
       )
-      .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma baixa encontrada com esse filtro.</td></tr>`;
+      .join("") || `<tr><td colspan="13" style="color:var(--muted)">Nenhuma baixa encontrada com esse filtro.</td></tr>`;
 
     const abrirJustificativaDoItemPassivo = (id) => {
       const item = itens.find((i) => i.id === id);
@@ -5324,6 +5374,25 @@ async function abrirModalPassivosItens(filtros, titulo) {
         document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
         mostrarView("lista");
         abrirDetalhe(parseInt(btn.dataset.id));
+      })
+    );
+    document.querySelectorAll(".btn-analisar-ia-item").forEach((btn) =>
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const id = parseInt(btn.dataset.id);
+        btn.disabled = true;
+        btn.textContent = "Analisando...";
+        const res = await apiFetch(`${API}/baixas-operacionais/${id}/analisar-ia`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Não foi possível analisar esta baixa com IA.");
+          btn.disabled = false;
+          btn.textContent = "✨ Analisar";
+          return;
+        }
+        const item = dados.itens.find((x) => x.id === id);
+        if (item) Object.assign(item, data);
+        aplicarFiltroPassivos();
       })
     );
   };
@@ -5357,6 +5426,27 @@ document.getElementById("btn-fechar-modal-passivos-itens").addEventListener("cli
 });
 document.getElementById("modal-passivos-itens-overlay").addEventListener("click", (ev) => {
   if (ev.target.id === "modal-passivos-itens-overlay") document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
+});
+document.getElementById("btn-analisar-ia-lote-passivos").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-analisar-ia-lote-passivos");
+  btn.disabled = true;
+  btn.textContent = "Analisando com IA...";
+  const res = await apiFetch(`${API}/baixas-operacionais/analisar-ia-lote?limite=15`, { method: "POST" });
+  const data = await res.json();
+  btn.disabled = false;
+  btn.textContent = "✨ Analisar pendentes com IA";
+  if (!res.ok) {
+    alert(data.detail || "Não foi possível analisar em lote com IA.");
+    return;
+  }
+  const partes = [`Analisadas: ${data.analisadas}`];
+  if (data.erros && data.erros.length) {
+    partes.push(`${data.erros.length} erro(s) - ver console`);
+    console.warn("Erros ao analisar baixas com IA:", data.erros);
+  }
+  if (data.restantes) partes.push(`ainda restam ${data.restantes} pendente(s) - clique de novo pra continuar`);
+  alert(partes.join(" · "));
+  if (_filtrosAtuaisModalPassivos) abrirModalPassivosItens(_filtrosAtuaisModalPassivos, _tituloAtualModalPassivos);
 });
 
 async function abrirModalFluxoInventarioItens(filtros, titulo) {

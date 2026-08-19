@@ -224,6 +224,27 @@ def garantir_colunas_novas():
                 conn.execute(text("ALTER TABLE lotes_shelf_life ADD COLUMN grupo_produto VARCHAR"))
                 conn.commit()
 
+    # Classificação/resumo por IA GENERATIVA (25/08/2026 - ver app/ia_generativa.py e
+    # app/models.py). Campos opcionais, só preenchidos quando alguém aciona "Analisar
+    # com IA"/"Resumir com IA" na tela - continuam NULL em qualquer instalação que não
+    # configure ATLAS_IA_GENERATIVA_API_KEY.
+    if inspecao.has_table("baixas_operacionais"):
+        colunas_baixas = {c["name"] for c in inspecao.get_columns("baixas_operacionais")}
+        if "ia_gen_categoria" not in colunas_baixas:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_categoria VARCHAR"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_prioridade VARCHAR"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_resumo TEXT"))
+                conn.execute(text("ALTER TABLE baixas_operacionais ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
+                conn.commit()
+
+    colunas_divergencias = {c["name"] for c in inspecao.get_columns("divergencias")}
+    if "ia_gen_resumo" not in colunas_divergencias:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_resumo TEXT"))
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN ia_gen_analisado_em TIMESTAMP"))
+            conn.commit()
+
 
 def _backfill_lotes_ajuste_inventario_legado():
     """Roda uma única vez, imediatamente depois da migração que criou a
