@@ -685,7 +685,17 @@ def _coletar_scorecard_inventario_almoxarifado(db: Session, usuario: models.Usua
       devolve a série de UM almoxarifado por chamada, por isso o loop abaixo).
     Não inventa "plano de ação" livre - a leitura e o próximo passo de cada
     linha são montados por regra a partir desses mesmos números (ver
-    _linha_scorecard_almoxarifado)."""
+    _linha_scorecard_almoxarifado).
+
+    "movimentados_aplicavel" (21/08/2026, correção pedida pelo usuário):
+    reaproveita Almoxarifado.participa_contagem_diaria - o MESMO cadastro que
+    já exclui Box, Box_2, Ativação, Degustação e Loja da Cobertura de
+    Conferência (divergencias_router.py) - porque esses almoxarifados
+    simplesmente não fazem conciliação diária de Movimentados por decisão
+    operacional, não por lacuna de dado. Sem essa marcação, a regra do "pior
+    dos dois sinais" tratava a ausência estrutural de Movimentados como
+    "Sem histórico" e arrastava pra baixo até almoxarifados com evolução real
+    de acurácia de fechamento."""
     almoxarifados = cadastros_router.listar_almoxarifados_cadastro(incluir_inativos=False, usuario=usuario, db=db)
     comparativo_mes = {
         item["almoxarifado"]: item
@@ -724,6 +734,7 @@ def _coletar_scorecard_inventario_almoxarifado(db: Session, usuario: models.Usua
             "iap_pct": comp.get("iap_pct") if comp else None,
             "movimentados_pct": movimentados_pct,
             "delta_movimentados_pp": delta_movimentados_pp,
+            "movimentados_aplicavel": bool(almox.participa_contagem_diaria),
         })
     return resultado
 
@@ -734,25 +745,41 @@ def _linha_scorecard_almoxarifado(item: dict) -> dict:
     reaproveita os mesmos limiares de acurácia (_LIMIARES) já usados no resto
     do MBR). Prioriza o pior dos dois sinais (fechamento vs. movimentados) pra
     decidir o status da linha - um almoxarifado só está "em avanço" se os dois
-    estiverem, no mínimo, estáveis."""
+    estiverem, no mínimo, estáveis.
+
+    Quando Movimentados não é aplicável (item["movimentados_aplicavel"] ==
+    False - ver docstring de _coletar_scorecard_inventario_almoxarifado), o
+    sinal de Movimentados é ignorado por completo: o status e o próximo passo
+    vêm só do fechamento. Sem isso, um almoxarifado que nunca faz conciliação
+    de Movimentados (decisão operacional, não lacuna de dado) ficaria travado
+    em "Sem histórico" pra sempre, mesmo com evolução real de acurácia."""
+    movimentados_aplicavel = item.get("movimentados_aplicavel", True)
     delta_fech = item["delta_acuracia_pp"]
-    delta_mov = item["delta_movimentados_pp"]
+    delta_mov = item["delta_movimentados_pp"] if movimentados_aplicavel else None
     label_fech, cor_fech = _status_evolucao(delta_fech)
-    label_mov, cor_mov = _status_evolucao(delta_mov)
-    ordem = {"Involução": 0, "Sem histórico": 1, "Estável": 2, "Evolução": 3}
-    if ordem[label_fech] <= ordem[label_mov]:
-        status_label, status_cor = label_fech, cor_fech
+
+    if movimentados_aplicavel:
+        label_mov, cor_mov = _status_evolucao(delta_mov)
+        ordem = {"Involução": 0, "Sem histórico": 1, "Estável": 2, "Evolução": 3}
+        if ordem[label_fech] <= ordem[label_mov]:
+            status_label, status_cor = label_fech, cor_fech
+        else:
+            status_label, status_cor = label_mov, cor_mov
     else:
-        status_label, status_cor = label_mov, cor_mov
+        label_mov = None
+        status_label, status_cor = label_fech, cor_fech
 
     partes_leitura = [f"Acurácia {_fmt_pct(item['acuracia_pct'])}"]
     if delta_fech is not None:
         sinal = "+" if delta_fech >= 0 else ""
         partes_leitura.append(f"({sinal}{_fmt_pct(delta_fech)} vs. mês anterior)")
-    partes_leitura.append(f"· Movimentados {_fmt_pct(item['movimentados_pct'])}")
-    if delta_mov is not None:
-        sinal = "+" if delta_mov >= 0 else ""
-        partes_leitura.append(f"({sinal}{_fmt_pct(delta_mov)})")
+    if movimentados_aplicavel:
+        partes_leitura.append(f"· Movimentados {_fmt_pct(item['movimentados_pct'])}")
+        if delta_mov is not None:
+            sinal = "+" if delta_mov >= 0 else ""
+            partes_leitura.append(f"({sinal}{_fmt_pct(delta_mov)})")
+    else:
+        partes_leitura.append("· Movimentados: não aplicável a este almoxarifado")
     if item.get("iap_pct") is not None:
         partes_leitura.append(f"· IAP {_fmt_pct(item['iap_pct'])}")
     leitura = " ".join(partes_leitura)
@@ -766,7 +793,7 @@ def _linha_scorecard_almoxarifado(item: dict) -> dict:
         proximo_passo = "Reforçar a conciliação diária de movimentados — reconciliação piorou vs. o mês anterior."
     elif acuracia_critica:
         proximo_passo = "Intensificar a cadência de conferência até a acurácia voltar pra faixa saudável."
-    elif label_fech == "Sem histórico" and label_mov == "Sem histórico":
+    elif label_fech == "Sem histórico" and (label_mov == "Sem histórico" or label_mov is None):
         proximo_passo = "Sem histórico suficiente ainda — acompanhar a partir do próximo fechamento."
     else:
         proximo_passo = "Manter a cadência atual de fechamento e conciliação — sem sinal de piora no mês."
@@ -894,6 +921,59 @@ def _linha_risco_com_evolucao(nome_frente, atual, anterior, campo_pct, menor_e_m
 
     return {"frente": nome_frente, "status_label": status_label, "status_cor": status_cor,
             "leitura": leitura, "proximo_passo": proximo_passo}
+
+
+# ---------------------------------------------------------------------------
+# Diário de Bordo / Rotina Master (21/08/2026, pedido do usuário: "Adicione
+# ao slide 'Atlas' a visão da rotina master, meu diário de bordo [...] crie
+# um indicador paralelo mostrando curva de evolução associada a constância
+# e disciplina de manter as tarefas em dia"). Esse indicador não mede
+# estoque - mede a disciplina operacional de manter o diário de bordo em
+# dia, como leitura complementar de "impacto do Atlas" (a mesma constância
+# que sustenta a qualidade dos dados usados no resto deste relatório).
+#
+# Vem de um app separado do Atlas (Mágio Rotinas / "Rotina Master",
+# https://rotinabusiness.lovable.app/), sem integração automática ainda -
+# por isso, diferente de todo outro indicador deste MBR, os números aqui
+# NÃO vêm de uma consulta ao banco do Atlas. Vieram de navegar direto no
+# Dashboard de Performance daquele app, com o filtro de período (De/Até) já
+# no mês de fechamento (1º ao último dia) - ver _DIARIO_BORDO_POR_MES.
+# Fins de semana são excluídos da leitura de constância porque não têm
+# rotina devida naquele app (cumprimento 0% num sábado/domingo é ausência
+# de tarefa, não uma falha real).
+#
+# Só existe dado pro(s) mês(es) já coletado(s) manualmente - pra qualquer
+# outro mês, _coletar_indicador_diario_bordo devolve "tem_dados": False em
+# vez de reaproveitar por engano o número de um mês errado. Se este
+# indicador for pra continuar no MBR mês a mês, precisa de uma coleta manual
+# nova (ou uma integração automática, que não existe hoje) a cada geração.
+_DIARIO_BORDO_POR_MES = {
+    "2026-07": {
+        "cumprimento_geral_pct": 97.0,
+        "rotinas_cumpridas": 294,
+        "rotinas_devidas": 302,
+        "pct_no_prazo": 97.0,
+        "pct_em_atraso": 3.0,
+        "media_dias_uteis_pct": 84.7,
+        "maior_sequencia_dias_uteis_100": 8,
+        "lapsos_dias_uteis": ["09/07", "10/07", "30/07"],
+        "semanas": [
+            {"rotulo": "01–03/07", "cumprimento_pct": 92.0},
+            {"rotulo": "06–10/07", "cumprimento_pct": 58.6},
+            {"rotulo": "13–17/07", "cumprimento_pct": 100.0},
+            {"rotulo": "20–24/07", "cumprimento_pct": 97.4},
+            {"rotulo": "27–31/07", "cumprimento_pct": 78.6},
+        ],
+        "coletado_em": "21/08/2026",
+    },
+}
+
+
+def _coletar_indicador_diario_bordo(mes: str) -> dict:
+    dado = _DIARIO_BORDO_POR_MES.get(mes)
+    if not dado:
+        return {"tem_dados": False, "mes": mes}
+    return {**dado, "tem_dados": True, "mes": mes}
 
 
 # Chaves dos 5 slots nativos (ver dashboards_externos_router.SLOTS) - cada um já
@@ -1035,6 +1115,7 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     # testes_industriais_externo, fefo_externo) em vez de recalculá-los.
     dados["scorecard_inventario_almoxarifado"] = _coletar_scorecard_inventario_almoxarifado(db, usuario, mes)
     dados["scorecard_mapeamento_riscos"] = _coletar_scorecard_mapeamento_riscos(db, usuario, mes, dados)
+    dados["diario_bordo"] = _coletar_indicador_diario_bordo(mes)
 
     return dados
 
@@ -2622,6 +2703,83 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
     return slide
 
 
+def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Constância e Disciplina — Diário de Bordo (21/08/2026, pedido do
+    usuário: ver docstring de _DIARIO_BORDO_POR_MES acima pro contexto
+    completo e a ressalva sobre esse indicador vir de coleta manual, não de
+    consulta ao banco do Atlas). Indicador PARALELO ao resto do MBR: mede
+    disciplina operacional (manter o diário de bordo em dia), não estoque -
+    entra na seção Atlas como um segundo ângulo de "impacto do Atlas", já
+    que a mesma constância sustenta a qualidade dos dados usados em todo o
+    resto deste relatório."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Constância e Disciplina — Diário de Bordo", mes_label, pagina,
+               "Indicador paralelo: cumprimento da Rotina Master em dias úteis do mês (fins de semana não têm rotina devida)")
+
+    dado = d.get("diario_bordo") or {"tem_dados": False}
+    if not dado.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Ainda sem coleta pra este mês",
+            "Este indicador vem de uma coleta manual no Dashboard de Performance da Rotina Master "
+            "(rotinabusiness.lovable.app), filtrado pelo mês de fechamento — ainda não foi coletado pra este mês "
+            "específico. Repita a coleta (filtro De/Até = 1º ao último dia do mês) pra atualizar este slide.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
+    lapsos = dado.get("lapsos_dias_uteis") or []
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_pct(dado["cumprimento_geral_pct"]), "rotulo": "Cumprimento Geral do Mês"},
+        {"valor": f"{_fmt_num(dado['rotinas_cumpridas'])}/{_fmt_num(dado['rotinas_devidas'])}",
+         "rotulo": "Rotinas Cumpridas / Devidas"},
+        {"valor": _fmt_num(dado["maior_sequencia_dias_uteis_100"]), "rotulo": "Maior Sequência a 100%",
+         "cor": COR_SUCESSO},
+        {"valor": _fmt_num(len(lapsos)), "rotulo": "Lapsos em Dias Úteis",
+         "cor": COR_ATENCAO if lapsos else COR_SUCESSO},
+    ], altura=1.25)
+
+    largura_esquerda = 7.1
+    semanas = dado.get("semanas") or []
+    _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "EVOLUÇÃO SEMANAL DE CUMPRIMENTO (DIAS ÚTEIS)",
+           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if semanas:
+        categorias = [s["rotulo"] for s in semanas]
+        valores = [s["cumprimento_pct"] for s in semanas]
+        _grafico_categoria(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, categorias, "Cumprimento (%)", valores,
+                            tipo=XL_CHART_TYPE.LINE_MARKERS, cor_serie=AZUL_INSTITUCIONAL)
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, "Evolução semanal",
+                       "Sem quebra semanal coletada pra este mês.")
+
+    x_direita = MARGEM_IN + largura_esquerda + 0.35
+    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
+    if lapsos:
+        texto_leitura = (
+            f"Média em dias úteis: {_fmt_pct(dado['media_dias_uteis_pct'])} — {len(lapsos)} lapso(s) pontual(is) "
+            f"({', '.join(lapsos)}), sempre recuperados no dia útil seguinte, sem arrastar pra outros dias. Maior "
+            f"sequência sem falha: {_fmt_num(dado['maior_sequencia_dias_uteis_100'])} dias úteis consecutivos a "
+            "100%. Fins de semana ficam fora dessa leitura — não têm rotina devida no app."
+        )
+    else:
+        texto_leitura = (
+            f"Média em dias úteis: {_fmt_pct(dado['media_dias_uteis_pct'])}, sem nenhum lapso no mês — maior "
+            f"sequência de {_fmt_num(dado['maior_sequencia_dias_uteis_100'])} dias úteis consecutivos a 100%. "
+            "Fins de semana ficam fora dessa leitura — não têm rotina devida no app."
+        )
+    _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.35, "Leitura Executiva",
+                   texto_leitura, cor_fundo=OFF_WHITE, tamanho_texto=12)
+
+    _texto(
+        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        f"Coletado manualmente em {dado.get('coletado_em', '—')} navegando na Rotina Master "
+        "(rotinabusiness.lovable.app), filtrado pelo mês de fechamento — app separado do Atlas, sem integração "
+        "automática ainda.",
+        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
+    )
+    return slide
+
+
 def _slide_atlas_stock_savvy_visao(prs: Presentation, mes_label: str, pagina: int, d: dict):
     """Atlas + Stock Savvy (20/08/2026, pedido do usuário: "Análise também o
     Controle desenvolvido em paralelo no lovable, o aplicativo 'Stock
@@ -2870,8 +3028,10 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
 
     _secao(7, "Atlas",
            "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
-           ["Impacto do Atlas", "Atlas + Stock Savvy", "Módulos Recentes do Stock Savvy", "Próximos Passos"])
+           ["Impacto do Atlas", "Constância e Disciplina — Diário de Bordo", "Atlas + Stock Savvy",
+            "Módulos Recentes do Stock Savvy", "Próximos Passos"])
     _slide_impacto_atlas(prs, mes_label, _pag(), dados)
+    _slide_diario_bordo(prs, mes_label, _pag(), dados)
     _slide_atlas_stock_savvy_visao(prs, mes_label, _pag(), dados)
     _slide_atlas_stock_savvy_modulos(prs, mes_label, _pag(), dados)
     _slide_proximos_passos(prs, mes_label, _pag(), dados)

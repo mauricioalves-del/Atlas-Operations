@@ -1,140 +1,123 @@
-# MBR — Scorecards por Almoxarifado e por Risco, e slides de venda Atlas + Stock Savvy
+# MBR — 3 ajustes a partir do seu feedback nas capturas de tela
 
-## O pedido
+## O que você pediu
 
-Você pediu três coisas na apresentação do MBR:
+Depois de ver as primeiras capturas do MBR novo, você apontou três coisas:
 
-1. Um **Scorecard de Inventário por Almoxarifado**, mostrando evoluções e
-   involuções, com plano de ação por setor, baseado no histórico de
-   inventários e na conciliação de movimentados.
-2. Um **Scorecard de Mapeamento de Riscos** por ação de mapeamento/controle,
-   cruzando Dispersão de Lote (Produção), Testes Industriais, FEFO e Shelf
-   Life — com evoluções, involuções e próximos passos.
-3. Uma análise "vendendo a ideia" do controle formado por Atlas + Stock
-   Savvy (o app paralelo no Lovable), citando especificamente os módulos
-   Produção, Shelf Life e Gestão.
+1. No Scorecard de Inventário por Almoxarifado, Box, Box 2, Ativação e Loja
+   apareciam sempre como "Sem histórico", mesmo tendo dado de acurácia real
+   — porque o Atlas não faz controle de Movimentados nesses almoxarifados,
+   e você pediu pra desconsiderar essa premissa nessa análise.
+2. No Mapeamento de Passivos, tudo que foi baixado por inventário no
+   período devia cair na barra "Mapeada via Inventário Mensal" — e estava
+   caindo inteiro em "Aprovada, aguardando divergência".
+3. Adicionar, no slide "Atlas", a visão da Rotina Master (seu diário de
+   bordo) — entrando no sistema (rotinabusiness.lovable.app), filtrando
+   pelo mês de fechamento (1º ao último dia), com um indicador novo de
+   curva de evolução ligado a constância e disciplina em manter as tarefas
+   em dia.
 
-Perguntei duas coisas antes de começar: se o conteúdo do Stock Savvy devia
-vir só da descrição que você deu ou de eu navegar no sistema — você
-confirmou **"entre no sistema, analise os módulos"**; e se os dois novos
-Scorecards deviam ganhar seções novas ou entrar como slides dentro das
-seções já existentes — você escolheu **slides novos dentro das seções já
-existentes**.
+## 1. Scorecard de Inventário por Almoxarifado — Movimentados não aplicável
 
-## O que foi construído
+A regra de status usava "o pior dos dois sinais" (fechamento vs.
+Movimentados). Isso fazia sentido pra almoxarifados que fazem os dois
+controles — mas Box, Box_2, Ativação e Loja nunca vão ter dado de
+Movimentados (decisão operacional sua, não uma lacuna de dado), então a
+regra os travava em "Sem histórico" pra sempre, escondendo evolução real de
+acurácia de fechamento.
 
-### 1. Scorecard de Inventário por Almoxarifado (Seção 2 — Inventários e Movimentados)
+Corrigido reaproveitando o cadastro que já existe pra isso:
+`Almoxarifado.participa_contagem_diaria` — o mesmo campo que já exclui
+esses almoxarifados da Cobertura de Conferência. Quando esse campo é
+`False`, o Scorecard agora usa **só o sinal de fechamento** pra decidir o
+status daquele almoxarifado, e a leitura mostra "Movimentados: não
+aplicável a este almoxarifado" em vez de um "—" que parecia lacuna de dado.
+Almoxarifados que fazem os dois controles continuam com a regra original
+(pior dos dois sinais).
 
-Uma linha por almoxarifado ativo, cruzando três leituras:
+## 2. Mapeamento de Passivos — baixas de inventário mensal sem vínculo formal
 
-- Acurácia item-a-item do fechamento do mês e a variação vs. o mês
-  anterior.
-- IAP (acurácia ponderada por valor) do mês, como leitura complementar.
-- Acurácia da reconciliação diária de Movimentados e sua variação.
+O motivo raiz: uma baixa só era classificada como "Mapeada via Inventário
+Mensal" se estivesse formalmente vinculada (`divergencia_vinculada_id`) a
+uma divergência de fechamento, e esse vínculo automático só acontece
+dentro de uma janela de poucos dias (1 dia antes a 4 dias depois) entre a
+data da baixa e a data da divergência. Essa janela foi calibrada pra
+reconciliação DIÁRIA de Movimentados — faz sentido lá, porque a baixa
+correspondente costuma ser aprovada poucos dias depois.
 
-O status da linha (Evolução / Estável / Involução / Sem histórico) usa o
-**pior dos dois sinais** — fechamento e movimentados — não a média: um
-almoxarifado só aparece "em avanço" se os dois estiverem, no mínimo,
-estáveis. O próximo passo é escrito por regra a partir desses mesmos
-números (reconferência prioritária, investigar causa raiz, reforçar
-conciliação, intensificar cadência, ou manter o ritmo atual) — não é texto
-livre.
+Fechamento mensal não se encaixa nessa janela: a divergência só é detectada
+no dia do fechamento (geralmente fim do mês), enquanto a baixa
+correspondente pode ter sido aprovada em qualquer dia daquele mês, semanas
+antes. Por isso, praticamente nenhuma baixa de inventário mensal ganhava o
+vínculo formal, e todas ficavam presas em "Aprovada, aguardando
+divergência" mesmo sendo, de fato, inventário.
 
-Almoxarifado sem fechamento ou sem movimentados registrados no mês entra
-como "Sem histórico", não é omitido da tabela.
+Corrigido sem tocar no vínculo formal nem na resolução automática de
+divergências (isso continua exigindo o casamento de sempre, com sua
+janela de dias — não queria arriscar mexer nisso, que afeta pesos de ML e
+resolução real de divergências). A correção é só na classificação/exibição:
+se existe qualquer divergência de fechamento mensal pro mesmo SKU +
+almoxarifado no mesmo mês da baixa, ela conta como "Mapeada via Inventário
+Mensal" na tela e no MBR, mesmo sem o vínculo formal. Essa correção está no
+único endpoint por trás da tela Mapeamento de Passivos
+(`/dashboard/resumo-executivo`) e em todos os outros painéis que usam a
+mesma categorização (KPIs, motivos, drill-down de itens) — não só no MBR.
 
-### 2. Scorecard de Mapeamento de Riscos (Seção 3 — Mapeamento de Riscos e Passivos)
+## 3. Novo slide: Constância e Disciplina — Diário de Bordo
 
-Uma linha por frente de risco:
+Adicionado na Seção 7 (Atlas), logo depois de "Impacto do Atlas". Entrei na
+Rotina Master (rotinabusiness.lovable.app) com o filtro de período já em
+01/07/26 a 31/07/26 (mês de fechamento) e trouxe:
 
-- **Shelf Life (Farol + Obsolescência)** — avaliado só pelo nível atual
-  (lotes em risco, críticos por giro zero), porque essa base é uma
-  fotografia do dia — hoje não existe série mensal persistida de Shelf
-  Life no Atlas, então não dá pra mostrar "evolução" real sem inventar um
-  histórico que não existe. Isso está dito explicitamente no rodapé do
-  slide, pra não parecer que faltou dado.
-- **Dispersão de Ficha Técnica (Produção)**, **Testes Industriais** e
-  **FEFO (Auditoria importada)** — esses três comparam o mês do relatório
-  com o mês anterior, porque a base de cada um já tem histórico por mês.
-  Quando o indicador nunca foi importado, ou não tem dado nesse mês
-  específico, ou o arquivo não pôde ser lido, o slide mostra o motivo
-  certo (não finge "Estável" sobre dado que não existe).
+- Cumprimento geral do mês (97%, 294 de 302 rotinas) e conclusões no prazo
+  vs. em atraso.
+- Um indicador novo — que você pediu — de constância: separei os dias
+  úteis dos fins de semana (fim de semana não tem rotina devida naquele
+  app, então cumprimento 0% ali não é uma falha, é ausência de tarefa) e
+  calculei a média só nos dias úteis (84,7%), a maior sequência de dias
+  úteis consecutivos a 100% (8 dias) e os lapsos pontuais do mês (09/07,
+  10/07 e 30/07 — sempre recuperados no dia útil seguinte, sem se
+  arrastar).
+- Uma curva de evolução semanal (5 pontos, só dias úteis) que mostra
+  claramente a queda na semana de 06 a 10/07 (58,6%, por causa dos dois
+  lapsos consecutivos) e a recuperação total nas semanas seguintes.
 
-### 3. Atlas + Stock Savvy — dois slides novos (Seção 7 — Impacto e Próximos Passos)
-
-- **"Atlas + Stock Savvy"**: o posicionamento dos dois sistemas em camadas
-  complementares — Stock Savvy como camada operacional (onde a ação
-  acontece: solicitar baixa por QR, aprovar com assinatura dupla, registrar
-  ação de lote) e Atlas como camada de inteligência executiva (onde as
-  frentes se cruzam num relatório único, com histórico e plano de ação).
-- **"Stock Savvy — Módulos Recentes"**: tabela com os três módulos que você
-  pediu para destacar — Produção (Dispersão de Lote e Ações Corretivas),
-  Shelf Life (Mapeamento de Risco, Ações de Lote, Farol e Saving) e Gestão
-  (Baixas Operacionais e Dashboard de Baixas) — e como cada um já se
-  conecta ao Atlas hoje.
-
-O conteúdo desses dois slides vem de **navegação real no Stock Savvy**
-(entrei no sistema, não só na sua descrição), então cada afirmação (ex.:
-"Saving Recuperado" aparecendo no Dashboard Shelf Life, o fluxo de
-aprovação com assinatura dupla) foi confirmada na tela, não assumida.
-
-## O que NÃO foi possível fazer
-
-Shelf Life não tem série mensal no Atlas hoje (é sempre calculado contra a
-data de hoje, sem snapshot por mês salvo em banco). Por isso ele entra no
-Scorecard de Riscos sem "evolução vs. mês anterior" — só pelo nível atual.
-Se isso for importante pra virar comparação mês a mês, precisa de uma
-tabela nova pra guardar o snapshot mensal — não é uma mudança pequena, e
-não estava no pedido original, então não foi feita aqui.
+**Importante sobre este indicador**: ele não vem de uma consulta ao banco
+do Atlas como todo o resto do MBR — a Rotina Master é um app separado,
+sem integração automática ainda. Os números vieram de uma coleta manual
+feita agora (21/08/2026), navegando direto no Dashboard de Performance
+daquele app. Se quiser esse indicador em todo MBR futuro, alguém precisa
+repetir essa coleta manual a cada mês (ou construir uma integração
+automática entre os dois sistemas, que não existe hoje) — deixei isso
+registrado no rodapé do próprio slide e no código, pra não passar a
+impressão de que é um dado ao vivo.
 
 ## Validado
 
-- Testei o Scorecard de Inventário por Almoxarifado com histórico
-  sintético de 3 almoxarifados em 2 meses (Fábrica melhorando, Loja
-  piorando, Processo estável) e confirmei que os rótulos de status e o
-  próximo passo batem com a regra do "pior dos dois sinais" — inclusive a
-  leitura de IAP, que só aparece quando o cadastro de custo do produto
-  existe.
-- Testei o Scorecard de Mapeamento de Riscos nos 4 estados possíveis por
-  frente: nunca importado, sem dado nesse mês, com dado e piora (Involução),
-  com dado e melhora (Evolução) — e no caso real do banco de teste (FEFO
-  com histórico real de maio a agosto/2026, Shelf Life com risco de
-  obsolescência real, Dispersão de Ficha Técnica e Testes Industriais ainda
-  não importados).
-- Gerei o MBR completo (30 slides) para julho/2026 com todos os slides
-  novos presentes, revisei o texto inteiro (`markitdown`) sem sobra de
-  rascunho, e validei a estrutura do arquivo (schema, relacionamentos,
-  content types) sem nenhum problema.
-- Revisão visual de cada slide novo: nenhum corte de texto, nenhuma
-  sobreposição. Encontrei e corrigi um corte de texto real no slide "Atlas
-  + Stock Savvy" (o parágrafo "Por que manter os dois" estava sendo cortado
-  no meio da frase porque a altura da caixa foi um valor fixo que não
-  cabia o texto real — troquei pra calcular a altura necessária a partir do
-  texto, mesmo padrão já usado em outros slides do MBR). Também encontrei e
-  removi uma referência a um caminho de arquivo interno
-  (`claude/sincronizacao-lovable-baixas.md`) que tinha ficado, por engano,
-  dentro do texto de um dos slides — não é algo que devesse aparecer numa
-  apresentação pra executivos.
+- Scorecard de Almoxarifado: testado com um almoxarifado sintético (Box)
+  sem controle de Movimentados e com evolução real de acurácia (+30 p.p.)
+  — confirmei que ele agora aparece como "Evolução" (antes ficava "Sem
+  histórico").
+- Mapeamento de Passivos: testado com uma baixa aprovada 21 dias antes do
+  fechamento do mês (fora da janela de poucos dias) — confirmei que ela
+  agora entra em "Mapeada via Inventário Mensal", e que uma baixa sem
+  fechamento correspondente continua em "Aprovada, aguardando
+  divergência" (a correção não é indiscriminada).
+- Slide de Diário de Bordo: testado nos dois estados (mês com coleta e mês
+  sem coleta) e revisado visualmente — corrigi um rótulo de KPI que estava
+  quebrando em 2 linhas e ficando colado na borda do card.
+- Gerei o MBR completo de novo (31 slides) e revisei a estrutura do
+  arquivo e o texto de todos os slides afetados — sem sobreposição, sem
+  corte de texto, sem problema de validação.
 
-## Arquivo alterado
+## Arquivos alterados
 
-- `backend/app/mbr_generator.py`:
-  - Novas funções de coleta: `_coletar_scorecard_inventario_almoxarifado`,
-    `_linha_scorecard_almoxarifado`, `_coletar_scorecard_mapeamento_riscos`,
-    `_linha_risco_com_evolucao`.
-  - Novo helper de classificação: `_status_evolucao` (evolução/estável/
-    involução/sem histórico a partir de uma variação, diferente do
-    `_status_maior_melhor`/`_status_menor_melhor` que já existiam e
-    classificam um nível absoluto).
-  - Novo helper `_mes_anterior` (mês anterior no formato `YYYY-MM`).
-  - Quatro novos slides: `_slide_scorecard_inventario_almoxarifado`,
-    `_slide_scorecard_mapeamento_riscos`, `_slide_atlas_stock_savvy_visao`,
-    `_slide_atlas_stock_savvy_modulos`.
-  - `montar_pptx_mbr` atualizado: os dois Scorecards entram nas seções 2 e
-    3 já existentes, os dois slides de Stock Savvy entram na seção 7 — sem
-    criar seção nova, como você pediu.
+- `backend/app/mbr_generator.py` — `_linha_scorecard_almoxarifado` agora
+  ignora o sinal de Movimentados quando não aplicável; novo indicador
+  `_coletar_indicador_diario_bordo` + slide `_slide_diario_bordo`.
+- `backend/app/routers/baixas_operacionais_router.py` —
+  `_categoria_mapeamento` reconhece inventário mensal por mês/SKU/
+  almoxarifado quando não há vínculo formal ainda; nova função
+  `_mapa_fechamentos_mensais_por_sku_almox`.
 
-Nenhuma migração de banco necessária — os dois Scorecards novos só leem
-dados que o Atlas já calcula em outros lugares (fechamento, movimentados,
-FEFO, Shelf Life, dashboards externos); nada foi criado ou alterado no
-schema.
+Nenhuma migração de banco necessária.

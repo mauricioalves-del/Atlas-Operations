@@ -208,13 +208,55 @@ def _mapa_divergencias_das_baixas(db: Session, baixas: list) -> dict:
     return {d.id: d for d in db.query(models.Divergencia).filter(models.Divergencia.id.in_(ids)).all()}
 
 
-def _categoria_mapeamento(baixa, divergencias_por_id: dict) -> str:
-    if not baixa.divergencia_vinculada_id:
-        return "aguardando_divergencia" if baixa.status_fluxo == "APROVADA" else "nao_decidida"
-    div = divergencias_por_id.get(baixa.divergencia_vinculada_id)
-    if div and div.origem == "fechamento_inventario":
-        return "inventario_mensal"
-    return "movimentacao_diaria"
+def _mapa_fechamentos_mensais_por_sku_almox(db: Session) -> set:
+    """(sku, almoxarifado, mês) de toda Divergencia vinda de fechamento
+    mensal (origem == "fechamento_inventario") - usado por
+    _categoria_mapeamento pra reconhecer uma baixa como "inventário mensal"
+    mesmo quando ela ainda não tem divergencia_vinculada_id (21/08/2026,
+    pedido do usuário: "considere tudo que foi baixado por inventário no
+    período" na barra "Mapeada via Inventário Mensal").
+
+    O casamento automático (buscar_divergencia_compativel/buscar_baixa_
+    compativel em baixas_operacionais.py) usa uma janela de poucos dias
+    (JANELA_DIAS_ANTES=1, JANELA_DIAS_DEPOIS=4) calibrada pra reconciliação
+    DIÁRIA de Movimentados - baixa aprovada poucos dias depois da
+    divergência ser detectada. Fechamento mensal não se encaixa nessa
+    janela: a divergência só é detectada no dia do fechamento (fim do mês,
+    normalmente), enquanto a baixa correspondente pode ter sido aprovada
+    em qualquer dia daquele mês, bem antes. Por isso a maioria das baixas
+    de inventário mensal nunca ganha o vínculo formal (divergencia_
+    vinculada_id) e ficava presa em "aguardando_divergencia" mesmo sendo,
+    de fato, inventário.
+
+    Esta função não altera o vínculo formal nem a resolução automática de
+    divergências (isso continua exigindo o casamento de
+    baixas_operacionais.py, com sua janela de dias) - serve só pra
+    classificação/relatório (Mapeamento de Passivos e MBR): se existe
+    QUALQUER divergência de fechamento mensal pro mesmo sku+almoxarifado
+    no mesmo mês da baixa, ela conta como inventário mensal na exibição."""
+    linhas = (
+        db.query(models.Divergencia.sku, models.Divergencia.almoxarifado, models.Divergencia.data_deteccao)
+        .filter(models.Divergencia.origem == "fechamento_inventario")
+        .all()
+    )
+    return {(sku, almox, data.strftime("%Y-%m")) for sku, almox, data in linhas if data}
+
+
+def _categoria_mapeamento(baixa, divergencias_por_id: dict, fechamentos_mensais: set | None = None) -> str:
+    if baixa.divergencia_vinculada_id:
+        div = divergencias_por_id.get(baixa.divergencia_vinculada_id)
+        if div and div.origem == "fechamento_inventario":
+            return "inventario_mensal"
+        return "movimentacao_diaria"
+    # Sem vínculo formal ainda - antes de desistir e cair em
+    # "aguardando_divergencia", verifica se essa baixa bate com algum
+    # fechamento mensal do mesmo sku+almoxarifado no mesmo mês (ver
+    # docstring de _mapa_fechamentos_mensais_por_sku_almox acima).
+    if fechamentos_mensais and baixa.data_baixa and baixa.sku and baixa.almoxarifado:
+        chave = (baixa.sku, baixa.almoxarifado, baixa.data_baixa.strftime("%Y-%m"))
+        if chave in fechamentos_mensais:
+            return "inventario_mensal"
+    return "aguardando_divergencia" if baixa.status_fluxo == "APROVADA" else "nao_decidida"
 
 
 def _filtrar_baixas_dashboard(
@@ -249,10 +291,11 @@ def _filtrar_baixas_dashboard(
         baixas = [b for b in baixas if _data_no_periodo(b.data_baixa, ano, mes_numero, data_inicio, data_fim)]
     if categoria_mapeamento or excluir_categoria_mapeamento:
         divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
+        fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
         if categoria_mapeamento:
-            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id) == categoria_mapeamento]
+            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais) == categoria_mapeamento]
         if excluir_categoria_mapeamento:
-            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id) != excluir_categoria_mapeamento]
+            baixas = [b for b in baixas if _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais) != excluir_categoria_mapeamento]
     return baixas
 
 
@@ -260,10 +303,11 @@ def _filtrar_baixas_dashboard(
 def dashboard_passivos_kpis(usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     baixas = db.query(models.BaixaOperacional).all()
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
 
     por_categoria = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
     for b in baixas:
-        cat = _categoria_mapeamento(b, divergencias_por_id)
+        cat = _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais)
         por_categoria[cat]["quantidade"] += 1
         por_categoria[cat]["valor"] += b.valor_total or 0
 
@@ -337,7 +381,8 @@ def dashboard_passivos_motivos_mensal(
         q = q.filter(models.BaixaOperacional.motivo_baixa_bruto.in_(motivos_lista))
     aprovadas = [b for b in q.all() if _data_no_periodo(b.data_baixa, ano, mes, di, df)]
     divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
-    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id) != "inventario_mensal"]
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
+    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais) != "inventario_mensal"]
 
     valor_por_motivo_total = defaultdict(float)
     por_mes_motivo = defaultdict(lambda: defaultdict(float))
@@ -405,7 +450,8 @@ def dashboard_passivos_motivos_resumo(
         q = q.filter(models.BaixaOperacional.motivo_baixa_bruto.in_(motivos_lista))
     aprovadas = [b for b in q.all() if _data_no_periodo(b.data_baixa, ano, mes, di, df)]
     divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
-    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id) != "inventario_mensal"]
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
+    aprovadas = [b for b in aprovadas if _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais) != "inventario_mensal"]
 
     por_motivo = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
     for b in aprovadas:
@@ -428,9 +474,10 @@ def dashboard_passivos_mapeamento_origem(usuario: models.Usuario = Depends(obter
     CATEGORIA_MAPEAMENTO_LABELS e _categoria_mapeamento acima."""
     baixas = db.query(models.BaixaOperacional).all()
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
     por_categoria = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
     for b in baixas:
-        cat = _categoria_mapeamento(b, divergencias_por_id)
+        cat = _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais)
         por_categoria[cat]["quantidade"] += 1
         por_categoria[cat]["valor"] += b.valor_total or 0
     return [
@@ -795,6 +842,7 @@ def dashboard_passivos_itens(
         ano=ano, data_inicio=di, data_fim=df, almoxarifado=almoxarifado, mes_numero=mes_numero, usuario=usuario,
     )
     divergencias_por_id = _mapa_divergencias_das_baixas(db, baixas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
     descricoes = {p.sku: p.descricao for p in db.query(models.Produto).filter(models.Produto.sku.in_({b.sku for b in baixas if b.sku})).all()}
 
     itens = [
@@ -805,7 +853,7 @@ def dashboard_passivos_itens(
             "status_fluxo": b.status_fluxo, "solicitante_nome": b.solicitante_nome,
             "data_baixa": str(b.data_baixa) if b.data_baixa else None,
             "divergencia_vinculada_id": b.divergencia_vinculada_id,
-            "categoria_mapeamento": _categoria_mapeamento(b, divergencias_por_id),
+            "categoria_mapeamento": _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais),
         }
         for b in baixas
     ]
@@ -1033,9 +1081,10 @@ def resumo_executivo(
     baixas_no_filtro = [b for b in q.all() if _data_no_periodo(b.data_baixa, ano, mes, di, df)]
     aprovadas = [b for b in baixas_no_filtro if b.status_fluxo == "APROVADA"]
     divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
     por_categoria = defaultdict(lambda: {"quantidade": 0, "valor": 0.0})
     for b in aprovadas:
-        c = _categoria_mapeamento(b, divergencias_por_id)
+        c = _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais)
         por_categoria[c]["quantidade"] += 1
         por_categoria[c]["valor"] += b.valor_total or 0
     passivos = {
