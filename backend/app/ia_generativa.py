@@ -30,7 +30,14 @@ projeto), tudo definido no ambiente do servidor (Render), nunca no código:
   dependem disto respondem 503 com mensagem clara — nunca falha
   silenciosamente nem impede o resto do Atlas de funcionar.
 - ATLAS_IA_GENERATIVA_MODELO — modelo do Gemini a usar. Padrão:
-  "gemini-2.0-flash" (rápido e dentro da camada gratuita para este uso).
+  "gemini-3.6-flash" (rápido e dentro da camada gratuita para este uso).
+  IMPORTANTE: o Google descontinua modelos antigos de tempos em tempos (já
+  aconteceu com "gemini-2.0-flash", que ficou indisponível - HTTP 404 "This
+  model ... is no longer available"). Se isso voltar a acontecer, a
+  resposta de erro da própria API normalmente já diz qual modelo usar no
+  lugar (ver o tratamento de HTTPError 404 abaixo) - dá pra corrigir só
+  configurando ATLAS_IA_GENERATIVA_MODELO no Render com o nome novo,
+  SEM precisar alterar nem reimplantar este código.
 
 Sobre custo/limite: a camada gratuita do Google AI Studio tem um limite de
 chamadas por minuto e por dia (o valor exato é definido pelo provedor e
@@ -48,7 +55,7 @@ import time
 import urllib.error
 import urllib.request
 
-MODELO_PADRAO = "gemini-2.0-flash"
+MODELO_PADRAO = "gemini-3.6-flash"
 LIMITE_MAXIMO_LOTE = 25  # trava de segurança pra não estourar a cota gratuita numa chamada só
 PAUSA_ENTRE_CHAMADAS_LOTE_SEGUNDOS = 1.5
 PRIORIDADES_VALIDAS = {"Alta", "Média", "Baixa"}
@@ -128,6 +135,14 @@ def _chamar_gemini(prompt: str, timeout_segundos: int = 30, esperar_json: bool =
                 f"O provedor de IA generativa rejeitou a chamada (HTTP {erro.code}) — "
                 f"confira se a chave ATLAS_IA_GENERATIVA_API_KEY ainda é válida. "
                 f"Detalhe: {detalhe[:300]}"
+            ) from erro
+        if erro.code == 404:
+            raise IAGenerativaIndisponivel(
+                f"O modelo \"{cfg['modelo']}\" não está mais disponível no Gemini (HTTP 404) — "
+                "o Google descontinua modelos de tempos em tempos. A resposta do provedor "
+                f"costuma dizer qual usar no lugar: {detalhe[:300]} — configure "
+                "ATLAS_IA_GENERATIVA_MODELO no Render com o nome indicado (sem precisar "
+                "alterar nem reimplantar o código)."
             ) from erro
         raise IAGenerativaIndisponivel(
             f"Chamada à IA generativa falhou (HTTP {erro.code}): {detalhe[:300]}"
