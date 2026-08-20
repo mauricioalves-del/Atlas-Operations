@@ -1370,7 +1370,7 @@ async function carregarLista(pagina = 1) {
   tbody.innerHTML = divs
     .map(
       (d) => `<tr data-id="${d.id}">
-        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
+        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}${d.aviso_baixa_pendente ? ` <span title="${d.aviso_baixa_pendente.replace(/"/g, "&quot;")}" style="color:var(--medio)">🕒</span>` : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
         <td>${formatarDataCurta(d.data_deteccao)}</td>
         <td>${formatarMoeda(d.valor_estimado)}</td>
         <td>${rotulo(d.hipotese_ia)}</td><td>${d.confianca_ia != null ? d.confianca_ia + "%" : "—"}</td>
@@ -1476,6 +1476,7 @@ async function abrirDetalhe(id) {
           </div>
         </div>
         ${d.tem_investigacao_pendente ? `<p style="color:var(--alto)">⚠️ Este SKU já tem outro caso ainda em investigação - pode ser reincidência antes da causa anterior ser resolvida.</p>` : ""}
+        ${d.aviso_baixa_pendente ? `<p style="color:var(--medio)">🕒 ${d.aviso_baixa_pendente}</p>` : ""}
         <p><strong>Hipótese (motor de regras):</strong> ${rotulo(d.hipotese_regras)} ${d.confianca_regras != null ? "(" + d.confianca_regras + "%)" : ""}</p>
         <p><strong>Hipótese (modelo estatístico):</strong> ${rotulo(d.hipotese_ml)} ${d.confianca_ml != null ? "(" + d.confianca_ml + "%)" : ""}</p>
         <p><strong>Hipótese final reconciliada:</strong> ${rotulo(d.hipotese_ia)} ${d.confianca_ia != null ? "(" + d.confianca_ia + "%)" : ""}</p>

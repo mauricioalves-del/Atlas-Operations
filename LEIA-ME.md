@@ -1,84 +1,97 @@
-# Atlas — Gmail/Slack simplificado (uso pessoal), correção de cache e demais itens
+# Atlas — correção do motor de investigação (baixas operacionais ignoradas)
 
-09/08/2026
+20/08/2026
 
-## Gmail/Slack: modelo simplificado, só pra você
+## O problema que você reportou
 
-Você perguntou se, sendo só pra você, ficaria mais simples - e sim, bastante. Troquei o
-modelo "cada pessoa conecta a própria conta" (OAuth completo, com tela de consentimento,
-callback etc) por credenciais fixas no servidor, do mesmo jeito que já funciona a chave do
-Gemini. Só quem está logado como **Admin** vê e usa este painel (importante: como as
-credenciais são de UMA conta pessoal, não por usuário do Atlas, isso evita que qualquer
-outra pessoa da equipe veja sua caixa de entrada/Slack).
+Na divergência #3201 (SKU 05004097), o motor apontou "Baixa Semanal de Avarias" como
+causa, com 100% de confiança no motor de regras — mas essa baixa não existia de fato
+para este caso. Você identificou corretamente a causa: **o motor não estava avaliando
+as baixas operacionais (pendentes ou aprovadas) do sistema de baixas para montar a
+hipótese.**
 
-### Gmail - bem mais simples que antes
+## O que eu encontrei
 
-Não precisa mais criar nada no Google Cloud Console. Só:
+Investigando o código, achei um bug real, não só uma questão de calibragem. O módulo
+`app/baixas_operacionais.py` já tinha, desde a integração original com o sistema de
+baixas, duas funções prontas para exatamente esse propósito:
 
-1. Ative a Verificação em duas etapas na sua Conta Google, se ainda não tiver (é pré-requisito).
-2. Vá em Conta Google → Segurança → Senhas de app → crie uma nova (qualquer nome, ex:
-   "Atlas") → copie a senha de 16 letras que aparece.
-3. Nas configurações do Gmail (⚙ → Ver todas as configurações → aba "Encaminhamento e
-   POP/IMAP") → "Ativar IMAP" → Salvar alterações.
-4. No Render, defina duas variáveis de ambiente:
-   - `ATLAS_GMAIL_EMAIL` = seu e-mail do Gmail
-   - `ATLAS_GMAIL_APP_SENHA` = a senha de app gerada no passo 2
+- `buscar_baixa_compativel` — deveria ser chamada pelo motor de investigação para
+  procurar uma baixa (pendente ou aprovada) compatível com o SKU/almoxarifado da
+  divergência.
+- `buscar_avisos_baixa_pendente` — deveria preencher um aviso na tela quando existisse
+  uma baixa pendente de aprovação.
 
-Acesso é só leitura (nunca envia, marca como lido ou apaga nada).
+**Nenhuma das duas nunca foi chamada por nenhum outro lugar do código.** O comentário no
+próprio módulo já descrevia esse comportamento como existente — mas ele nunca foi
+conectado. Na prática, o motor de investigação só tinha acesso a sinais indiretos
+(transferência pendente, pedido de compra, OP aberta, faturamento próximo, e
+reincidência histórica) — nunca ao registro real de uma baixa. No caso #3201,
+provavelmente o que aconteceu foi isto: um caso anterior deste mesmo SKU já tinha sido
+resolvido como "Baixa Semanal de Avarias" no passado, e a única evidência que bateu
+desta vez foi a reincidência (peso baixo, mas como foi a ÚNICA evidência encontrada, a
+normalização do motor mostrou 100% de confiança — um problema de leitura do painel que
+também vale registrar: "100%" ali significa "só uma hipótese teve qualquer evidência",
+não necessariamente "tenho certeza disso").
 
-### Slack - ainda precisa de um App, mas sem o vai-e-volta de OAuth
+## O que foi corrigido
 
-1. Crie em https://api.slack.com/apps → "Create New App" → "From scratch".
-2. Na página do app → "OAuth & Permissions" → em **User Token Scopes** (não "Bot Token
-   Scopes") → adicione: `im:read`, `mpim:read`, `search:read`.
-3. No topo da mesma página, clique "Install to Workspace" → autorize. Vai aparecer um
-   "User OAuth Token" (começa com `xoxp-`) → copie esse valor.
-4. No Render, defina: `ATLAS_SLACK_USER_TOKEN` = o token copiado.
+1. **O motor de investigação (`app/investigation.py`) agora consulta de verdade as
+   baixas operacionais.** Para cada divergência, ele procura uma baixa do sistema
+   Lovable (Avaria, Vencimento, Descarte, Degustação, Cortesia, Perda/Furto, Uso e
+   Consumo, Envio/Laboratório, Sensorial/Inovações) compatível por SKU + almoxarifado +
+   janela de data, que ainda não tenha sido vinculada a nenhuma outra divergência:
+   - Se a baixa já estiver **aprovada**, ela entra como a evidência mais forte do motor
+     inteiro (peso bem acima do normal) **e a divergência é resolvida automaticamente**
+     — é um documento real já decidido, não faz sentido deixar isso só como "mais uma
+     hipótese concorrendo".
+   - Se a baixa ainda estiver **pendente** de aprovação, ela entra como evidência forte
+     (mais forte que reincidência, mas sem resolver nada sozinha, porque ainda pode ser
+     reprovada).
+   - Se não existir nenhuma baixa compatível (como era o caso real do #3201), essa
+     evidência simplesmente não aparece — o motor cai de volta nos outros sinais, sem
+     inventar uma baixa que não existe.
 
-Depois de configurar as duas (ou só uma, funcionam de forma independente), o painel de
-pendências na tela Início passa a mostrar "configurado" em vez de "não configurado", e o
-botão "👏 Ver pendências agora" (ou bater duas palmas perto do microfone) já busca de
-verdade.
+2. **A tela de divergências agora avisa quando há uma baixa pendente.** Tanto na lista
+   quanto no detalhe de cada divergência: um ícone 🕒 na lista (ao lado do SKU, com o
+   texto completo no hover) e um aviso no painel "Diagnóstico" do detalhe, dizendo qual
+   baixa está pendente, quem solicitou, e que ela ainda pode ser reprovada.
 
-## O resto desta entrega
+## O que eu testei
 
-### Correção de cache/service worker (provável causa de "atualização que não aparece")
+Rodei o backend real (FastAPI TestClient) contra três cenários controlados, batendo
+diretamente nos mesmos endpoints que o frontend usa:
 
-Investigando por que o botão de configuração de perguntas padrão não aparecia pra você,
-encontrei que os arquivos da casca do app (`index.html`, `app.js`, `sw.js`) não mandavam
-nenhum `Cache-Control`, e o service worker (que torna o Atlas instalável) podia acabar
-servindo uma versão antiga em cache mesmo tentando buscar "a mais nova" - Ctrl+Shift+R
-sozinho não resolve isso quando o service worker já está no controle da página. Corrigi
-os dois pontos (detalhes técnicos no histórico da conversa/no doc do projeto). **Ação
-recomendada, uma vez só**: depois de aplicar esta atualização, se ainda não vir a
-novidade, abra F12 → aba Application → Service Workers → "Unregister" → recarregue.
-
-### Comando de voz
-
-Testei a lógica de reconhecimento de ponta a ponta com automação de navegador - está
-correta ("Atlas, cadastros" abre Cadastros, "Atlas, assistente" abre o assistente, sem
-erros). O que só você pode confirmar no seu navegador de verdade: o ícone do microfone
-chega a mostrar "ouvindo"? O status muda quando você fala? Algo em vermelho no console
-(F12)? Isso ajuda a apontar se o problema é específico do seu navegador/SO.
-
-### "Atlas, Assistente" com pergunta em duas etapas
-
-Diga "Atlas, Assistente", espere o convite terminar de falar, e a próxima coisa que você
-disser (sem repetir "Atlas") já vai direto como pergunta pro assistente.
-
-### Módulo de configuração de perguntas padrão
-
-Botão "⚙️ Perguntas padrão" no painel do Assistente Atlas, só pra Admin - cria, edita e
-exclui perguntas padrão pelo próprio app (viram botão de atalho e são reconhecidas por
-voz/texto), sem precisar de uma sessão como esta pra cada pergunta nova.
+- **Baixa pendente compatível**: a divergência continuou "Aberta" (não resolve sozinha),
+  a evidência nova apareceu corretamente, a hipótese do motor de regras passou a refletir
+  o motivo real da baixa (não mais só reincidência), e o aviso apareceu tanto na listagem
+  quanto no detalhe.
+- **Baixa aprovada compatível**: a divergência foi resolvida automaticamente, com a
+  hipótese confirmada, solução e responsável certos, e a baixa ficou vinculada a essa
+  divergência (não pode ser reusada em outra).
+- **Nenhuma baixa compatível**: comportamento idêntico ao de antes da correção — sem
+  evidência nova, sem regressão nos outros sinais (transferência pendente, pedido de
+  compra, ficha técnica, faturamento, reincidência, erro operacional).
 
 ## Como aplicar
 
-1. Substitua `backend/` e `frontend/` inteiros pelo conteúdo deste zip.
-2. Se quiser usar Gmail/Slack, siga os passos acima e defina as variáveis de ambiente no
-   Render.
-3. Reimplante, recarregue com Ctrl+Shift+R e, se necessário, remova o service worker
-   antigo (ver instrução acima) - só precisa fazer isso uma vez.
-4. Teste o comando de voz e me diga os detalhes específicos pedidos acima.
-5. Confira o painel "📋 Pendências (Gmail + Slack)" na tela Início (logado como Admin) e
-   o botão "⚙️ Perguntas padrão" no painel do assistente.
+Substitua `backend/` e `frontend/` inteiros pelo conteúdo deste zip, reimplante, e
+recarregue o navegador (se aparecer algo desatualizado mesmo depois de reimplantar, veja
+a instrução de remover o service worker antigo na entrega anterior).
+
+## Vale conversarmos também
+
+Duas coisas que encontrei no caminho e que valem uma decisão sua, não mudei nada nelas
+agora:
+
+- **O "100%" de confiança do motor de regras pode ser enganoso quando só uma hipótese
+  tem qualquer evidência** (mesmo uma evidência fraca, como reincidência). Isso é uma
+  característica de como a confiança é calculada (normalização sobre o total de scores),
+  não um bug pontual — mudar isso afeta a confiança mostrada em toda divergência do
+  sistema, então prefiro entender com você se isso é importante de ajustar antes de
+  tocar nisso.
+- **Reinvestigar agora pode resolver uma divergência automaticamente** se, entre a
+  criação do caso e o clique em "Reinvestigar", uma baixa aprovada compatível apareceu no
+  sistema. Isso é o comportamento correto (documento real disponível = caso resolvido),
+  mas é uma mudança de comportamento em relação a antes (onde "Reinvestigar" nunca mudava
+  o status). Se isso te incomodar em algum fluxo, me avise que ajusto.

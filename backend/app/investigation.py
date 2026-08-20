@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import timedelta
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, baixas_operacionais
 from .hipoteses_config import buscar_evidencias_texto, normalizar_almoxarifado
 from .feature_extraction import extrair_sinais_contexto
 
@@ -47,6 +47,50 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     #    por si só (mais de uma palavra-chave pode bater, ou nenhuma).
     for codigo_hipotese, palavra_chave in buscar_evidencias_texto(getattr(div, "observacao_origem", None)):
         registrar(codigo_hipotese, f"observacao_planilha_menciona('{palavra_chave}')", True)
+
+    # 0b) Baixa operacional (Avaria, Vencimento, Descarte, Degustação,
+    #     Cortesia, Perda/Furto, Uso e Consumo, Envio/Laboratório,
+    #     Sensorial/Inovações - sistema Lovable, ver baixas_operacionais.py)
+    #     compatível com este SKU+almoxarifado, dentro da janela de
+    #     tolerância de data, e que ainda não foi vinculada a nenhuma
+    #     outra divergência.
+    #
+    #     ESTE ERA O ELO QUE FALTAVA (achado em 20/08/2026, a pedido do
+    #     Maurício): buscar_baixa_compativel() já existia em
+    #     baixas_operacionais.py desde a integração original, e o
+    #     docstring do módulo já dizia que "o motor de investigação
+    #     procura baixas recebidas que ainda não foram vinculadas a
+    #     nenhuma divergência" - mas essa função nunca era chamada por
+    #     nenhum motor de verdade. Sem isso, o motor não tinha absolutamente
+    #     nenhum jeito de saber se existe (ou não) um registro REAL de
+    #     baixa pra esta divergência específica - ele só enxergava padrões
+    #     indiretos, como reincidência (item 5 abaixo: "esse SKU já foi
+    #     resolvido como Avaria antes, então deve ser Avaria de novo"),
+    #     o que pode confirmar uma causa que não tem nenhum documento por
+    #     trás desta vez.
+    #
+    #     Uma baixa já APROVADA é o sinal mais forte que existe neste
+    #     motor inteiro (é um documento real, já decidido no fluxo
+    #     operacional) - por isso, além de virar evidência de peso bem
+    #     acima do normal, ela resolve a divergência automaticamente aqui
+    #     mesmo (mesmo efeito que já acontecia no sentido contrário,
+    #     quando a baixa chega DEPOIS da divergência - ver
+    #     processar_baixa_recebida). Uma baixa ainda PENDENTE também entra
+    #     como evidência forte (mais forte que reincidência, mais fraca que
+    #     uma aprovada), mas NÃO resolve nada sozinha - pode ainda ser
+    #     reprovada. A tela de divergências mostra esse aviso separadamente
+    #     (ver buscar_avisos_baixa_pendente, chamado em divergencias_router.py).
+    baixa_compativel = baixas_operacionais.buscar_baixa_compativel(db, div.sku, div.almoxarifado, div.data_deteccao)
+    if baixa_compativel and baixa_compativel.hipotese_aplicada:
+        aprovada = baixa_compativel.status_fluxo == baixas_operacionais.STATUS_FLUXO_APROVADO
+        descricao_evidencia = (
+            f"baixa_operacional_{'aprovada' if aprovada else 'pendente'}_compativel"
+            f"('{baixa_compativel.motivo_baixa_bruto}', qtd {baixa_compativel.quantidade})"
+        )
+        peso_baixa = _peso(db, baixa_compativel.hipotese_aplicada) * (3.0 if aprovada else 1.75)
+        registrar(baixa_compativel.hipotese_aplicada, descricao_evidencia, True, peso=peso_baixa)
+        if aprovada and div.status != "Resolvida":
+            baixas_operacionais.resolver_divergencia_automaticamente(db, div, baixa_compativel)
 
     # Sinais de contexto (transferência, pedido de compra, OP, ficha
     # técnica, faturamento) - extraídos numa função compartilhada com o

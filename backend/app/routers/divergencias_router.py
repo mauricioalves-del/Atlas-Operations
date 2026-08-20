@@ -11,6 +11,7 @@ from ..ml import predict as ml_predict
 from ..deps import requer_papel, obter_usuario_atual, filtrar_por_almoxarifado_permitido
 from ..audit import registrar_log
 from .. import ia_generativa
+from ..baixas_operacionais import buscar_avisos_baixa_pendente
 
 router = APIRouter(prefix="/divergencias", tags=["divergencias"])
 
@@ -112,6 +113,7 @@ def listar(
     divergencias = q.offset((pagina - 1) * tamanho_pagina).limit(tamanho_pagina).all()
     _preencher_descricao_produto(db, divergencias)
     _marcar_investigacao_pendente(db, divergencias)
+    buscar_avisos_baixa_pendente(db, divergencias)
 
     return {
         "itens": [schemas.DivergenciaOut.model_validate(d).model_dump() for d in divergencias],
@@ -373,6 +375,7 @@ def detalhar(div_id: int, usuario: models.Usuario = Depends(obter_usuario_atual)
         raise HTTPException(404, "Divergência não encontrada")
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -399,6 +402,7 @@ def resumir_divergencia_com_ia(
     db.commit()
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -419,6 +423,7 @@ def marcar_investigacao(div_id: int, usuario: models.Usuario = Depends(requer_pa
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -682,6 +687,8 @@ def reinvestigar(div_id: int, usuario: models.Usuario = Depends(requer_papel("ad
     db.commit()
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -725,4 +732,6 @@ def confirmar(div_id: int, payload: schemas.ConfirmarDivergencia, usuario: model
     db.commit()
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div

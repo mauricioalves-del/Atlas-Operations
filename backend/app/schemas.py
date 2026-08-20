@@ -42,6 +42,13 @@ class DivergenciaOut(BaseModel):
     tempo_resolucao_minutos: Optional[float]
     status: str
     tem_investigacao_pendente: bool = False
+    # Atributo transiente (calculado a cada listagem, nunca gravado - ver
+    # baixas_operacionais.buscar_avisos_baixa_pendente): preenchido quando
+    # existe uma baixa operacional (Lovable) compatível com este SKU +
+    # almoxarifado ainda aguardando aprovação (status PENDENTE) - explica
+    # a divergência, mas ainda pode ser reprovada, por isso não resolve
+    # nada sozinha.
+    aviso_baixa_pendente: Optional[str] = None
     # Resumo por IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py).
     # Não confundir com hipotese_ia/confianca_ia acima (regra + modelo estatístico
     # interno, sempre calculado) - isto só existe depois de alguém clicar em
