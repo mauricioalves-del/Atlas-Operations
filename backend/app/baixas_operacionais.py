@@ -197,6 +197,72 @@ def buscar_baixa_compativel(db: Session, sku: str, almoxarifado: str, data_detec
     return compativeis[0]
 
 
+# Diferença relativa máxima entre a soma das baixas PENDENTES e a magnitude
+# da divergência para ainda considerar que "correlaciona" (ver
+# calcular_correlacao_baixas_pendentes) - acima disso, mesmo existindo uma
+# baixa pendente do mesmo SKU+Almoxarifado, ela é tratada como não
+# relacionada a ESTA divergência específica (ex: baixa pendente de 4 un.
+# não deveria "explicar" uma falta de 400 un.) - fica em silêncio em vez de
+# sugerir uma correlação que não se sustenta.
+TOLERANCIA_CORRELACAO_QUANTIDADE = 0.5
+TOLERANCIA_CORRELACAO_QUANTIDADE_PESO_CHEIO = 0.2
+
+
+def calcular_correlacao_baixas_pendentes(db: Session, sku: str, almoxarifado: str, divergencia_qtd: float) -> Optional[dict]:
+    """Concilia a divergência com o Relatório de Baixa (a pedido do
+    Maurício, 20/08/2026): soma TODAS as baixas ainda com status_fluxo
+    'PENDENTE' (nunca Aprovada - essa já tem tratamento próprio e resolve
+    a divergência automaticamente, ver resolver_divergencia_automaticamente
+    - nem Reprovada, que nunca deveria influenciar nada) do mesmo SKU +
+    Almoxarifado, e verifica se essa soma tem correlação de QUANTIDADE com
+    a magnitude da divergência.
+
+    Deliberadamente SEM janela de data: uma baixa "semanal" ou aprovada em
+    lote pode ser solicitada bem depois do dia em que a diferença foi
+    detectada - o que importa aqui é Almoxarifado x Item x Quantidade, não
+    coincidência de datas (essa é a diferença chave em relação a
+    buscar_baixa_compativel, que é usada só no caminho de resolução
+    automática por baixa APROVADA, onde a precisão de data importa mais).
+
+    Só se aplica a FALTAS (divergencia_qtd < 0) - uma baixa é sempre uma
+    saída de estoque, então nunca explica uma SOBRA.
+
+    Devolve None quando não há nenhuma baixa pendente pra esse SKU+
+    Almoxarifado, OU quando a soma encontrada está tão distante da
+    magnitude da divergência (> TOLERANCIA_CORRELACAO_QUANTIDADE) que
+    apontar uma "correlação" seria mais enganoso do que útil."""
+    if not divergencia_qtd or divergencia_qtd >= 0:
+        return None
+
+    pendentes = (
+        db.query(models.BaixaOperacional)
+        .filter(
+            models.BaixaOperacional.status_fluxo == "PENDENTE",
+            models.BaixaOperacional.sku == sku,
+            models.BaixaOperacional.almoxarifado == almoxarifado,
+        )
+        .all()
+    )
+    if not pendentes:
+        return None
+
+    soma_pendente = sum(b.quantidade or 0 for b in pendentes)
+    falta = abs(divergencia_qtd)
+    maior = max(falta, soma_pendente)
+    diferenca_relativa = abs(falta - soma_pendente) / maior if maior else 1.0
+
+    if diferenca_relativa > TOLERANCIA_CORRELACAO_QUANTIDADE:
+        return None  # baixa(s) pendente(s) existe(m), mas a quantidade não sustenta a correlação
+
+    return {
+        "baixas": pendentes,
+        "soma_quantidade_pendente": soma_pendente,
+        "divergencia_qtd_absoluta": falta,
+        "diferenca_relativa": round(diferenca_relativa, 4),
+        "correlaciona_bem": diferenca_relativa <= TOLERANCIA_CORRELACAO_QUANTIDADE_PESO_CHEIO,
+    }
+
+
 def resolver_divergencia_automaticamente(db: Session, div: models.Divergencia, baixa: models.BaixaOperacional):
     """Aplica em `div` o mesmo efeito que o endpoint /confirmar aplicaria
     se um analista confirmasse manualmente essa hipótese - só que
@@ -327,57 +393,45 @@ def buscar_avisos_baixa_pendente(db: Session, divergencias: list) -> None:
     `tem_investigacao_pendente` em divergencias_router.py - por isso não
     precisou de nenhuma migração pra existir).
 
-    Serve pra responder "vai me avisar que tem baixa pendente?": quando
-    uma divergência aberta bate com uma baixa operacional que já foi
-    solicitada no Lovable mas ainda está PENDENTE (aguardando aprovação),
-    isso aparece como um aviso na tela de conciliação - mas SEM resolver
-    a divergência sozinha, porque uma baixa PENDENTE ainda pode ser
-    reprovada. Só quando ela for de fato aprovada (status_fluxo =
-    APROVADA) é que resolver_divergencia_automaticamente entra em ação
-    (ver processar_baixa_recebida e o passo -1 de investigation.py).
+    Conciliação com o Relatório de Baixa (reformulada em 20/08/2026, a
+    pedido do Maurício): não é mais "existe qualquer baixa pendente do
+    mesmo SKU+Almoxarifado dentro de uma janela de datas" (isso gerava
+    tanto falsos negativos - baixa pendente real, mas fora da janela de
+    poucos dias - quanto o risco de apontar uma baixa pendente que não
+    tem nada a ver com a magnitude desta divergência específica). Agora
+    usa `calcular_correlacao_baixas_pendentes`: Almoxarifado x Item x
+    Quantidade, somando todas as baixas PENDENTES desse SKU+Almoxarifado
+    e comparando a soma com o tamanho da falta - SEM olhar pra data, e
+    IGNORANDO Aprovadas/Reprovadas nesta análise (Aprovada já resolve a
+    divergência automaticamente em outro lugar - ver
+    resolver_divergencia_automaticamente -, Reprovada nunca deveria
+    influenciar nada).
 
-    Cobre as duas ordens de chegada possíveis: se a baixa pendente já
-    existia quando a divergência foi criada, ou se ela chega depois -
-    como este aviso é calculado a cada listagem (não gravado), ele
-    aparece sozinho na próxima vez que a tela de divergências for
-    consultada, sem precisar de nenhuma ação adicional no webhook."""
+    Continua SEM resolver a divergência sozinha - uma baixa PENDENTE
+    ainda pode ser reprovada. Só quando ela for de fato aprovada é que
+    resolver_divergencia_automaticamente entra em ação (ver
+    processar_baixa_recebida e o passo 0b de investigation.py)."""
     if not divergencias:
         return
     for d in divergencias:
         d.aviso_baixa_pendente = None
 
     abertas = [d for d in divergencias if d.status != "Resolvida"]
-    if not abertas:
-        return
-
-    skus = {d.sku for d in abertas}
-    pendentes = (
-        db.query(models.BaixaOperacional)
-        .filter(
-            models.BaixaOperacional.status_fluxo == "PENDENTE",
-            models.BaixaOperacional.sku.in_(skus),
-        )
-        .all()
-    )
-    if not pendentes:
-        return
-
-    candidatas_por_sku_almox = defaultdict(list)
-    for b in pendentes:
-        candidatas_por_sku_almox[(b.sku, b.almoxarifado)].append(b)
-
     for d in abertas:
-        candidatas = candidatas_por_sku_almox.get((d.sku, d.almoxarifado), [])
-        compativeis = [b for b in candidatas if _dentro_da_janela(b.data_baixa, d.data_deteccao)]
-        if not compativeis:
+        correlacao = calcular_correlacao_baixas_pendentes(db, d.sku, d.almoxarifado, d.divergencia_qtd)
+        if not correlacao:
             continue
-        compativeis.sort(key=lambda b: abs((d.data_deteccao - b.data_baixa).days))
-        mais_proxima = compativeis[0]
+        baixas = correlacao["baixas"]
+        motivos = ", ".join(sorted({b.motivo_baixa_bruto for b in baixas if b.motivo_baixa_bruto}))
+        solicitantes = ", ".join(sorted({b.solicitante_nome for b in baixas if b.solicitante_nome})) or "não informado"
+        qualificador = "compatível" if correlacao["correlaciona_bem"] else "parcialmente compatível"
+        plural = "s" if len(baixas) > 1 else ""
         d.aviso_baixa_pendente = (
-            f"Há uma baixa de '{mais_proxima.motivo_baixa_bruto}' "
-            f"(qtd {mais_proxima.quantidade}, solicitada por {mais_proxima.solicitante_nome or 'não informado'}) "
-            f"aguardando aprovação no sistema operacional (Lovable) que pode explicar esta divergência. "
-            f"Ainda não foi confirmada - se for aprovada lá, a divergência será resolvida automaticamente."
+            f"Há {len(baixas)} baixa{plural} pendente{plural} de aprovação no Relatório de Baixa "
+            f"('{motivos}', solicitada{plural} por {solicitantes}), somando "
+            f"{correlacao['soma_quantidade_pendente']:g} unidade(s) - quantidade {qualificador} com esta "
+            f"divergência ({correlacao['divergencia_qtd_absoluta']:g} un.). Ainda não foi(ram) aprovada(s) - "
+            f"se aprovada(s), a divergência será resolvida automaticamente."
         )
 
 

@@ -8,7 +8,7 @@ Correção estrutural em relação à versão anterior: aqui a saída deste moto
 `confianca_ia` auditável. Antes, regras e ML eram dois "cérebros" que nunca
 se falavam.
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import timedelta
 from sqlalchemy.orm import Session
 
@@ -48,12 +48,12 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     for codigo_hipotese, palavra_chave in buscar_evidencias_texto(getattr(div, "observacao_origem", None)):
         registrar(codigo_hipotese, f"observacao_planilha_menciona('{palavra_chave}')", True)
 
-    # 0b) Baixa operacional (Avaria, Vencimento, Descarte, Degustação,
-    #     Cortesia, Perda/Furto, Uso e Consumo, Envio/Laboratório,
-    #     Sensorial/Inovações - sistema Lovable, ver baixas_operacionais.py)
-    #     compatível com este SKU+almoxarifado, dentro da janela de
-    #     tolerância de data, e que ainda não foi vinculada a nenhuma
-    #     outra divergência.
+    # 0b) Baixa operacional APROVADA (Avaria, Vencimento, Descarte,
+    #     Degustação, Cortesia, Perda/Furto, Uso e Consumo,
+    #     Envio/Laboratório, Sensorial/Inovações - sistema Lovable, ver
+    #     baixas_operacionais.py) compatível com este SKU+almoxarifado,
+    #     dentro da janela de tolerância de data, e que ainda não foi
+    #     vinculada a nenhuma outra divergência.
     #
     #     ESTE ERA O ELO QUE FALTAVA (achado em 20/08/2026, a pedido do
     #     Maurício): buscar_baixa_compativel() já existia em
@@ -75,22 +75,55 @@ def investigar(db: Session, div: models.Divergencia) -> dict:
     #     acima do normal, ela resolve a divergência automaticamente aqui
     #     mesmo (mesmo efeito que já acontecia no sentido contrário,
     #     quando a baixa chega DEPOIS da divergência - ver
-    #     processar_baixa_recebida). Uma baixa ainda PENDENTE também entra
-    #     como evidência forte (mais forte que reincidência, mais fraca que
-    #     uma aprovada), mas NÃO resolve nada sozinha - pode ainda ser
-    #     reprovada. A tela de divergências mostra esse aviso separadamente
-    #     (ver buscar_avisos_baixa_pendente, chamado em divergencias_router.py).
-    baixa_compativel = baixas_operacionais.buscar_baixa_compativel(db, div.sku, div.almoxarifado, div.data_deteccao)
-    if baixa_compativel and baixa_compativel.hipotese_aplicada:
-        aprovada = baixa_compativel.status_fluxo == baixas_operacionais.STATUS_FLUXO_APROVADO
+    #     processar_baixa_recebida). Data ainda importa aqui porque
+    #     resolver automaticamente é uma ação definitiva - continua usando
+    #     buscar_baixa_compativel (SKU + Almoxarifado + janela de data).
+    baixa_aprovada_compativel = baixas_operacionais.buscar_baixa_compativel(db, div.sku, div.almoxarifado, div.data_deteccao)
+    if (
+        baixa_aprovada_compativel
+        and baixa_aprovada_compativel.hipotese_aplicada
+        and baixa_aprovada_compativel.status_fluxo == baixas_operacionais.STATUS_FLUXO_APROVADO
+    ):
         descricao_evidencia = (
-            f"baixa_operacional_{'aprovada' if aprovada else 'pendente'}_compativel"
-            f"('{baixa_compativel.motivo_baixa_bruto}', qtd {baixa_compativel.quantidade})"
+            f"baixa_operacional_aprovada_compativel"
+            f"('{baixa_aprovada_compativel.motivo_baixa_bruto}', qtd {baixa_aprovada_compativel.quantidade})"
         )
-        peso_baixa = _peso(db, baixa_compativel.hipotese_aplicada) * (3.0 if aprovada else 1.75)
-        registrar(baixa_compativel.hipotese_aplicada, descricao_evidencia, True, peso=peso_baixa)
-        if aprovada and div.status != "Resolvida":
-            baixas_operacionais.resolver_divergencia_automaticamente(db, div, baixa_compativel)
+        registrar(baixa_aprovada_compativel.hipotese_aplicada, descricao_evidencia, True,
+                   peso=_peso(db, baixa_aprovada_compativel.hipotese_aplicada) * 3.0)
+        if div.status != "Resolvida":
+            baixas_operacionais.resolver_divergencia_automaticamente(db, div, baixa_aprovada_compativel)
+
+    # 0c) Conciliação com o Relatório de Baixa - baixas ainda PENDENTES
+    #     (reformulado em 20/08/2026, a pedido do Maurício: "a tela de
+    #     divergência precisa fazer uma conciliação com o relatório de
+    #     baixa... considerar Almoxarifado x Item x Quantidade e verificar
+    #     se a diferença tem correlação com a baixa pendente,
+    #     desconsiderando aprovados e reprovados nessa análise").
+    #     Deliberadamente SEM janela de data (ver
+    #     calcular_correlacao_baixas_pendentes) - o que conta aqui é se o
+    #     Almoxarifado x Item x Quantidade se sustentam, somando todas as
+    #     baixas pendentes desse SKU+Almoxarifado, não se a data bate.
+    #     Nunca resolve nada sozinho - só entra como evidência (mais forte
+    #     que reincidência, mais fraca que uma baixa já aprovada) - a
+    #     baixa pendente ainda pode ser reprovada. A tela de divergências
+    #     mostra esse mesmo aviso separadamente (ver
+    #     buscar_avisos_baixa_pendente, chamado em divergencias_router.py).
+    correlacao_pendente = baixas_operacionais.calcular_correlacao_baixas_pendentes(
+        db, div.sku, div.almoxarifado, div.divergencia_qtd
+    )
+    if correlacao_pendente:
+        contagem_hipoteses = Counter(
+            b.hipotese_aplicada for b in correlacao_pendente["baixas"] if b.hipotese_aplicada
+        )
+        if contagem_hipoteses:
+            hipotese_dominante, _ = contagem_hipoteses.most_common(1)[0]
+            descricao_evidencia = (
+                f"baixa_operacional_pendente_correlacionada(soma_qtd_pendente="
+                f"{correlacao_pendente['soma_quantidade_pendente']:g}, "
+                f"diferenca_relativa={round(correlacao_pendente['diferenca_relativa'] * 100, 1)}%)"
+            )
+            peso_correlacao = _peso(db, hipotese_dominante) * (1.75 if correlacao_pendente["correlaciona_bem"] else 1.1)
+            registrar(hipotese_dominante, descricao_evidencia, True, peso=peso_correlacao)
 
     # Sinais de contexto (transferência, pedido de compra, OP, ficha
     # técnica, faturamento) - extraídos numa função compartilhada com o
