@@ -220,26 +220,27 @@
         </div>
       </div>
 
-      <div class="panel" id="painel-pendencias-externas" style="max-width:900px; margin:24px auto 0">
+      <!-- Pendências Gmail/Slack (19/08/2026, simplificado em 09/08/2026 - ver
+           LEIA-ME e app/integracoes_pessoais.py): credenciais fixas no servidor
+           de UMA conta pessoal, por isso só visível pra Admin (ver
+           aplicarPermissoesNaUI() em app.js) - sem essa restrição, qualquer
+           pessoa logada veria a caixa de entrada/Slack pessoal de quem
+           configurou. -->
+      <div class="panel hidden" id="painel-pendencias-externas" style="max-width:900px; margin:24px auto 0">
         <div class="panel-title-row">
           <h2>📋 Pendências (Gmail + Slack)</h2>
           <span class="hint" style="margin:0">Bata duas palmas perto do microfone, ou clique no botão abaixo</span>
         </div>
         <div class="grid-2" style="gap:16px; margin-bottom:12px">
-          <div>
-            <p id="status-integracao-gmail" class="hint">Gmail: carregando...</p>
-            <div id="acao-integracao-gmail"></div>
-          </div>
-          <div>
-            <p id="status-integracao-slack" class="hint">Slack: carregando...</p>
-            <div id="acao-integracao-slack"></div>
-          </div>
+          <p id="status-integracao-gmail" class="hint">Gmail: carregando...</p>
+          <p id="status-integracao-slack" class="hint">Slack: carregando...</p>
         </div>
         <button class="btn-primario" id="btn-ver-pendencias-externas">👏 Ver pendências agora</button>
         <div id="resultado-pendencias-externas" class="hidden" style="margin-top:12px"></div>
         <p class="hint" style="margin-top:8px">
-          Cada pessoa conecta a própria conta (o Atlas nunca envia nem apaga nada, só lê). O gatilho de "duas palmas"
-          é uma heurística de volume no microfone - pode falhar em ambientes barulhentos; o botão acima sempre funciona.
+          Credenciais de uma conta pessoal configuradas no servidor (o Atlas nunca envia nem apaga nada, só lê) -
+          por isso este painel só aparece pra quem está logado como Admin. O gatilho de "duas palmas" é uma
+          heurística de volume no microfone - pode falhar em ambientes barulhentos; o botão acima sempre funciona.
         </p>
       </div>
 
@@ -1906,6 +1907,6 @@
   </div>
 </div>
 
-<script src="app.js?v=100"></script>
+<script src="app.js?v=101"></script>
 </body>
 </html>

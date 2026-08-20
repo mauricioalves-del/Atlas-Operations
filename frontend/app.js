@@ -93,6 +93,17 @@ function aplicarPermissoesNaUI() {
   // Configuração de perguntas padrão do assistente (09/08/2026) - só admin
   const btnConfigPerguntasPadrao = document.getElementById("btn-config-perguntas-padrao");
   if (btnConfigPerguntasPadrao) btnConfigPerguntasPadrao.classList.toggle("hidden", usuarioAtual.papel !== "admin");
+
+  // Pendências Gmail/Slack (09/08/2026) - credenciais são de UMA conta
+  // pessoal fixada no servidor, não por usuário - só Admin vê este painel,
+  // senão qualquer pessoa logada veria a caixa de entrada/Slack pessoal de
+  // quem configurou (ver routers/integracoes_pessoais_router.py, mesma
+  // restrição aplicada no backend). Este toggle roda ANTES de
+  // carregarStatusIntegracoesPessoais() (ver ordem em mostrarApp()), então
+  // ela já encontra o painel visível ou não, corretamente, quando decidir
+  // se consulta o status ou nem tenta.
+  const painelPendencias = document.getElementById("painel-pendencias-externas");
+  if (painelPendencias) painelPendencias.classList.toggle("hidden", usuarioAtual.papel !== "admin");
 }
 
 document.getElementById("form-login").addEventListener("submit", async (ev) => {
@@ -7523,94 +7534,34 @@ document.getElementById("assistente-atlas-input").addEventListener("keydown", (e
 });
 
 // ---------- Pendências Gmail/Slack (19/08/2026 - ver app/integracoes_pessoais.py) ----------
-// Cada usuário conecta a PRÓPRIA conta (Gmail e/ou Slack) - diferente da IA
-// generativa (1 chave só, do servidor). Acionado pelo botão "👏 Ver
-// pendências agora" OU batendo duas palmas perto do microfone (ver
-// configurarDetectorDePalmas mais abaixo) - as duas chamam a mesma função.
+// Simplificado em 09/08/2026 (pedido do Maurício: "se for só pra mim, é mais
+// simples?") - credenciais FIXAS no servidor (uma conta pessoal), sem mais
+// fluxo de "Conectar"/"Desconectar" por usuário. Por isso só visível pra
+// Admin (ver aplicarPermissoesNaUI()) - sem essa restrição, qualquer pessoa
+// logada no Atlas veria a caixa de entrada/Slack pessoal de quem configurou.
+// Acionado pelo botão "👏 Ver pendências agora" OU batendo duas palmas perto
+// do microfone (ver configurarDetectorDePalmas mais abaixo).
 async function carregarStatusIntegracoesPessoais() {
   const painel = document.getElementById("painel-pendencias-externas");
-  if (!painel) return;
+  if (!painel || painel.classList.contains("hidden")) return; // não-admin: nem consulta
   try {
     const res = await apiFetch(`${API}/integracoes-pessoais/status`);
     if (!res.ok) return;
     const status = await res.json();
-    _renderizarStatusIntegracao("gmail", status.gmail, "Gmail");
-    _renderizarStatusIntegracao("slack", status.slack, "Slack");
+    const elGmail = document.getElementById("status-integracao-gmail");
+    const elSlack = document.getElementById("status-integracao-slack");
+    if (elGmail) elGmail.textContent = `Gmail: ${status.gmail.configurado ? "configurado." : "não configurado neste ambiente."}`;
+    if (elSlack) elSlack.textContent = `Slack: ${status.slack.configurado ? "configurado." : "não configurado neste ambiente."}`;
 
-    // Só ativa o detector de "duas palmas" se tiver pelo menos 1 conta
-    // conectada - senão não tem porquê pedir permissão de microfone extra
-    // pra essa finalidade.
-    if (status.gmail.conectado || status.slack.conectado) {
+    // Só ativa o detector de "duas palmas" se pelo menos 1 integração
+    // estiver configurada - senão não tem porquê pedir permissão de
+    // microfone extra pra essa finalidade.
+    if (status.gmail.configurado || status.slack.configurado) {
       configurarDetectorDePalmas();
     }
   } catch (e) {
     console.warn("Atlas: não consegui carregar o status das integrações pessoais.", e);
   }
-}
-
-function _renderizarStatusIntegracao(servico, info, rotulo) {
-  const areaStatus = document.getElementById(`status-integracao-${servico}`);
-  const areaAcao = document.getElementById(`acao-integracao-${servico}`);
-  if (!areaStatus || !areaAcao) return;
-
-  if (!info.disponivel_no_servidor) {
-    areaStatus.textContent = `${rotulo}: integração não configurada neste ambiente.`;
-    areaAcao.innerHTML = "";
-    return;
-  }
-  if (info.conectado) {
-    areaStatus.textContent = `${rotulo}: conectado${info.email ? " (" + info.email + ")" : ""}.`;
-    areaAcao.innerHTML = "";
-    const btn = document.createElement("button");
-    btn.className = "btn-secundario";
-    btn.textContent = "Desconectar";
-    btn.addEventListener("click", () => _desconectarIntegracao(servico));
-    areaAcao.appendChild(btn);
-  } else {
-    areaStatus.textContent = `${rotulo}: não conectado.`;
-    areaAcao.innerHTML = "";
-    const btn = document.createElement("button");
-    btn.className = "btn-secundario";
-    btn.textContent = `Conectar ${rotulo}`;
-    btn.addEventListener("click", () => _conectarIntegracao(servico));
-    areaAcao.appendChild(btn);
-  }
-}
-
-async function _conectarIntegracao(servico) {
-  try {
-    const res = await apiFetch(`${API}/integracoes-pessoais/${servico}/conectar`);
-    const dados = await res.json();
-    if (!res.ok) {
-      alert(dados.detail || `Não foi possível iniciar a conexão com ${servico}.`);
-      return;
-    }
-    const popup = window.open(dados.url, "_blank", "width=520,height=680");
-    // Depois que a pessoa autorizar na aba nova (ou fechá-la), atualiza o
-    // status automaticamente - poll simples, sem precisar de um clique a
-    // mais em "atualizar". Para sozinho depois de ~2 minutos se a aba
-    // nunca fechar/autorizar, pra não ficar rodando pra sempre.
-    let tentativas = 0;
-    const intervalo = setInterval(() => {
-      tentativas++;
-      const fechou = popup && popup.closed;
-      if (fechou || tentativas > 40) {
-        clearInterval(intervalo);
-        carregarStatusIntegracoesPessoais();
-      }
-    }, 3000);
-  } catch (e) {
-    console.warn(`Atlas: falha ao iniciar conexão com ${servico}.`, e);
-  }
-}
-
-async function _desconectarIntegracao(servico) {
-  try {
-    await apiFetch(`${API}/integracoes-pessoais/desconectar?servico=${servico}`, { method: "POST" });
-  } catch (e) {
-    console.warn(`Atlas: falha ao desconectar ${servico}.`, e);
-  }
-  carregarStatusIntegracoesPessoais();
 }
 
 // Chamada tanto pelo botão manual quanto pelo gatilho de duas palmas -
@@ -7635,22 +7586,23 @@ async function verPendenciasExternas() {
     return;
   }
 
-  const emails = dados.gmail?.conectado ? (dados.gmail.nao_lidos || []) : [];
-  const dms = dados.slack?.conectado ? (dados.slack.mensagens_diretas_nao_lidas || []) : [];
-  const mencoes = dados.slack?.conectado ? (dados.slack.mencoes_recentes || []) : [];
+  const totalEmails = dados.gmail?.configurado ? (dados.gmail.total_nao_lidos || 0) : 0;
+  const emails = dados.gmail?.configurado ? (dados.gmail.itens || []) : [];
+  const dms = dados.slack?.configurado ? (dados.slack.mensagens_diretas_nao_lidas || []) : [];
+  const mencoes = dados.slack?.configurado ? (dados.slack.mencoes_recentes || []) : [];
   const dmsValidas = Array.isArray(dms) ? dms : [];
   const mencoesValidas = Array.isArray(mencoes) ? mencoes : [];
 
   if (area) {
     let html = "";
-    if (dados.gmail?.conectado) {
-      html += `<h3 style="font-size:14px; margin:12px 0 6px">📧 E-mails não lidos (${emails.length})</h3>`;
+    if (dados.gmail?.configurado) {
+      html += `<h3 style="font-size:14px; margin:12px 0 6px">📧 E-mails não lidos (${totalEmails})</h3>`;
       html += emails.length
-        ? emails.map((e) => `<div class="atlas-pendencia-item"><a href="${e.link}" target="_blank" rel="noopener">${e.assunto}</a><span class="hint"> - ${e.remetente}</span></div>`).join("")
+        ? emails.map((e) => `<div class="atlas-pendencia-item">${e.assunto}<span class="hint"> - ${e.remetente}</span></div>`).join("")
         : `<p class="hint">Nenhum e-mail não lido na caixa de entrada. 🎉</p>`;
       if (dados.gmail.indisponivel) html += `<p class="hint" style="color:var(--critico)">⚠️ Gmail: ${dados.gmail.indisponivel}</p>`;
     }
-    if (dados.slack?.conectado) {
+    if (dados.slack?.configurado) {
       html += `<h3 style="font-size:14px; margin:12px 0 6px">💬 Slack - mensagens diretas não lidas (${dmsValidas.length})</h3>`;
       html += dmsValidas.length
         ? dmsValidas.map((m) => `<div class="atlas-pendencia-item"><a href="${m.link}" target="_blank" rel="noopener">${m.previa || "(sem prévia)"}</a><span class="hint"> - ${m.nao_lidas} não lida(s)</span></div>`).join("")
@@ -7661,15 +7613,15 @@ async function verPendenciasExternas() {
         : `<p class="hint">Nenhuma menção recente encontrada.</p>`;
       if (dados.slack.indisponivel) html += `<p class="hint" style="color:var(--critico)">⚠️ Slack: ${dados.slack.indisponivel}</p>`;
     }
-    if (!dados.gmail?.conectado && !dados.slack?.conectado) {
-      html = `<p class="hint">Conecte o Gmail e/ou o Slack acima pra ver suas pendências aqui.</p>`;
+    if (!dados.gmail?.configurado && !dados.slack?.configurado) {
+      html = `<p class="hint">Configure ATLAS_GMAIL_*/ATLAS_SLACK_USER_TOKEN no servidor pra ver pendências aqui (ver LEIA-ME).</p>`;
     }
     area.innerHTML = html;
   }
 
-  const totalPendencias = emails.length + dmsValidas.length;
+  const totalPendencias = totalEmails + dmsValidas.length;
   const resumoFalado = totalPendencias > 0
-    ? `Você tem ${emails.length} e-mail${emails.length === 1 ? "" : "s"} e ${dmsValidas.length} mensagem${dmsValidas.length === 1 ? "" : "s"} do Slack pendentes.`
+    ? `Você tem ${totalEmails} e-mail${totalEmails === 1 ? "" : "s"} e ${dmsValidas.length} mensagem${dmsValidas.length === 1 ? "" : "s"} do Slack pendentes.`
     : "Não encontrei pendências novas no e-mail ou no Slack agora.";
   falarResumoModulo(resumoFalado);
 }

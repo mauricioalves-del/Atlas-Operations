@@ -1,101 +1,84 @@
-# Atlas — provável causa real de "atualizações que somem": cache do navegador/service worker
+# Atlas — Gmail/Slack simplificado (uso pessoal), correção de cache e demais itens
 
-09/08/2026 (continuação da entrega anterior)
+09/08/2026
 
-## Antes de tudo: o que eu achei
+## Gmail/Slack: modelo simplificado, só pra você
 
-Você pediu pra eu validar por que o botão "⚙️ Perguntas padrão" (e possivelmente outras
-coisas de entregas anteriores) não estavam aparecendo mesmo depois do deploy. Investigando
-isso a fundo, encontrei uma causa bem concreta e bem provável — **não** era um bug na
-lógica do botão em si (já tinha testado isso e continua correto), era um problema de
-**cache escondendo o deploy novo**:
+Você perguntou se, sendo só pra você, ficaria mais simples - e sim, bastante. Troquei o
+modelo "cada pessoa conecta a própria conta" (OAuth completo, com tela de consentimento,
+callback etc) por credenciais fixas no servidor, do mesmo jeito que já funciona a chave do
+Gemini. Só quem está logado como **Admin** vê e usa este painel (importante: como as
+credenciais são de UMA conta pessoal, não por usuário do Atlas, isso evita que qualquer
+outra pessoa da equipe veja sua caixa de entrada/Slack).
 
-- Os arquivos da casca do app (`index.html`, `app.js`, `style.css`, `sw.js`) não mandavam
-  NENHUM cabeçalho `Cache-Control` - só `ETag`/`Last-Modified`. Sem isso, o navegador pode
-  aplicar cache por conta própria (heurístico), sem nem perguntar ao servidor se há algo
-  novo.
-- Só isso já seria resolvido com um Ctrl+Shift+R normalmente... MAS o Atlas também tem um
-  **service worker** (`sw.js`, pra funcionar como app instalável) que assume o controle do
-  carregamento da página. Ele foi desenhado pra ser "network-first" (sempre tentar a rede
-  primeiro), só que o `fetch()` usado internamente por ele não pedia explicitamente pra
-  ignorar o cache do navegador - então mesmo esse "sempre pega a versão mais nova" podia,
-  na prática, receber uma cópia antiga do cache em vez de bater no servidor de verdade.
-- Resultado possível: depois de um deploy novo, o Ctrl+Shift+R não resolve, porque quem
-  está no controle do carregamento é o service worker, e ele mesmo podia estar servindo
-  uma versão antiga sem perceber.
+### Gmail - bem mais simples que antes
 
-Isso bate exatamente com o padrão dos relatos: "atualizei mas não vejo a novidade".
+Não precisa mais criar nada no Google Cloud Console. Só:
 
-## O que corrigi
+1. Ative a Verificação em duas etapas na sua Conta Google, se ainda não tiver (é pré-requisito).
+2. Vá em Conta Google → Segurança → Senhas de app → crie uma nova (qualquer nome, ex:
+   "Atlas") → copie a senha de 16 letras que aparece.
+3. Nas configurações do Gmail (⚙ → Ver todas as configurações → aba "Encaminhamento e
+   POP/IMAP") → "Ativar IMAP" → Salvar alterações.
+4. No Render, defina duas variáveis de ambiente:
+   - `ATLAS_GMAIL_EMAIL` = seu e-mail do Gmail
+   - `ATLAS_GMAIL_APP_SENHA` = a senha de app gerada no passo 2
 
-1. `sw.js`: o `fetch()` interno agora usa `{ cache: "no-store" }` explicitamente - força
-   ignorar qualquer cache do navegador e ir à rede de verdade, cumprindo o que o
-   "network-first" já prometia fazer.
-2. `main.py`: adicionei um middleware que manda `Cache-Control: no-cache, must-revalidate`
-   em qualquer resposta que não seja de `/api/` (ou seja, na casca do app inteira). O
-   navegador ainda pode aproveitar o `ETag` pra uma resposta rápida (não baixa tudo de
-   novo se nada mudou), mas sempre CONSULTA o servidor primeiro - nunca responde só do
-   que já tinha guardado.
+Acesso é só leitura (nunca envia, marca como lido ou apaga nada).
 
-Testei os dois junto com todo o resto (Playwright, servidor real): confirmei que agora
-`index.html`/`app.js`/`sw.js` saem com esse cabeçalho, que `/api/...` continua sem
-mudança nenhuma (dado dinâmico não deveria ser afetado mesmo), e repeti o teste completo
-do login + botão de configuração de perguntas padrão + painel de pendências - tudo
-continua funcionando normalmente com a correção aplicada.
+### Slack - ainda precisa de um App, mas sem o vai-e-volta de OAuth
 
-**Ação recomendada pra você, uma vez só**: depois de aplicar esta atualização, se ainda
-não aparecer a novidade, abra o DevTools do navegador (F12) → aba Application → Service
-Workers → clique em "Unregister" no service worker do Atlas, e recarregue a página. Isso
-descarta de vez qualquer versão antiga que já estava instalada ANTES desta correção
-existir (a correção evita o problema daqui pra frente, mas não limpa sozinha o que já
-tinha sido cacheado por um service worker antigo, já em execução no seu navegador).
+1. Crie em https://api.slack.com/apps → "Create New App" → "From scratch".
+2. Na página do app → "OAuth & Permissions" → em **User Token Scopes** (não "Bot Token
+   Scopes") → adicione: `im:read`, `mpim:read`, `search:read`.
+3. No topo da mesma página, clique "Install to Workspace" → autorize. Vai aparecer um
+   "User OAuth Token" (começa com `xoxp-`) → copie esse valor.
+4. No Render, defina: `ATLAS_SLACK_USER_TOKEN` = o token copiado.
 
-## Resto desta entrega (o que já tinha sido reportado antes)
+Depois de configurar as duas (ou só uma, funcionam de forma independente), o painel de
+pendências na tela Início passa a mostrar "configurado" em vez de "não configurado", e o
+botão "👏 Ver pendências agora" (ou bater duas palmas perto do microfone) já busca de
+verdade.
 
-Este pacote continua trazendo tudo que já tinha sido entregue: a verificação do comando
-de voz (lógica confirmada correta via teste automatizado - ver seção abaixo), o fluxo
-"Atlas, Assistente" com pergunta em duas etapas, e o módulo de configuração de perguntas
-padrão (botão "⚙️ Perguntas padrão", só admin). Como sempre, `backend/` e `frontend/`
-vêm completos, não só os arquivos alterados.
+## O resto desta entrega
 
-### Comando de voz - o que já foi confirmado
+### Correção de cache/service worker (provável causa de "atualização que não aparece")
 
-Rodei o Atlas de verdade (backend + frontend reais) com automação de navegador,
-simulando comandos de voz de forma determinística. A lógica de reconhecimento está
-correta: "Atlas, cadastros" abre Cadastros, "Atlas, assistente" abre o assistente, sem
-nenhum erro de JavaScript. Isso descarta bug de código. O que só você pode confirmar
-(precisa de microfone/navegador reais):
+Investigando por que o botão de configuração de perguntas padrão não aparecia pra você,
+encontrei que os arquivos da casca do app (`index.html`, `app.js`, `sw.js`) não mandavam
+nenhum `Cache-Control`, e o service worker (que torna o Atlas instalável) podia acabar
+servindo uma versão antiga em cache mesmo tentando buscar "a mais nova" - Ctrl+Shift+R
+sozinho não resolve isso quando o service worker já está no controle da página. Corrigi
+os dois pontos (detalhes técnicos no histórico da conversa/no doc do projeto). **Ação
+recomendada, uma vez só**: depois de aplicar esta atualização, se ainda não vir a
+novidade, abra F12 → aba Application → Service Workers → "Unregister" → recarregue.
 
-- O ícone do microfone chega a mostrar o estado "ouvindo"?
-- O texto de status muda quando você fala "Atlas, [módulo]" (mesmo que pra um erro)?
-- Aparece algo em vermelho no console (F12) enquanto tenta o comando de voz?
-- Acontece em qualquer navegador/computador, ou só num específico?
+### Comando de voz
+
+Testei a lógica de reconhecimento de ponta a ponta com automação de navegador - está
+correta ("Atlas, cadastros" abre Cadastros, "Atlas, assistente" abre o assistente, sem
+erros). O que só você pode confirmar no seu navegador de verdade: o ícone do microfone
+chega a mostrar "ouvindo"? O status muda quando você fala? Algo em vermelho no console
+(F12)? Isso ajuda a apontar se o problema é específico do seu navegador/SO.
 
 ### "Atlas, Assistente" com pergunta em duas etapas
 
-Diga "Atlas, Assistente", espere o convite falado terminar, e a próxima coisa que você
-falar (sem repetir "Atlas") já vai direto como pergunta pro assistente. Janela de 10
-segundos, testada de ponta a ponta.
+Diga "Atlas, Assistente", espere o convite terminar de falar, e a próxima coisa que você
+disser (sem repetir "Atlas") já vai direto como pergunta pro assistente.
 
 ### Módulo de configuração de perguntas padrão
 
-Botão "⚙️ Perguntas padrão" no painel do Assistente Atlas, visível só pra usuários com
-papel Admin. Deixa criar, editar e excluir perguntas padrão pelo próprio app (elas viram
-botão de atalho e são reconhecidas por voz/texto) - sem precisar de uma sessão como esta
-pra cada pergunta nova. As perguntas que já vêm prontas com o Atlas continuam fixas no
-código, marcadas como "padrão do sistema" na lista (não editáveis por esta tela).
+Botão "⚙️ Perguntas padrão" no painel do Assistente Atlas, só pra Admin - cria, edita e
+exclui perguntas padrão pelo próprio app (viram botão de atalho e são reconhecidas por
+voz/texto), sem precisar de uma sessão como esta pra cada pergunta nova.
 
 ## Como aplicar
 
 1. Substitua `backend/` e `frontend/` inteiros pelo conteúdo deste zip.
-2. Reimplante no Render.
-3. Recarregue o navegador (Ctrl+Shift+R). Se ainda não ver a novidade, faça o
-   "Unregister" do service worker (ver instrução acima) e recarregue de novo - essa parte
-   só deve ser necessária UMA vez, pra limpar o que já estava instalado antes desta
-   correção.
-4. Teste o comando de voz e me responda as perguntas específicas acima - é a parte que só
-   dá pra confirmar no seu navegador de verdade.
-5. Confirme que agora consegue ver e usar o botão "⚙️ Perguntas padrão" (logado como
-   Admin) e, se ainda configurar Gmail/Slack, lembre que isso exige criar as credenciais
-   OAuth e colocar como variáveis de ambiente no Render primeiro (passo a passo na entrega
-   anterior) - só depois disso o botão "Conectar" aparece no painel de pendências.
+2. Se quiser usar Gmail/Slack, siga os passos acima e defina as variáveis de ambiente no
+   Render.
+3. Reimplante, recarregue com Ctrl+Shift+R e, se necessário, remova o service worker
+   antigo (ver instrução acima) - só precisa fazer isso uma vez.
+4. Teste o comando de voz e me diga os detalhes específicos pedidos acima.
+5. Confira o painel "📋 Pendências (Gmail + Slack)" na tela Início (logado como Admin) e
+   o botão "⚙️ Perguntas padrão" no painel do assistente.

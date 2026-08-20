@@ -1,71 +1,56 @@
 """
-Integrações PESSOAIS com Gmail e Slack (19/08/2026 - pedido do Maurício):
-"liste todas as minhas pendências no e-mail e no Slack". Cada usuário do
-Atlas conecta a PRÓPRIA conta (OAuth) - diferente das outras integrações
-externas do projeto:
+Integrações PESSOAIS com Gmail e Slack (19/08/2026 - pedido do Maurício:
+"liste todas as minhas pendências no e-mail e no Slack"; simplificado em
+09/08/2026 - pedido do Maurício: "se for só pra mim, é mais simples?").
 
-- app/ia_generativa.py: 1 chave só, configurada pelo servidor, usada por
-  todo mundo que aciona o recurso.
-- app/routers/integracoes_router.py: sistema externo (Lovable/Supabase)
-  empurrando dados PRO Atlas via webhook com chave fixa.
-- ESTA aqui: cada pessoa loga na própria conta Google/Slack, e só vê as
-  PRÓPRIAS pendências - por isso os tokens ficam por usuário (ver
-  Usuario.google_refresh_token/slack_user_token em models.py), não numa
-  variável de ambiente única.
+Modelo ATUAL (simplificado): credenciais fixas no SERVIDOR, iguais para
+qualquer pessoa que consultar - mesmo padrão de app/ia_generativa.py (1
+chave configurada pelo servidor, usada por quem aciona o recurso), não o
+modelo "cada pessoa loga na própria conta" (OAuth por usuário) que existia
+antes. Isso é deliberadamente mais simples de configurar (sem Google Cloud
+Console, sem tela de consentimento OAuth, sem callback), mas em troca só
+funciona pra UMA conta - a de quem configurou as credenciais.
 
-Como funciona o fluxo OAuth (igual pros dois provedores):
-1. Frontend chama GET /integracoes-pessoais/{google,slack}/conectar (com
-   Bearer token normal) - devolve a URL de autorização do provedor.
-2. Frontend abre essa URL numa aba nova - a pessoa loga e autoriza no
-   próprio Google/Slack.
-3. O provedor redireciona o navegador pra
-   GET /integracoes-pessoais/{google,slack}/callback?code=...&state=...
-   - essa chamada NÃO tem o header Authorization (é um redirect de
-   navegador, não um fetch nosso) - por isso quem identifica QUAL usuário
-   do Atlas estava conectando é o parâmetro `state`: um token assinado
-   (reaproveita auth.criar_token/decodificar_token, o mesmo mecanismo de
-   sessão que já existe, só que de validade bem curta - 15 min) contendo o
-   username. O callback decodifica esse state pra saber em qual Usuario
-   gravar o resultado.
-4. O callback troca o `code` pelos tokens de acesso e grava no Usuario
-   (refresh_token do Google - de longa duração; access token do Slack -
-   também de longa duração no fluxo padrão, sem necessidade de refresh).
+Por isso o acesso a este recurso (ver routers/integracoes_pessoais_router.py)
+é restrito a admin (`Depends(requer_papel("admin"))`) - sem essa restrição,
+qualquer pessoa logada no Atlas veria a caixa de entrada/Slack PESSOAL de
+quem configurou as credenciais, o que seria um problema de privacidade.
+Isso é adequado pro caso de uso combinado com o Maurício (uso pessoal, ele é
+quem administra o Atlas) - se um dia o Atlas precisar disso pra VÁRIAS
+pessoas ao mesmo tempo, o modelo OAuth por usuário (mais trabalhoso de
+configurar, mas com um usuário/instância) é o caminho certo, e o código
+anterior a esta simplificação (com `Usuario.google_refresh_token` etc. em
+models.py, hoje sem uso) pode servir de referência.
 
-Configuração (variáveis de ambiente no servidor, mesmo padrão ATLAS_* do
-resto do projeto - análogo ao processo já usado pra
-ATLAS_IA_GENERATIVA_API_KEY, só que aqui são credenciais de OAuth, não uma
-chave simples):
+Configuração (variáveis de ambiente no servidor):
 
-Google (criar em https://console.cloud.google.com/apis/credentials -
-"OAuth client ID", tipo "Web application"):
-- ATLAS_GOOGLE_CLIENT_ID
-- ATLAS_GOOGLE_CLIENT_SECRET
-- ATLAS_GOOGLE_REDIRECT_URI - precisa ser EXATAMENTE a URL pública do Atlas
-  + "/api/integracoes-pessoais/google/callback" (ex:
-  https://seu-atlas.onrender.com/api/integracoes-pessoais/google/callback),
-  e essa mesma URL precisa estar cadastrada em "Authorized redirect URIs"
-  no Google Cloud Console.
-  Escopo pedido: gmail.readonly (só LEITURA - o Atlas nunca envia nem
-  apaga e-mail) + userinfo.email (só pra mostrar qual conta está
-  conectada).
-  Como o app provavelmente vai ficar em modo "Testing" na tela de
-  consentimento OAuth (sem passar pela verificação do Google, que não é
-  necessária pra uso interno da empresa), é preciso adicionar cada
-  e-mail que for conectar como "Test user" no Google Cloud Console -
-  senão o Google recusa o login com "app não verificado".
+Gmail via IMAP (SEM precisar registrar nenhum app no Google Cloud Console):
+- ATLAS_GMAIL_EMAIL - o endereço Gmail a consultar.
+- ATLAS_GMAIL_APP_SENHA - uma "senha de app" do Google (NÃO é a senha normal
+  da conta): Conta Google → Segurança → Verificação em duas etapas (precisa
+  estar ATIVADA) → Senhas de app → gerar uma nova, com qualquer nome (ex:
+  "Atlas"). É uma senha de 16 letras, só pra esse uso - pode ser revogada a
+  qualquer momento sem afetar a senha normal da conta.
+- Além disso, o IMAP precisa estar HABILITADO nas configurações do Gmail:
+  Configurações (⚙) → "Ver todas as configurações" → aba "Encaminhamento e
+  POP/IMAP" → "Ativar IMAP" → Salvar alterações.
+- Acesso É SOMENTE LEITURA (só busca e-mails não lidos, nunca envia, marca
+  como lido ou apaga nada).
 
-Slack (criar em https://api.slack.com/apps - "Create New App" → "From
-scratch"):
-- ATLAS_SLACK_CLIENT_ID
-- ATLAS_SLACK_CLIENT_SECRET
-- ATLAS_SLACK_REDIRECT_URI - análogo ao do Google, cadastrado em "OAuth &
-  Permissions" → "Redirect URLs" no app do Slack.
-  Escopos de USUÁRIO (User Token Scopes, não Bot Token Scopes - queremos
-  ler COMO a pessoa, não como um bot): im:read, mpim:read, search:read.
+Slack (ainda precisa de um Slack App, mas sem o vai-e-volta de OAuth por
+usuário - só um token fixo, gerado uma vez):
+- Criar em https://api.slack.com/apps → "Create New App" → "From scratch".
+- Na página do app, "OAuth & Permissions" → em "User Token Scopes" (NÃO
+  "Bot Token Scopes" - queremos ler COMO a pessoa, não como um bot),
+  adicionar: im:read, mpim:read, search:read.
+- No topo da mesma página, "Install to Workspace" (ou "Reinstall to
+  Workspace" se já tiver instalado antes) → autorizar. Isso mostra um "User
+  OAuth Token" (começa com xoxp-) - copiar esse valor.
+- ATLAS_SLACK_USER_TOKEN - o token copiado acima.
 
-Sem essas variáveis configuradas, os endpoints de conectar devolvem 503
-com uma mensagem clara (nunca 500) - o resto do Atlas continua
-funcionando normalmente sem essa integração.
+Sem essas variáveis configuradas, os endpoints devolvem 503 com uma
+mensagem clara (nunca 500) - o resto do Atlas continua funcionando
+normalmente sem essa integração.
 
 Sobre "pendências": Gmail = e-mails não lidos da caixa de entrada (padrão
 mais direto e sem ambiguidade). Slack é mais limitado pela própria API
@@ -77,11 +62,14 @@ necessariamente só as não lidas. Isso está deixado explícito no rótulo
 que a API devolve ("menções recentes", não "menções não lidas"), pra não
 prometer uma precisão que a API do Slack não permite entregar.
 """
+import email
+import imaplib
 import json
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from email.header import decode_header
 
 TIMEOUT_PADRAO_SEGUNDOS = 12
 LIMITE_EMAILS_NAO_LIDOS = 10
@@ -90,53 +78,122 @@ LIMITE_MENCOES_SLACK = 10
 
 
 class IntegracaoIndisponivel(Exception):
-    """Credenciais de OAuth não configuradas no servidor (variáveis de
-    ambiente ausentes) - diferente de "usuário ainda não conectou a
-    própria conta", que não é um erro, é só um estado normal (ver
-    status_integracoes)."""
+    """Credenciais não configuradas no servidor (variáveis de ambiente
+    ausentes), ou o provedor (Gmail/Slack) recusou a operação (login IMAP
+    inválido, token do Slack revogado etc.) - sempre com uma mensagem
+    apresentável pro usuário."""
 
 
-# ---------- configuração ----------
+# ---------- Gmail (via IMAP + senha de app) ----------
 
-def _config_google() -> dict:
+def _config_gmail_imap() -> dict:
     return {
-        "client_id": os.environ.get("ATLAS_GOOGLE_CLIENT_ID"),
-        "client_secret": os.environ.get("ATLAS_GOOGLE_CLIENT_SECRET"),
-        "redirect_uri": os.environ.get("ATLAS_GOOGLE_REDIRECT_URI"),
+        "email": os.environ.get("ATLAS_GMAIL_EMAIL"),
+        "senha_app": os.environ.get("ATLAS_GMAIL_APP_SENHA"),
     }
 
 
-def _config_slack() -> dict:
-    return {
-        "client_id": os.environ.get("ATLAS_SLACK_CLIENT_ID"),
-        "client_secret": os.environ.get("ATLAS_SLACK_CLIENT_SECRET"),
-        "redirect_uri": os.environ.get("ATLAS_SLACK_REDIRECT_URI"),
-    }
+def gmail_configurado() -> bool:
+    cfg = _config_gmail_imap()
+    return bool(cfg["email"] and cfg["senha_app"])
 
 
-def google_configurado() -> bool:
-    cfg = _config_google()
-    return bool(cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"])
+def _decodificar_cabecalho(valor: str | None) -> str:
+    """Cabeçalhos de e-mail (From/Subject) podem vir codificados
+    (RFC 2047, ex: "=?UTF-8?B?...?=") quando têm acento/emoji - decodifica
+    pra texto legível. Sem isso, assunto/remetente apareceriam com esse
+    código bruto em vez do texto de verdade."""
+    if not valor:
+        return ""
+    partes = decode_header(valor)
+    saida = []
+    for texto, codificacao in partes:
+        if isinstance(texto, bytes):
+            try:
+                saida.append(texto.decode(codificacao or "utf-8", errors="replace"))
+            except (LookupError, TypeError):
+                saida.append(texto.decode("utf-8", errors="replace"))
+        else:
+            saida.append(texto)
+    return "".join(saida)
+
+
+def listar_emails_nao_lidos_gmail(limite: int = LIMITE_EMAILS_NAO_LIDOS) -> dict:
+    """Devolve {"total_nao_lidos": N, "itens": [{"remetente", "assunto"}]}.
+    Usa IMAP (biblioteca padrão do Python, `imaplib` - nenhuma dependência
+    nova) direto na caixa configurada via ATLAS_GMAIL_EMAIL/ATLAS_GMAIL_APP_SENHA.
+    Só busca CABEÇALHOS (`BODY.PEEK[HEADER...]` - o `.PEEK` evita marcar a
+    mensagem como lida só por tê-la consultado), nunca o corpo completo, e
+    nunca marca/apaga nada."""
+    if not gmail_configurado():
+        raise IntegracaoIndisponivel(
+            "Integração com Gmail não configurada neste ambiente: defina ATLAS_GMAIL_EMAIL "
+            "e ATLAS_GMAIL_APP_SENHA no servidor do Atlas (ver instruções no topo de "
+            "app/integracoes_pessoais.py)."
+        )
+    cfg = _config_gmail_imap()
+    try:
+        caixa = imaplib.IMAP4_SSL("imap.gmail.com", timeout=TIMEOUT_PADRAO_SEGUNDOS)
+    except (OSError, TimeoutError) as erro:
+        raise IntegracaoIndisponivel(f"Não consegui conectar ao Gmail agora: {erro}")
+
+    try:
+        try:
+            caixa.login(cfg["email"], cfg["senha_app"])
+        except imaplib.IMAP4.error as erro:
+            raise IntegracaoIndisponivel(
+                f"Gmail recusou o login por IMAP: {erro}. Confirme o e-mail e a senha de app "
+                "(ATLAS_GMAIL_EMAIL/ATLAS_GMAIL_APP_SENHA), e que o IMAP está habilitado nas "
+                "configurações do Gmail (Configurações → Encaminhamento e POP/IMAP → Ativar IMAP)."
+            )
+
+        status, _ = caixa.select("INBOX", readonly=True)
+        if status != "OK":
+            raise IntegracaoIndisponivel("Não consegui abrir a caixa de entrada (INBOX) por IMAP.")
+
+        status, dados = caixa.search(None, "UNSEEN")
+        if status != "OK":
+            raise IntegracaoIndisponivel("Gmail (IMAP) recusou a busca por e-mails não lidos.")
+
+        ids = dados[0].split()
+        total = len(ids)
+        itens = []
+        for msg_id in reversed(ids[-limite:]):  # mais recentes primeiro
+            try:
+                status_f, msg_dados = caixa.fetch(msg_id, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+                if status_f != "OK" or not msg_dados or not msg_dados[0]:
+                    continue
+                msg = email.message_from_bytes(msg_dados[0][1])
+                itens.append({
+                    "remetente": _decodificar_cabecalho(msg.get("From")) or "Remetente desconhecido",
+                    "assunto": _decodificar_cabecalho(msg.get("Subject")) or "(sem assunto)",
+                })
+            except Exception:
+                continue
+        return {"total_nao_lidos": total, "itens": itens}
+    finally:
+        try:
+            caixa.logout()
+        except Exception:
+            pass
+
+
+# ---------- Slack (token de usuário fixo) ----------
+
+def _config_slack_token() -> str | None:
+    return os.environ.get("ATLAS_SLACK_USER_TOKEN")
 
 
 def slack_configurado() -> bool:
-    cfg = _config_slack()
-    return bool(cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"])
+    return bool(_config_slack_token())
 
 
 def _requisitar(url: str, dados: dict | None = None, metodo: str = "GET", headers: dict | None = None) -> dict:
     """Helper único pras chamadas HTTP deste módulo (urllib puro, mesmo
-    padrão do resto do projeto - ver ia_generativa.py). `dados` vira
-    querystring no GET e corpo url-encoded no POST (os 3 provedores usados
-    aqui - Google token endpoint, Slack oauth.v2.access, Slack Web API -
-    aceitam application/x-www-form-urlencoded)."""
+    padrão do resto do projeto - ver ia_generativa.py)."""
     headers = dict(headers or {})
     headers.setdefault("User-Agent", "Atlas-Magio-Chocolates/1.0 (+integracao-pessoal)")
     corpo = None
-    # doseq=True permite passar um valor de lista pra repetir a mesma chave
-    # na querystring (ex: metadataHeaders=From&metadataHeaders=Subject, do
-    # jeito que o Gmail espera pra pedir mais de um cabeçalho) - sem isso,
-    # urlencode transformaria a lista Python inteira numa string só.
     if metodo == "GET" and dados:
         url = f"{url}?{urllib.parse.urlencode(dados, doseq=True)}"
     elif dados:
@@ -151,208 +208,42 @@ def _requisitar_bearer(url: str, token: str, dados: dict | None = None) -> dict:
     return _requisitar(url, dados=dados, metodo="GET", headers={"Authorization": f"Bearer {token}"})
 
 
-# ---------- Google / Gmail ----------
-
-ESCOPO_GOOGLE = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email"
-
-
-def gerar_url_autorizacao_google(state: str) -> str:
-    if not google_configurado():
-        raise IntegracaoIndisponivel(
-            "Integração com Gmail não configurada neste ambiente: defina "
-            "ATLAS_GOOGLE_CLIENT_ID, ATLAS_GOOGLE_CLIENT_SECRET e "
-            "ATLAS_GOOGLE_REDIRECT_URI no servidor do Atlas (ver instruções no "
-            "topo de app/integracoes_pessoais.py)."
-        )
-    cfg = _config_google()
-    parametros = {
-        "client_id": cfg["client_id"],
-        "redirect_uri": cfg["redirect_uri"],
-        "response_type": "code",
-        "scope": ESCOPO_GOOGLE,
-        "access_type": "offline",  # obrigatório pra receber refresh_token
-        "prompt": "consent",  # força devolver refresh_token mesmo numa reconexão
-        "state": state,
-    }
-    return f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(parametros)}"
-
-
-def trocar_code_por_conexao_google(code: str) -> dict:
-    """Troca o `code` do redirect pelo refresh_token + descobre o e-mail
-    conectado. Levanta IntegracaoIndisponivel (com mensagem apresentável)
-    se a troca falhar - código expirado/já usado, credenciais erradas
-    etc."""
-    cfg = _config_google()
+def _obter_identidade_slack(token: str) -> dict:
+    """`auth.test` devolve de quem é o token (user_id/team_id) - evita
+    precisar de mais variáveis de ambiente só pra isso; o token já basta."""
     try:
-        tokens = _requisitar(
-            "https://oauth2.googleapis.com/token",
-            metodo="POST",
-            dados={
-                "code": code,
-                "client_id": cfg["client_id"],
-                "client_secret": cfg["client_secret"],
-                "redirect_uri": cfg["redirect_uri"],
-                "grant_type": "authorization_code",
-            },
-        )
-    except urllib.error.HTTPError as erro:
-        detalhe = erro.read().decode("utf-8", errors="ignore")
-        raise IntegracaoIndisponivel(f"Google recusou a conexão (HTTP {erro.code}): {detalhe[:300]}")
-    except (urllib.error.URLError, TimeoutError) as erro:
-        raise IntegracaoIndisponivel(f"Não consegui contactar o Google agora: {erro}")
-
-    refresh_token = tokens.get("refresh_token")
-    access_token = tokens.get("access_token")
-    if not refresh_token:
-        # Acontece se a pessoa já tinha autorizado antes e o Google não achou
-        # necessário emitir um refresh_token novo - com access_type=offline +
-        # prompt=consent isso não deveria ocorrer, mas fica um erro claro
-        # em vez de silenciosamente "funcionar por 1 hora e parar".
-        raise IntegracaoIndisponivel(
-            "O Google não devolveu um refresh_token nesta conexão - tente desconectar "
-            "e conectar de novo (ou revogar o acesso do Atlas em "
-            "https://myaccount.google.com/permissions e reconectar)."
-        )
-
-    try:
-        userinfo = _requisitar_bearer("https://www.googleapis.com/oauth2/v2/userinfo", access_token)
-        email = userinfo.get("email")
-    except Exception:
-        email = None
-
-    return {"refresh_token": refresh_token, "email": email}
-
-
-def _renovar_access_token_google(refresh_token: str) -> str:
-    cfg = _config_google()
-    try:
-        tokens = _requisitar(
-            "https://oauth2.googleapis.com/token",
-            metodo="POST",
-            dados={
-                "refresh_token": refresh_token,
-                "client_id": cfg["client_id"],
-                "client_secret": cfg["client_secret"],
-                "grant_type": "refresh_token",
-            },
-        )
-    except urllib.error.HTTPError as erro:
-        detalhe = erro.read().decode("utf-8", errors="ignore")
-        raise IntegracaoIndisponivel(
-            f"Não consegui renovar o acesso ao Gmail (HTTP {erro.code}) - pode ser que o "
-            f"acesso tenha sido revogado; desconecte e conecte de novo. Detalhe: {detalhe[:200]}"
-        )
-    except (urllib.error.URLError, TimeoutError) as erro:
-        raise IntegracaoIndisponivel(f"Não consegui contactar o Google agora: {erro}")
-    access_token = tokens.get("access_token")
-    if not access_token:
-        raise IntegracaoIndisponivel("Google não devolveu um access_token válido ao renovar.")
-    return access_token
-
-
-def listar_emails_nao_lidos_google(refresh_token: str, limite: int = LIMITE_EMAILS_NAO_LIDOS) -> list:
-    """Lista os e-mails não lidos da caixa de entrada (mais recentes
-    primeiro, como o Gmail já devolve por padrão). Uma chamada de LISTA +
-    1 chamada de METADADOS por e-mail (assunto/remetente/trecho) - o
-    `format=metadata` evita baixar o corpo inteiro da mensagem, só o
-    cabeçalho e o snippet."""
-    access_token = _renovar_access_token_google(refresh_token)
-    lista = _requisitar_bearer(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-        access_token,
-        dados={"q": "is:unread in:inbox", "maxResults": limite},
-    )
-    mensagens = lista.get("messages", [])
-
-    itens = []
-    for m in mensagens:
-        try:
-            detalhe = _requisitar_bearer(
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}",
-                access_token,
-                dados={"format": "metadata", "metadataHeaders": ["From", "Subject"]},
-            )
-        except Exception:
-            continue
-        cabecalhos = {h["name"]: h["value"] for h in detalhe.get("payload", {}).get("headers", [])}
-        itens.append({
-            "id": m["id"],
-            "remetente": cabecalhos.get("From", "Remetente desconhecido"),
-            "assunto": cabecalhos.get("Subject") or detalhe.get("snippet", "(sem assunto)")[:80],
-            "resumo": detalhe.get("snippet", ""),
-            "link": f"https://mail.google.com/mail/u/0/#inbox/{m['id']}",
-        })
-    return itens
-
-
-# ---------- Slack ----------
-
-ESCOPO_USUARIO_SLACK = "im:read,mpim:read,search:read"
-
-
-def gerar_url_autorizacao_slack(state: str) -> str:
-    if not slack_configurado():
-        raise IntegracaoIndisponivel(
-            "Integração com Slack não configurada neste ambiente: defina "
-            "ATLAS_SLACK_CLIENT_ID, ATLAS_SLACK_CLIENT_SECRET e "
-            "ATLAS_SLACK_REDIRECT_URI no servidor do Atlas (ver instruções no "
-            "topo de app/integracoes_pessoais.py)."
-        )
-    cfg = _config_slack()
-    parametros = {
-        "client_id": cfg["client_id"],
-        "redirect_uri": cfg["redirect_uri"],
-        "user_scope": ESCOPO_USUARIO_SLACK,
-        "state": state,
-    }
-    return f"https://slack.com/oauth/v2/authorize?{urllib.parse.urlencode(parametros)}"
-
-
-def trocar_code_por_conexao_slack(code: str) -> dict:
-    cfg = _config_slack()
-    try:
-        resposta = _requisitar(
-            "https://slack.com/api/oauth.v2.access",
-            metodo="POST",
-            dados={
-                "code": code,
-                "client_id": cfg["client_id"],
-                "client_secret": cfg["client_secret"],
-                "redirect_uri": cfg["redirect_uri"],
-            },
-        )
+        resposta = _requisitar_bearer("https://slack.com/api/auth.test", token)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as erro:
         raise IntegracaoIndisponivel(f"Não consegui contactar o Slack agora: {erro}")
-
     if not resposta.get("ok"):
-        raise IntegracaoIndisponivel(f"Slack recusou a conexão: {resposta.get('error', 'erro desconhecido')}")
-
-    authed_user = resposta.get("authed_user", {})
-    access_token = authed_user.get("access_token")
-    if not access_token:
         raise IntegracaoIndisponivel(
-            "O Slack não devolveu um token de usuário nesta conexão - confirme que o app do "
-            "Slack está configurado com User Token Scopes (im:read, mpim:read, search:read), "
-            "não só Bot Token Scopes."
+            f"Slack recusou o token configurado (ATLAS_SLACK_USER_TOKEN): {resposta.get('error', 'erro desconhecido')}."
         )
-    return {
-        "access_token": access_token,
-        "user_id": authed_user.get("id"),
-        "team_id": (resposta.get("team") or {}).get("id"),
-    }
+    return {"user_id": resposta.get("user_id"), "team_id": resposta.get("team_id")}
 
 
-def listar_pendencias_slack(user_token: str, team_id: str | None = None, user_id: str | None = None) -> dict:
-    """Devolve {"mensagens_diretas_nao_lidas": [...], "mencoes_recentes": [...]}.
-    As duas listas são calculadas de forma independente (uma falhar não
-    derruba a outra) - mesmo padrão de resiliência usado no resto do
-    Atlas (ver assistente_ia._seguro)."""
+def listar_pendencias_slack() -> dict:
+    """Devolve {"mensagens_diretas_nao_lidas": [...], "mencoes_recentes": [...]}
+    usando o token fixo configurado (ATLAS_SLACK_USER_TOKEN). As duas
+    listas são calculadas de forma independente (uma falhar não derruba a
+    outra) - mesmo padrão de resiliência usado no resto do Atlas (ver
+    assistente_ia._seguro)."""
+    if not slack_configurado():
+        raise IntegracaoIndisponivel(
+            "Integração com Slack não configurada neste ambiente: defina ATLAS_SLACK_USER_TOKEN "
+            "no servidor do Atlas (ver instruções no topo de app/integracoes_pessoais.py)."
+        )
+    token = _config_slack_token()
+    identidade = _obter_identidade_slack(token)
+    team_id = identidade.get("team_id")
+    user_id = identidade.get("user_id")
+
     resultado = {}
 
     try:
         conversas = _requisitar_bearer(
             "https://slack.com/api/conversations.list",
-            user_token,
+            token,
             dados={"types": "im,mpim", "limit": LIMITE_CONVERSAS_SLACK_VERIFICADAS, "exclude_archived": "true"},
         )
         if not conversas.get("ok"):
@@ -362,11 +253,11 @@ def listar_pendencias_slack(user_token: str, team_id: str | None = None, user_id
         for canal in conversas.get("channels", [])[:LIMITE_CONVERSAS_SLACK_VERIFICADAS]:
             canal_id = canal["id"]
             try:
-                info = _requisitar_bearer("https://slack.com/api/conversations.info", user_token, dados={"channel": canal_id})
+                info = _requisitar_bearer("https://slack.com/api/conversations.info", token, dados={"channel": canal_id})
                 if not info.get("ok") or not info.get("channel", {}).get("unread_count", 0):
                     continue
                 previa = _requisitar_bearer(
-                    "https://slack.com/api/conversations.history", user_token, dados={"channel": canal_id, "limit": 1}
+                    "https://slack.com/api/conversations.history", token, dados={"channel": canal_id, "limit": 1}
                 )
                 texto_previa = ""
                 if previa.get("ok") and previa.get("messages"):
@@ -388,7 +279,7 @@ def listar_pendencias_slack(user_token: str, team_id: str | None = None, user_id
         if user_id:
             busca = _requisitar_bearer(
                 "https://slack.com/api/search.messages",
-                user_token,
+                token,
                 dados={"query": f"<@{user_id}>", "sort": "timestamp", "sort_dir": "desc", "count": LIMITE_MENCOES_SLACK},
             )
             if not busca.get("ok"):

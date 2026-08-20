@@ -37,12 +37,19 @@ class Usuario(Base):
     bloqueado_ate = Column(DateTime, nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)
 
-    # Integrações pessoais (19/08/2026 - pedido do Maurício): Gmail e Slack via
-    # OAuth, uma conexão POR USUÁRIO (cada pessoa conecta a própria conta - ver
-    # app/integracoes_pessoais.py e routers/integracoes_pessoais_router.py).
-    # Guardado aqui, não numa tabela separada, pelo mesmo motivo de
-    # almoxarifados_permitidos acima: é 1 conexão por serviço por usuário, sem
-    # atributo próprio que justifique uma tabela de associação.
+    # Integrações pessoais de Gmail/Slack (19/08/2026) - colunas SEM USO desde
+    # 09/08/2026, quando o modelo passou de "OAuth por usuário" (cada pessoa
+    # conecta a própria conta, guardado aqui) pra "credenciais fixas no
+    # servidor" (ver app/integracoes_pessoais.py, variáveis de ambiente
+    # ATLAS_GMAIL_*/ATLAS_SLACK_*) - pedido do próprio Maurício, que só
+    # precisava disso pra UMA conta (a dele), tornando o OAuth por usuário
+    # desproporcional à necessidade real. Mantidas aqui (em vez de removidas
+    # com uma migração DROP COLUMN, mais arriscada) por precaução - ficam só
+    # ocupando espaço à toa num banco SQLite/Postgres pequeno, sem efeito
+    # nenhum no funcionamento do Atlas. Se um dia o Atlas precisar de novo do
+    # modelo "várias pessoas, cada uma com a própria conta", estas colunas e
+    # o código anterior à simplificação (ver histórico de versões) servem de
+    # ponto de partida.
     google_conectado_email = Column(String, nullable=True)
     google_refresh_token = Column(Text, nullable=True)
     slack_conectado_user_id = Column(String, nullable=True)
