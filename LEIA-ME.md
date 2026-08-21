@@ -1,81 +1,106 @@
-# atlas_fix_mbr_grupo1.zip (21/08/2026)
+# atlas_fix_mbr_fase2.zip (21/08/2026)
 
-## Antes de aplicar — o passo que faltava nas entregas anteriores
+## Antes de aplicar
 
-O Atlas roda no Render (nuvem), e o Render só passa a usar código novo depois
-de um deploy explícito — subir o zip e redeployar, do mesmo jeito que já é
-feito com os pacotes `atlas-vNN.zip`. Arquivo enviado solto no chat, ou
-gravado na sua pasta local `Atlas\Atlas`, não chega ao servidor que gera o
-MBR. Se o próximo relatório gerado continuar idêntico ao anterior, o passo do
-deploy no Render é o primeiro lugar a checar.
+Mesmo lembrete de sempre: o Atlas roda no Render, e só passa a usar código
+novo depois de zip + redeploy manual. Suba este zip e refaça o deploy do
+backend (mesmo processo já usado nos pacotes anteriores) antes de gerar um
+MBR novo pra testar.
 
-## Como aplicar
+## O que é este pacote
 
-1. Suba este zip e faça o deploy do backend no Render (mesmo processo já
-   usado nos pacotes anteriores).
-2. Depois do deploy, gere o MBR de novo escolhendo o fechamento de julho e
-   confira os pontos abaixo.
+Continuação do pacote anterior (`atlas_fix_mbr_grupo1.zip`) - implementa o
+"Grupo 2" que tinha ficado pendente: os gráficos dos 3 dashboards externos
+(Farol de Shelf-Life, Recuperação de Shelf, Baixas Operacionais) que só
+existiam como gráfico SVG no arquivo exportado, sem tabela ou JSON por trás,
+e por isso não entravam no MBR com número real.
+
+Pedido do usuário: "Use os HTML anexados no atlas para alimentar o MBR igual
+foi feito aqui... siga com as alterações aprovadas, respeitando as premissas
+solicitadas" - usei os arquivos .html reais que você já tinha enviado nesta
+conversa (exports de Farol de Shelf, Shelf Life e Baixas Operacionais, de
+15/08 e 20/08) pra descobrir como extrair esses 3 gráficos de verdade, e
+validei a extração contra eles antes de escrever qualquer coisa no MBR.
 
 ## O que está dentro
 
 - `backend/app/mbr_generator.py`
 - `backend/app/dashboards_externos_extrator.py`
-- `backend/app/routers/divergencias_router.py`
+- `backend/app/routers/divergencias_router.py` (sem mudança nesta fase -
+  incluído de novo só por segurança, caso o zip do Grupo 1 ainda não tenha
+  sido implantado)
 
-## O que foi implementado neste pacote (Grupo 1 — dado real já existente no backend)
+## Como os 3 gráficos foram extraídos (e por que dá pra confiar no número)
 
-Isto cobre o que foi aprovado nos mockups v4/v5/v8/v9/v10/v11 e que já tem uma
-fonte de dado real e confiável no Atlas (sem precisar inventar número nem
-reconstruir gráfico a partir de SVG). O que ficou de fora está listado na
-seção "O que ainda não entrou" abaixo — nenhum item foi descartado, só
-priorizado.
+**Custo Total por Grupo e Status** (Farol de Shelf-Life) não precisou de
+truque nenhum: não é gráfico de verdade, é uma barra feita com `<div>`s
+comuns, e cada segmento de status tem um atributo HTML (`title="Perigo:
+19.64%"`) com o valor exato. Leitura direta de texto.
 
-**Correção de bug — parâmetro de fechamento** (já confirmada nas entregas
-anteriores, reforçada aqui): todas as séries mensais usadas no MBR são
-cortadas no mês de fechamento escolhido.
+Os outros 3 (Risco por Almoxarifado do Farol; Evolução Mensal da Recuperação
+de Shelf; Evolução Mensal do Baixas Operacionais) são gráfico SVG puro
+(Recharts, sem tabela nem JSON por trás) - mas a geometria do SVG não é uma
+aproximação: o Recharts calcula a posição e a altura de cada barra a partir
+do valor real através de uma escala LINEAR exata. A extração faz o caminho
+inverso, calibrando essa escala pelos próprios ticks do eixo do gráfico
+(que trazem rótulo E posição em pixel, os dois no HTML). Validei isso
+batendo a soma reconstruída contra um KPI em texto puro do MESMO arquivo, em
+7 arquivos reais diferentes que você já tinha enviado - bateu exato (até
+R$ 0,01) em todos:
 
-**Painel de Inventário**
-- Selo de tendência (melhora/piora/estável) ao lado do gráfico de evolução da
-  acurácia, calculado por regressão linear simples sobre os últimos meses.
-- Novo slide "Painel de Inventário — Detalhamento Financeiro": tabela por
-  almoxarifado + Top Faltas + Top Sobras + resumo do ciclo.
+- Farol de Shelf-Life: "Risco por Almoxarifado" reconstruído bateu com
+  "Perda potencial de R$ ..." em 3 exports diferentes (R$ 87.224,19,
+  R$ 84.965,86 e R$ 87.189,05).
+- Recuperação de Shelf: a série "Perda" do gráfico mensal bateu com o KPI
+  "Perda Real" em 2 exports diferentes.
 
-**Acurácia Ponderada**
-- Slide único (IAQ+IAP) virou 2 slides dedicados — "Acurácia Ponderada (IAP)"
-  e "Acurácia Ponderada (IAQ)" — cada um com KPI, gráfico de evolução, selo de
-  tendência e as mesmas 3 tabelas (Almoxarifado / Top Faltas / Top Sobras).
-- "Concentração de Risco": curva de Pareto ampliada de 10 para 20 SKUs (+
-  ponto de cauda "+N itens"), e a tabela de exemplos ampliada de 3 para
-  10 linhas, 8 colunas (SKU, Descrição, Almoxarifado, Qtd. Sistema, Qtd.
-  Conferida, Diferença, Valor, % Acumulado).
-- Novo slide "Detalhamento por Faixa": Top 5 por valor dentro de cada faixa
-  de magnitude (0-5 un. / 5-20 un. / 20-100 un. / mais de 100 un.), lado a
-  lado.
+Quando a soma reconstruída NÃO bate com o KPI de referência, a extração
+descarta o resultado e o slide mostra um aviso ("não foi possível
+reconstruir este gráfico neste retrato") em vez de arriscar um número
+errado - nunca mostra valor fabricado.
 
-**Controle de Movimentados**
-- Nova tabela "Resultado por Almoxarifado (Movimentados)", ordenada do pior
-  para o melhor por acurácia da reconciliação.
+## O que mudou no relatório
 
-Todos os itens acima foram validados com dados sintéticos (populados e vazios)
-sem erro, e inspecionados visualmente slide a slide — sem estouro de texto,
-sobreposição ou corte.
+Cada um dos 3 dashboards ganhou um slide companheiro (mesmo padrão já usado
+no Grupo 1 pro Painel de Inventário):
 
-## O que ainda não entrou (Grupo 2 — fica para o próximo pacote)
+- **Farol de Shelf-Life — Risco por Almoxarifado**: 2 gráficos lado a lado
+  (Risco por Almoxarifado e Custo por Grupo e Status, ambos empilhados por
+  status de urgência).
+- **Recuperação de Shelf — Evolução Mensal**: Perda × Receita Recuperada ×
+  Saving Recuperado, mês a mês. "Saving Recuperado" só aparece a partir do
+  mês em que o controle de recuperação passou a atuar - isso é o dado real
+  do arquivo, não falha de extração.
+- **Baixas Operacionais — Evolução Mensal**: total de baixas por mês no
+  histórico completo do export, empilhado por motivo quando o export trouxer
+  essa quebra. Cobre uma janela mais longa que o KPI "Prejuízo Total no
+  Período" do slide anterior (que é uma janela móvel curta) - os dois
+  números não baterem entre si é esperado, o slide já deixa isso explícito
+  pra não parecer inconsistência.
 
-Estes itens dependem de coisas que não têm dado estruturado hoje, e por isso
-exigem trabalho adicional antes de entrar com segurança:
+Nos 2 gráficos empilhados com muitas séries pequenas (Risco por
+Almoxarifado/Grupo, e a Evolução de Baixas quando vem quebrada por motivo),
+o rótulo de valor por segmento foi desligado - com tantas séries pequenas
+empilhadas ele ficava ilegível/sobreposto na inspeção visual; o eixo e a
+legenda já bastam pra leitura. Esse foi um defeito real encontrado e
+corrigido durante a validação desta entrega, junto com um título que
+quebrava em 2 linhas e invadia o subtítulo (mesmo tipo de ajuste já feito no
+pacote anterior).
 
-- **Farol de Shelf Life** — os 2 gráficos "Risco por Almoxarifado" e "Custo
-  por Grupo e Status": só existem como `<svg>` no HTML exportado da tela
-  externa, sem tabela ou JSON por trás — precisaria reconstruir a geometria
-  do SVG para virar gráfico nativo, o que ainda não foi feito.
-- **Recuperação de Shelf** — gráfico de evolução mensal: mesma limitação (só
-  SVG na exportação).
-- **Baixas Operacionais externo (Pacote)** — gráfico mensal: mesma limitação.
-- **Controle de Movimentados — 2º slide** (Causas Confirmadas + Top 10 Ações):
-  o endpoint `dashboard_distribuicao_causas` hoje só aceita período relativo
-  (não aceita um mês exato de fechamento) — precisa de uma mudança no backend
-  antes de alimentar este slide.
+## O que ainda não entrou
 
-Nenhum destes tem dado fabricado ou aproximado neste pacote — preferi deixar
-de fora a mostrar número que não bate com a fonte real.
+O 2º slide de Controle de Movimentados (Causas Confirmadas + Top 10 Ações)
+continua pendente - depende de uma mudança no backend
+(`dashboard_distribuicao_causas` hoje só aceita período relativo, não um mês
+de fechamento exato), não de leitura de HTML. Fica pra uma próxima rodada,
+se você quiser seguir com isso.
+
+## Como foi validado
+
+`py_compile` nos dois arquivos Python, extração testada contra os 7 arquivos
+reais que você enviou nesta conversa (Farol de Shelf, Shelf Life e Baixas
+Operacionais, versões de 15/08 e 20/08), geração de slide isolada com dados
+reais extraídos + casos vazios/indisponíveis (sem exceção em nenhum), e
+inspeção visual de cada slide gerado (detectado e corrigido: rótulo
+sobreposto nos gráficos empilhados, e um título de slide quebrando em 2
+linhas).

@@ -42,6 +42,33 @@ Duas famílias de arquivo, por como cada um foi construído:
    são preenchidas via JS, ficam vazias no HTML bruto). Tem "mês" limpo por
    registro (campo "mes", "YYYY-MM") - filtra exato pelo mês do MBR, igual
    a Controle de FEFO/Testes Industriais (`extrair_dispersao_ficha_tecnica`).
+
+5. Fase 2 (22/08/2026, pedido do usuário: "Use os HTML anexados no atlas
+   para alimentar o MBR igual foi feito aqui... siga com as alterações
+   aprovadas") - os 3 gráficos que ficaram pendentes na Fase 1 (Risco de
+   Perda por Almoxarifado e Custo Total por Grupo e Status do Farol de
+   Shelf-Life; Evolução Mensal da Recuperação de Shelf; Evolução Mensal do
+   Baixas Operacionais externo) SÃO extraídos agora, com dois métodos
+   diferentes por caso:
+
+   a) "Custo Total por Grupo e Status" não é gráfico SVG - é uma barra
+      empilhada feita com <div> comuns, e cada segmento tem um atributo
+      `title="Status: XX.XX%"` com o valor exato (ver `_extrair_custo_por_
+      grupo_status`). Extração direta de texto, sem risco.
+
+   b) Os outros 3 SÃO SVG puro (Recharts), sem tabela/JSON por trás, mas
+      a geometria do SVG não é uma aproximação: o Recharts calcula a
+      posição/altura de cada barra a partir do valor real por uma escala
+      LINEAR exata, então a extração inverte essa mesma escala calibrando
+      pelos próprios ticks do eixo numérico do gráfico (rótulo E posição em
+      pixel, ambos no HTML) - ver `_extrair_barras_recharts`. Validado
+      batendo a soma reconstruída contra um KPI em texto puro do mesmo
+      arquivo (ex.: "Risco por Almoxarifado" bateu exatamente com "Perda
+      potencial de R$ 87.224,19" em 3 arquivos reais diferentes - ver
+      histórico de validação no MBR). Quando a soma reconstruída não bate
+      com um KPI de referência disponível, a função de extração descarta o
+      resultado (retorna None pro gráfico) em vez de mostrar um número não
+      confiável.
 """
 import re
 import json
@@ -83,6 +110,281 @@ def _export_meta(soup):
             chave, valor = texto.split(":", 1)
             chips[chave.strip()] = valor.strip()
     return exportado_em, chips
+
+
+# ---------------------------------------------------------------------------
+# Fase 2 (22/08/2026) - reconstrução de gráficos SVG/Recharts + leitura da
+# barra "Custo por Grupo e Status" (ver item 5 do docstring do módulo).
+# ---------------------------------------------------------------------------
+def _extrair_custo_por_grupo_status(soup):
+    """"Custo Total por Grupo e Status" do Farol de Shelf-Life NÃO é gráfico -
+    é uma lista de cartões com <div class="flex justify-between..."> (nome do
+    grupo + custo total) seguido de uma barra empilhada feita com <div>s
+    comuns, cada um com `title="Status: XX.XX%"` (ex.: title="Perigo: 19.64%")
+    - valor exato, direto do atributo, sem depender de geometria de gráfico."""
+    resultado = []
+    for header in soup.select("div.flex.justify-between.gap-2.text-xs"):
+        spans = header.find_all("span", recursive=False)
+        if len(spans) != 2:
+            continue
+        nome_grupo = spans[0].get_text(strip=True)
+        total = _parse_money_br(spans[1].get_text(strip=True))
+        if not nome_grupo or total is None:
+            continue
+        barra = header.find_next_sibling("div")
+        if not barra:
+            continue
+        segmentos = barra.select("div[title]")
+        if not segmentos:
+            continue
+        por_status = {}
+        for seg in segmentos:
+            m = re.match(r"^(.+):\s*([\d.,]+)%$", (seg.get("title") or "").strip())
+            if not m:
+                continue
+            status, pct_texto = m.group(1).strip().capitalize(), m.group(2).replace(",", ".")
+            try:
+                pct = float(pct_texto)
+            except ValueError:
+                continue
+            por_status[status] = {"pct": pct, "valor": round(total * pct / 100, 2)}
+        if por_status:
+            resultado.append({"grupo": nome_grupo, "total": round(total, 2), "por_status": por_status})
+    return resultado
+
+
+def _parse_valor_eixo_compacto(texto):
+    """Números de eixo Recharts: '0k'/'60k' (milhar sem decimal) ou
+    'R$ 20.0Mil'/'R$100.0Mil' (milhar com 1 decimal) - formatador compacto
+    que usa PONTO decimal, diferente do formato de dinheiro BR usado no
+    resto do export (vírgula decimal, ex. 'R$ 7.742,70') - por isso tem
+    parser próprio, não reaproveita `_parse_money_br`. Retorna
+    (valor, tolerância) - tolerância é a metade da menor unidade que o
+    rótulo consegue exibir (ex.: '60k' só exibe de 1000 em 1000 -> o valor
+    real pode diferir do rótulo em até 500)."""
+    if texto is None:
+        return None
+    t = str(texto).replace("R$", "").replace("\xa0", " ").strip()
+    if not t:
+        return None
+    m = re.match(r"^(-?[\d.]+)\s*(mil|k|mi|m)?$", t, re.I)
+    if not m:
+        return None
+    try:
+        numero = float(m.group(1))
+    except ValueError:
+        return None
+    sufixo = (m.group(2) or "").lower()
+    mult = {"mil": 1000, "k": 1000, "mi": 1_000_000, "m": 1_000_000}.get(sufixo, 1)
+    if sufixo and "." in m.group(1):
+        tolerancia = mult / 20
+    elif sufixo:
+        tolerancia = mult / 2
+    else:
+        tolerancia = 0.5
+    return numero * mult, tolerancia
+
+
+def _calibrar_eixo_linear_recharts(pontos):
+    """pontos: [(pixel, valor_rotulo, tolerancia), ...] de UM eixo. O Recharts
+    usa escala linear EXATA (valor real -> pixel), mas o texto do tick
+    arredonda pro formato compacto - em vez de mínimos-quadrados sobre esse
+    texto arredondado (que falsearia a inclinação), calibra pelos 2 ticks
+    com maior separação em pixel (menor erro relativo de arredondamento) e
+    exige que TODOS os ticks do meio caiam dentro da tolerância de exibição
+    de cada um. Se não caírem, o eixo não é linear (ou os rótulos não são
+    confiáveis) e retorna None - nunca inventa uma inclinação aproximada."""
+    if len(pontos) < 2:
+        return None
+    pts = sorted(pontos, key=lambda p: p[0])
+    (px0, v0, _), (px1, v1, _) = pts[0], pts[-1]
+    if px1 == px0:
+        return None
+    m = (v1 - v0) / (px1 - px0)
+    b = v0 - m * px0
+    for px, valor_rotulo, tolerancia in pts:
+        if abs((m * px + b) - valor_rotulo) > tolerancia + 1e-6:
+            return None
+    return m, b
+
+
+def _eixo_ticks_valor_recharts(svg, classe_eixo):
+    g = svg.select_one(f"g.{classe_eixo}")
+    if not g:
+        return []
+    pontos = []
+    for tick in g.select("g.recharts-cartesian-axis-tick"):
+        text_el = tick.find("text", class_="recharts-cartesian-axis-tick-value")
+        line_el = tick.find("line")
+        if not text_el or not line_el:
+            continue
+        parsed = _parse_valor_eixo_compacto(text_el.get_text(strip=True))
+        if parsed is None:
+            continue
+        valor, tolerancia = parsed
+        pixel = line_el.get("x1") if classe_eixo == "recharts-xAxis" else line_el.get("y1")
+        if pixel is None:
+            continue
+        pontos.append((float(pixel), valor, tolerancia))
+    return pontos
+
+
+def _eixo_ticks_categoria_recharts(svg, classe_eixo):
+    g = svg.select_one(f"g.{classe_eixo}")
+    if not g:
+        return []
+    itens = []
+    for tick in g.select("g.recharts-cartesian-axis-tick"):
+        text_el = tick.find("text", class_="recharts-cartesian-axis-tick-value")
+        line_el = tick.find("line")
+        if not text_el or not line_el:
+            continue
+        rotulo = text_el.get_text(strip=True)
+        pixel = line_el.get("x1") if classe_eixo == "recharts-xAxis" else line_el.get("y1")
+        if pixel is None or not rotulo:
+            continue
+        itens.append((float(pixel), rotulo))
+    return itens
+
+
+def _e_grafico_recharts_real(svg):
+    """Cada item de legenda do Recharts também é um mini <svg
+    class="recharts-surface"> (só o quadradinho/bolinha de cor, 14x14) - sem
+    filtrar isso, contar "quantos recharts-surface existem" pra saber se
+    subiu demais na árvore (função abaixo) contaria ícone de legenda como
+    gráfico."""
+    return svg.select_one(
+        ".recharts-cartesian-grid, .recharts-bar-rectangles, .recharts-line, "
+        ".recharts-pie, .recharts-area"
+    ) is not None
+
+
+def _legenda_recharts_do_grafico(svg):
+    """Sobe a árvore a partir do <svg> do gráfico até achar o container cujos
+    descendentes incluem exatamente 1 gráfico real (o próprio) e ao menos
+    1 legenda - evita pegar a legenda de OUTRO gráfico da mesma página
+    quando dois cartões usam os mesmos rótulos de série (ex.: "Perda"/
+    "Receita Recuperada"/"Saving Recuperado" aparece em mais de um gráfico
+    do dashboard de Recuperação de Shelf)."""
+    node = svg
+    for _ in range(6):
+        node = node.parent
+        if node is None or getattr(node, "name", None) == "body":
+            break
+        surfaces = [s for s in node.select(".recharts-surface") if _e_grafico_recharts_real(s)]
+        if len(surfaces) > 1:
+            break
+        itens = node.select(".recharts-legend-item")
+        if itens:
+            mapa = {}
+            for li in itens:
+                nome_el = li.select_one(".recharts-legend-item-text")
+                icone = li.select_one(".recharts-legend-icon, .recharts-symbols")
+                if nome_el and icone and icone.get("fill"):
+                    mapa[icone.get("fill")] = nome_el.get_text(strip=True)
+            if mapa:
+                return mapa
+    return {}
+
+
+def _extrair_barras_recharts(svg):
+    """Reconstrói os valores exatos de um gráfico de barras (agrupado ou
+    empilhado, vertical ou horizontal) do Recharts a partir da geometria do
+    SVG - ver item 5(b) do docstring do módulo pra explicação de por que
+    isso NÃO é uma aproximação. Retorna None se não conseguir validar o
+    eixo numérico como linear, ou se não achar barra/categoria nenhuma -
+    nunca retorna um número em que não confia."""
+    tks_x_num = _eixo_ticks_valor_recharts(svg, "recharts-xAxis")
+    tks_y_num = _eixo_ticks_valor_recharts(svg, "recharts-yAxis")
+    tks_x_cat = _eixo_ticks_categoria_recharts(svg, "recharts-xAxis")
+    tks_y_cat = _eixo_ticks_categoria_recharts(svg, "recharts-yAxis")
+
+    if len(tks_x_num) >= 2 and len(tks_x_num) == len(tks_x_cat) and tks_y_cat:
+        eixo_valor_pontos, eixo_cat_itens, orientacao = tks_x_num, tks_y_cat, "horizontal"
+    elif len(tks_y_num) >= 2 and len(tks_y_num) == len(tks_y_cat) and tks_x_cat:
+        eixo_valor_pontos, eixo_cat_itens, orientacao = tks_y_num, tks_x_cat, "vertical"
+    else:
+        return None
+
+    ajuste = _calibrar_eixo_linear_recharts(eixo_valor_pontos)
+    if not ajuste:
+        return None
+    m, b = ajuste
+
+    legenda = _legenda_recharts_do_grafico(svg)
+    categorias_ordenadas = [rotulo for _, rotulo in sorted(eixo_cat_itens, key=lambda t: t[0])]
+    posicoes_cat = sorted(p for p, _ in eixo_cat_itens)
+    menor_espacamento = min(
+        (posicoes_cat[i + 1] - posicoes_cat[i] for i in range(len(posicoes_cat) - 1)), default=1e9
+    )
+    tolerancia_categoria = menor_espacamento / 2 if menor_espacamento < 1e9 else 1e9
+
+    bars = svg.select(".recharts-bar-rectangle path, .recharts-bar-rectangle rect")
+    if not bars:
+        return None
+
+    series: dict = {}
+    for bar in bars:
+        try:
+            x, y = float(bar.get("x")), float(bar.get("y"))
+            w, h = float(bar.get("width")), float(bar.get("height"))
+        except (TypeError, ValueError):
+            continue
+        if orientacao == "vertical":
+            centro_cat, valor = x + w / 2, h * abs(m)
+        else:
+            centro_cat, valor = y + h / 2, w * abs(m)
+        cat_mais_proxima = min(eixo_cat_itens, key=lambda t: abs(t[0] - centro_cat))
+        if abs(cat_mais_proxima[0] - centro_cat) > tolerancia_categoria:
+            continue  # barra não bateu com nenhuma categoria com confiança - ignora, não adivinha
+        rotulo_cat = cat_mais_proxima[1]
+
+        nome_serie = bar.get("name") or legenda.get(bar.get("fill")) or "valor"
+        series.setdefault(nome_serie, {})
+        series[nome_serie][rotulo_cat] = series[nome_serie].get(rotulo_cat, 0.0) + valor
+
+    totais = {}
+    for por_cat in series.values():
+        for cat, val in por_cat.items():
+            totais[cat] = totais.get(cat, 0.0) + val
+
+    return {
+        "categorias": categorias_ordenadas,
+        "series": {nome: {c: round(v, 2) for c, v in por_cat.items()} for nome, por_cat in series.items()},
+        "totais": {c: round(v, 2) for c, v in totais.items()},
+    }
+
+
+def _achar_grafico_por_categorias(soup, checador_categoria):
+    """Acha, entre todos os gráficos Recharts da página, o primeiro cujo
+    eixo de categorias bate com `checador_categoria` (ex.: nomes de
+    almoxarifado, ou meses) - mais robusto que confiar na ORDEM em que os
+    gráficos aparecem no HTML (pode variar entre versões do export)."""
+    for svg in soup.find_all("svg"):
+        if "recharts-surface" not in (svg.get("class") or []) or not _e_grafico_recharts_real(svg):
+            continue
+        for classe in ("recharts-xAxis", "recharts-yAxis"):
+            cats = _eixo_ticks_categoria_recharts(svg, classe)
+            rotulos = [r for _, r in cats]
+            if rotulos and checador_categoria(rotulos):
+                return svg
+    return None
+
+
+_MESES_PT = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+             "setembro", "outubro", "novembro", "dezembro")
+
+
+def _parecem_almoxarifados(rotulos):
+    return sum(1 for r in rotulos if r.startswith("Alm")) >= max(2, len(rotulos) - 1)
+
+
+def _parecem_meses_longos(rotulos):
+    return sum(1 for r in rotulos if r.strip().lower() in _MESES_PT) >= max(2, len(rotulos) - 1)
+
+
+def _parecem_meses_abreviados(rotulos):
+    return sum(1 for r in rotulos if re.match(r"^[a-zç]{3}/\d{2}$", r.strip(), re.I)) >= max(2, len(rotulos) - 1)
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +524,25 @@ def extrair_farol_shelf(html_content: str) -> dict:
             linhas.append({"rank": cols[0], "descricao": cols[1], "custo": _parse_money_br(cols[2]), "pct": cols[3]})
         buckets.append({"titulo": titulo, "itens": linhas, "total": total_linha})
 
+    # Fase 2 (22/08/2026): "Custo Total por Grupo e Status" é lido do MESMO
+    # soup sem svg (é <div> comum, não gráfico) - "Risco de Perda por
+    # Almoxarifado" precisa do soup COM svg (é Recharts puro), por isso um
+    # parse separado do html original só pra esse gráfico.
+    custo_por_grupo_status = _extrair_custo_por_grupo_status(soup) or None
+
+    risco_por_almoxarifado = None
+    soup_com_svg = BeautifulSoup(html_content, "html.parser")
+    grafico_almox = _achar_grafico_por_categorias(soup_com_svg, _parecem_almoxarifados)
+    if grafico_almox is not None:
+        extraido = _extrair_barras_recharts(grafico_almox)
+        if extraido:
+            soma = sum(extraido["totais"].values())
+            # valida contra o KPI de texto (mesmo dado, pivotado diferente) -
+            # só aceita se bater dentro de uma tolerância pequena; se não
+            # bater, descarta em vez de mostrar um número não confiável.
+            if perda_potencial_total is None or abs(soma - perda_potencial_total) <= max(1.0, perda_potencial_total * 0.01):
+                risco_por_almoxarifado = extraido
+
     return {
         "exportado_em": exportado_em,
         "filtros": filtros,
@@ -229,6 +550,8 @@ def extrair_farol_shelf(html_content: str) -> dict:
         "perda_ja_vencida": perda_ja_vencida,
         "qtd_lotes": qtd_lotes,
         "buckets": buckets,
+        "custo_por_grupo_status": custo_por_grupo_status,
+        "risco_por_almoxarifado": risco_por_almoxarifado,
     }
 
 
@@ -265,11 +588,32 @@ def extrair_recuperacao_shelf(html_content: str) -> dict:
                 linhas.append(cols)
         tabelas[titulo] = {"cabecalho": cabecalho, "linhas": linhas[:8]}
 
+    # Fase 2 (22/08/2026): gráfico "Evolução Mensal" (Perda × Receita
+    # Recuperada × Saving Recuperado por mês) - Recharts puro, precisa do
+    # soup COM svg. Valida a série "Perda" (sempre presente em todos os
+    # meses no export real) contra o KPI "Perda Real"; "Saving Recuperado"
+    # legitimamente pode não bater (o próprio mockup aprovado já destacava
+    # esse gráfico "a partir de abril", quando o controle passou a atuar
+    # sobre a recuperação - meses antes disso não têm ação de saving, então
+    # a soma do gráfico é menor que o total do período por desenho, não por
+    # erro de extração).
+    evolucao_mensal = None
+    soup_com_svg = BeautifulSoup(html_content, "html.parser")
+    grafico_evolucao = _achar_grafico_por_categorias(soup_com_svg, _parecem_meses_abreviados)
+    if grafico_evolucao is not None:
+        extraido = _extrair_barras_recharts(grafico_evolucao)
+        if extraido:
+            soma_perda = sum(extraido["series"].get("Perda", {}).values())
+            perda_real = kpis.get("perda_real")
+            if perda_real is None or "Perda" not in extraido["series"] or abs(soma_perda - perda_real) <= max(1.0, perda_real * 0.01):
+                evolucao_mensal = extraido
+
     return {
         "exportado_em": exportado_em,
         "filtros": filtros,
         "kpis": kpis,
         "tabelas": tabelas,
+        "evolucao_mensal": evolucao_mensal,
     }
 
 
@@ -309,11 +653,24 @@ def extrair_baixas_operacionais_externo(html_content: str) -> dict:
                 linhas.append(cols)
         tabelas[titulo] = {"cabecalho": cabecalho, "linhas": linhas[:8]}
 
+    # Fase 2 (22/08/2026): gráfico "Total de Baixas por Mês" - Recharts puro,
+    # precisa do soup COM svg. Cobre o histórico mensal completo do export
+    # (ex.: janeiro-agosto), uma janela BEM mais longa que o "Prejuízo Total
+    # no Período" do resumo acima (janela móvel curta, ex. últimos ~60 dias)
+    # - por desenho os dois números não batem entre si, então não valida um
+    # contra o outro (ver nota no slide, pra não parecer inconsistência).
+    evolucao_mensal = None
+    soup_com_svg = BeautifulSoup(html_content, "html.parser")
+    grafico_evolucao = _achar_grafico_por_categorias(soup_com_svg, _parecem_meses_longos)
+    if grafico_evolucao is not None:
+        evolucao_mensal = _extrair_barras_recharts(grafico_evolucao)
+
     return {
         "exportado_em": exportado_em,
         "filtros": filtros,
         "resumo": resumo,
         "tabelas": tabelas,
+        "evolucao_mensal": evolucao_mensal,
     }
 
 
