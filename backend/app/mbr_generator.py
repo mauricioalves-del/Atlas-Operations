@@ -81,6 +81,15 @@ COR_ERRO = RGBColor(0xC6, 0x28, 0x28)
 COR_INFO = RGBColor(0x15, 0x65, 0xC0)
 COR_SEM_DADO = RGBColor(0x9E, 0x9E, 0x9E)
 
+# Farol de Shelf-Life (22/08/2026) - 4 faixas de severidade, mesma paleta já
+# validada com o usuário na simulação HTML (faixa "vencido" é a mais severa,
+# mais escura que "urgente" de propósito - não é gradiente, é OUTRA cor pra
+# não confundir com 0-30 dias ainda não vencido).
+COR_FAROL_URGENTE = RGBColor(0xF1, 0x70, 0x4B)   # 0-30 dias
+COR_FAROL_PERIGO = RGBColor(0xF2, 0xC1, 0x4E)    # 31-60 dias
+COR_FAROL_ATENCAO = RGBColor(0x2C, 0xC5, 0xA8)   # 61-90 dias
+COR_FAROL_VENCIDO = RGBColor(0x7B, 0x3B, 0x2E)   # já vencido
+
 # Ver nota no docstring do módulo sobre a troca TT Chocolates/Poppins -> Arial.
 FONTE_TITULO = "Arial"
 FONTE_TEXTO = "Arial"
@@ -144,6 +153,46 @@ def _mes_anterior(mes: str) -> str:
     if m == 1:
         return f"{ano - 1}-12"
     return f"{ano}-{m - 1:02d}"
+
+
+def _ultimo_dia_mes(mes: str) -> str:
+    """"YYYY-MM" -> "YYYY-MM-DD" do último dia daquele mês (usado pra passar
+    como data-limite pra indicadores que trabalham em janela de dias, ex.:
+    cobertura_conferencia)."""
+    ano, m = (int(parte) for parte in mes.split("-"))
+    ultimo_dia = calendar.monthrange(ano, m)[1]
+    return f"{ano}-{m:02d}-{ultimo_dia:02d}"
+
+
+def _truncar_serie_mensal(serie: list, mes_limite: str) -> list:
+    """Várias funções de "evolução mensal" usadas pelo MBR (fechamento_router.
+    dashboard_evolucao_mensal e dashboard_evolucao_ponderada_mensal,
+    movimentados_router.dashboard_evolucao_mensal e
+    dashboard_transferencias_evolucao_mensal, baixas_operacionais_router.
+    dashboard_passivos_evolucao_mensal) não aceitam nenhum parâmetro de "mês
+    de corte" - são pensadas pra uso em dashboards AO VIVO, onde mostrar até
+    o mês mais recente que já tem dado no banco é o comportamento certo, e
+    por isso sempre devolvem a série completa (histórico inteiro), nunca
+    filtrada.
+
+    O MBR, ao contrário, é gerado para um mês de FECHAMENTO específico
+    (ex.: "2026-07") e pode ser gerado bem depois desse mês (ex.: hoje,
+    "2026-08-22", já existindo algum registro parcial de agosto no banco).
+    Sem esse corte, os gráficos de evolução (Painel de Inventário, Acurácia
+    Ponderada, Controle de Movimentados, Mapeamento de Passivos) e os
+    deltas MoM do "Recorte do Período"/Resumo Executivo liam sempre o ÚLTIMO
+    ponto da série completa - ou seja, o mês mais recente com QUALQUER
+    registro no banco, não o mês selecionado no filtro do relatório. Bug
+    reportado pelo usuário em 22/08/2026: "mesmo selecionando o fechamento
+    de julho, está trazendo dados do mês atual (agosto) em quase todos os
+    módulos".
+
+    Corta aqui, uma única vez por série, logo após a coleta em
+    _coletar_dados_mbr - qualquer ponto com "mes" > mes_limite é descartado
+    antes de chegar em _recorte_periodo/_analise_geral ou em qualquer slide
+    (todos eles fazem d["evolucao_..."][-1] ou [-6:], então bastava a série
+    já vir cortada na origem)."""
+    return [ponto for ponto in serie if ponto.get("mes", "") <= mes_limite]
 
 
 # ---------------------------------------------------------------------------
@@ -1029,10 +1078,21 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
 
     dados = {
         "kpis_inventario": fechamento_router.dashboard_kpis(almoxarifado=None, mes=mes, usuario=usuario, db=db),
-        "evolucao_inventario": fechamento_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db),
+        # 22/08/2026 (bug reportado pelo usuário: relatório de julho trazendo dados de
+        # agosto "em quase todos os módulos"): dashboard_evolucao_mensal não tem
+        # parâmetro de corte - sempre devolve a série completa até o mês mais recente
+        # que já tiver QUALQUER registro no banco, pensada pra dashboard ao vivo. Corta
+        # pra mes_limite=mes aqui, uma única vez, pra _recorte_periodo/_analise_geral e
+        # todo slide que faz [-1]/[-6:] nessa série pararem no mês do relatório, não no
+        # mês corrente real (ver docstring de _truncar_serie_mensal).
+        "evolucao_inventario": _truncar_serie_mensal(
+            fechamento_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db), mes
+        ),
         "top_recorrentes": fechamento_router.dashboard_top_recorrentes(almoxarifado=None, limite=5, usuario=usuario, db=db),
         "comparativo_acuracia": fechamento_router.dashboard_comparativo_acuracia(almoxarifado=None, mes=mes, usuario=usuario, db=db),
-        "evolucao_ponderada": fechamento_router.dashboard_evolucao_ponderada_mensal(almoxarifado=None, usuario=usuario, db=db),
+        "evolucao_ponderada": _truncar_serie_mensal(
+            fechamento_router.dashboard_evolucao_ponderada_mensal(almoxarifado=None, usuario=usuario, db=db), mes
+        ),
         # Pareto (concentração de valor) e distribuição por magnitude - já recortados pelo
         # mês do relatório (não o histórico inteiro), pra "mais exemplos do período" serem
         # de fato exemplos DESTE mês (20/08/2026).
@@ -1040,29 +1100,55 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "distribuicao_magnitude": fechamento_router.dashboard_distribuicao_magnitude(almoxarifado=None, mes=mes, usuario=usuario, db=db),
         # Cobertura de Conferência (divergencias_router) - saúde do PROCESSO de conferência
         # (dias conferidos x pendentes por almoxarifado), usada pra reforçar/contextualizar
-        # a curva de evolução de acurácia do Painel de Inventário (20/08/2026).
-        "cobertura_conferencia": divergencias_router.cobertura_conferencia(dias=90, almoxarifado=None, usuario=usuario, db=db),
+        # a curva de evolução de acurácia do Painel de Inventário (20/08/2026). Por padrão
+        # essa função trabalha em D-1 de HOJE (não do mês do relatório) - 22/08/2026:
+        # passamos data_referencia=último dia do mês do relatório, senão um MBR gerado
+        # depois do fechamento (o caso normal) mede a janela de 90 dias terminando hoje,
+        # não terminando no mês selecionado.
+        "cobertura_conferencia": divergencias_router.cobertura_conferencia(
+            dias=90, almoxarifado=None, data_referencia=_ultimo_dia_mes(mes), usuario=usuario, db=db
+        ),
         "resumo_passivos": baixas_operacionais_router.resumo_executivo(
             ano=ano_int, mes=mes_int, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
         ),
         # Evolução mensal REAL de Passivos, já cruzada com o Fluxo de Inventário
         # (entradas/saídas/resultado de TODOS os inventários) mês a mês - histórico
         # completo, sem filtro de ano/mês (o slide usa os últimos meses, mesmo padrão
-        # de evolucao_inventario/evolucao_ponderada acima) (20/08/2026).
-        "evolucao_passivos_fluxo": baixas_operacionais_router.dashboard_passivos_evolucao_mensal(
-            ano=None, mes=None, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
+        # de evolucao_inventario/evolucao_ponderada acima) (20/08/2026). Truncado pra
+        # mes_limite=mes pelo mesmo motivo dos dois acima (22/08/2026).
+        "evolucao_passivos_fluxo": _truncar_serie_mensal(
+            baixas_operacionais_router.dashboard_passivos_evolucao_mensal(
+                ano=None, mes=None, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
+            ),
+            mes,
         ),
+        # 22/08/2026: estava chamado com ano=None/mes=None (todo o histórico agregado);
+        # a própria docstring da função diz que ela é "a mesma quebra Passivos x
+        # Resultado de Inventário do Resumo Executivo, só que por ALMOXARIFADO" - ou
+        # seja, deveria usar o mesmo recorte de mês que resumo_passivos acima (ano_int/
+        # mes_int), não o acumulado de todos os meses.
         "resultado_por_almoxarifado": baixas_operacionais_router.dashboard_resultado_por_almoxarifado(
-            ano=None, mes=None, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
+            ano=ano_int, mes=mes_int, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
         ),
         "resumo_shelf_life": shelf_life_mod.calcular_resumo_shelf_life(db, incluir_itens=True, limite_itens=5),
         # Controle de Movimentados (reconciliação diária sistema x físico, origem ==
         # "movimentacao") - indicador PRÓPRIO, separado do Fechamento de Inventário
         # periódico. Ver docstring de movimentados_router.py (20/08/2026).
         "resumo_movimentados": movimentados_router.dashboard_resumo(mes=mes, almoxarifado=None, usuario=usuario, db=db),
-        "evolucao_movimentados": movimentados_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db),
+        # Ambas as "evolução mensal" abaixo leem de snapshots persistidos que a própria
+        # docstring do router documenta como "o mês corrente sempre reflete o estado
+        # mais recente" - ou seja, histórico completo, sem corte. Truncadas pra
+        # mes_limite=mes pelo mesmo motivo de evolucao_inventario/evolucao_ponderada
+        # acima (22/08/2026). resumo_transferencias fica de fora de propósito - é
+        # "totais atuais, sem recorte de período" por design (Transferencia não tem
+        # conceito de mês corrente pra filtro, ver docstring do router), não é o bug.
+        "evolucao_movimentados": _truncar_serie_mensal(
+            movimentados_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db), mes
+        ),
         "resumo_transferencias": movimentados_router.dashboard_transferencias_resumo(usuario=usuario, db=db),
-        "evolucao_transferencias": movimentados_router.dashboard_transferencias_evolucao_mensal(usuario=usuario, db=db),
+        "evolucao_transferencias": _truncar_serie_mensal(
+            movimentados_router.dashboard_transferencias_evolucao_mensal(usuario=usuario, db=db), mes
+        ),
         # Dashboards externos (Auditoria > Outros Dashboards) - substituem/complementam
         # números calculados pelo Atlas por dados reais dos arquivos .html que a equipe
         # já mantém em paralelo, pedido do usuário (20/08/2026, ver dashboards_externos_extrator.py).
@@ -1133,12 +1219,14 @@ def _recorte_periodo(d: dict) -> dict:
 
     Só usa séries que o Atlas de fato calcula mês a mês - não inventa
     comparação pra frente que não tem histórico (Shelf Life hoje é uma foto,
-    não uma série)."""
-    comparaveis = []
+    não uma série).
 
-    evol_inv = d["evolucao_inventario"]
-    if len(evol_inv) >= 2 and evol_inv[-1].get("variacao_mom_pp") is not None:
-        comparaveis.append({"frente": "Acurácia do Inventário", "delta_pp": evol_inv[-1]["variacao_mom_pp"]})
+    "Acurácia do Inventário" (item-a-item) SAIU da lista de comparáveis em
+    22/08/2026 (pedido do usuário: IAP substitui o item-a-item como
+    indicador de acurácia no Resumo Executivo) - com o item-a-item fora,
+    "Acurácia Ponderada (IAP)" e "Controle de Movimentados" são as duas
+    frentes que disputam "maior avanço/involução do mês" aqui."""
+    comparaveis = []
 
     evol_pond = d["evolucao_ponderada"]
     if len(evol_pond) >= 2 and evol_pond[-1].get("variacao_iap_pp") is not None:
@@ -1179,27 +1267,79 @@ def _analise_geral(d: dict):
 
     kpis_inv = d["kpis_inventario"]
     comp = d["comparativo_acuracia"]
+    evol_pond = d["evolucao_ponderada"]
     passivos = d["resumo_passivos"]["passivos"]
     resultado_inv = d["resumo_passivos"]["resultado_inventario"]
+    baixas_pacote = (d.get("baixas_operacionais_externo") or {}).get("resumo") or {}
     shelf = d["resumo_shelf_life"]
     movimentados = d["resumo_movimentados"]
     evol_mov = d["evolucao_movimentados"]
 
-    label_acuracia, _ = _status_maior_melhor(kpis_inv["acuracia_geral_pct"], *_LIMIARES["acuracia"])
-    if kpis_inv["acuracia_geral_pct"] is not None:
-        if label_acuracia == "Em avanço":
-            avancos.append(f"Acurácia geral do inventário em {_fmt_pct(kpis_inv['acuracia_geral_pct'])}, dentro da faixa de controle (meta ≥ 95%).")
+    # Acurácia Ponderada / IAP como indicador oficial no Resumo Executivo
+    # (22/08/2026, pedido do usuário: "substitua a lógica de inventário Item
+    # a Item e trocar pela análise IAP. Mostrando curva de aprendizado e
+    # melhoria contínua do processo" - só neste slide, ver decisão registrada
+    # na conversa: Painel de Inventário/Scorecard continuam com item-a-item).
+    # Usa evolucao_ponderada (série real, já truncada no mês do relatório)
+    # pra falar de TENDÊNCIA no período, não só do nível do mês.
+    if evol_pond and evol_pond[-1].get("iap_pct") is not None:
+        iap_atual = evol_pond[-1]["iap_pct"]
+        primeiro = evol_pond[0]
+        if len(evol_pond) >= 2 and primeiro.get("iap_pct") is not None:
+            delta_periodo = round(iap_atual - primeiro["iap_pct"], 2)
+            meses_com_delta = [e for e in evol_pond[1:] if e.get("variacao_iap_pp") is not None]
+            melhora_meses = sum(1 for e in meses_com_delta if e["variacao_iap_pp"] > 0)
+            piora_meses = sum(1 for e in meses_com_delta if e["variacao_iap_pp"] < 0)
+            if delta_periodo > 0 and melhora_meses >= piora_meses:
+                texto_iap = (
+                    f"IAP (Acurácia por Valor) sobe de {_fmt_pct(primeiro['iap_pct'])} em {_nome_mes(primeiro['mes'])} para "
+                    f"{_fmt_pct(iap_atual)} em {_nome_mes(evol_pond[-1]['mes'])} — +{_fmt_pct(delta_periodo)} no período"
+                )
+                if melhora_meses > piora_meses:
+                    texto_iap += (
+                        f", melhora em {melhora_meses} de {len(meses_com_delta)} mês(es) monitorado(s). "
+                        "Curva de aprendizado consistente, não um pico isolado."
+                    )
+                else:
+                    texto_iap += "."
+                avancos.append(texto_iap)
+            else:
+                atencoes.append(
+                    f"IAP (Acurácia por Valor) em {_fmt_pct(iap_atual)}, variação de {_fmt_pct(delta_periodo)} desde "
+                    f"{_nome_mes(primeiro['mes'])} — sem curva de aprendizado consistente ainda ({piora_meses} de "
+                    f"{len(meses_com_delta)} mês(es) com queda)."
+                )
         else:
-            atencoes.append(f"Acurácia geral do inventário em {_fmt_pct(kpis_inv['acuracia_geral_pct'])}, abaixo da meta de 95%.")
+            label_iap, _ = _status_maior_melhor(iap_atual, *_LIMIARES["acuracia"])
+            (avancos if label_iap == "Em avanço" else atencoes).append(
+                f"IAP (Acurácia por Valor) em {_fmt_pct(iap_atual)} neste mês (ainda sem histórico anterior suficiente pra falar de tendência)."
+            )
+
+    if comp.get("item_a_item_pct") is not None:
+        atencoes.append(
+            f"Item a item em {_fmt_pct(comp['item_a_item_pct'])} funciona como termômetro de disciplina de apontamento — "
+            "não é mais o indicador oficial de acurácia (ver Acurácia Ponderada)."
+        )
 
     gap = comp.get("gap_item_vs_iap_pp")
     if gap is not None and abs(gap) >= 3:
         atencoes.append(
             f"A leitura ponderada por valor (IAP) muda em {_fmt_pct(abs(gap))} a foto do item-a-item — "
-            "sinal de que o risco financeiro está concentrado em poucos SKUs."
+            "sinal de que o risco financeiro está concentrado em poucos SKUs, não de que o inventário piorou."
         )
 
-    if passivos["valor"]:
+    # Baixas por Pacote / Baixas Operacionais (22/08/2026, pedido do usuário:
+    # "Troque o indicador de Mapeamento de passivos por Baixas por pacote
+    # (Baixas operacionais)") - fonte é o dashboard externo (mesmo dado do
+    # KPI do Resumo Executivo e do slide "Baixas Operacionais (Controle
+    # Paralelo)"), não o Mapeamento de Passivos nativo (que continua existindo
+    # à parte, em sua própria seção/scorecard).
+    if baixas_pacote.get("prejuizo_total"):
+        atencoes.append(
+            f"{_fmt_moeda(baixas_pacote['prejuizo_total'])} em baixas por pacote no período "
+            f"({_fmt_pct(baixas_pacote.get('pct_concentrado'))} concentrado em {baixas_pacote.get('motivo_concentrado', '—')})."
+        )
+    elif passivos["valor"]:
         if passivos["valor"] > 0:
             atencoes.append(f"{_fmt_moeda(passivos['valor'])} em passivos aprovados mapeados no período ({_fmt_num(passivos['quantidade'])} baixas).")
         else:
@@ -1304,13 +1444,30 @@ def _montar_scorecard(d: dict):
         "Investigar SKUs recorrentes." if kpis_inv["total_divergentes"] else "Manter cadência de fechamento atual.",
     )
 
-    label_passivos = "Atenção" if passivos["valor"] else "Em avanço"
-    cor_passivos = COR_ATENCAO if passivos["valor"] else COR_SUCESSO
-    linha_passivos = _linha_scorecard(
-        "Mapeamento de Passivos", label_passivos, cor_passivos,
-        f"{_fmt_moeda(passivos['valor'])} em passivos aprovados mapeados no período.",
-        "Classificar pendências como ajuste de processo ou perda real." if passivos["valor"] else "Sem pendência — manter monitoramento.",
-    )
+    # Baixas Operacionais (Pacote) no lugar de Mapeamento de Passivos (22/08/2026,
+    # pedido do usuário: "troque o indicador de Mapeamento de passivos por
+    # Baixas por pacote (Baixas operacionais)... atualize todos os Scorecards" -
+    # mesma fonte do KPI e do slide dedicado "Baixas Operacionais (Controle
+    # Paralelo)"). Cai pro Mapeamento de Passivos nativo se o dashboard externo
+    # ainda não foi enviado, pra não quebrar o scorecard.
+    baixas_pacote = (d.get("baixas_operacionais_externo") or {}).get("resumo") or {}
+    if baixas_pacote.get("prejuizo_total") is not None:
+        label_baixas = "Atenção" if baixas_pacote["prejuizo_total"] else "Em avanço"
+        cor_baixas = COR_ATENCAO if baixas_pacote["prejuizo_total"] else COR_SUCESSO
+        linha_passivos = _linha_scorecard(
+            "Baixas Operacionais (Pacote)", label_baixas, cor_baixas,
+            f"{_fmt_moeda(baixas_pacote['prejuizo_total'])} no período — "
+            f"{_fmt_pct(baixas_pacote.get('pct_concentrado'))} concentrado em {baixas_pacote.get('motivo_concentrado', '—')}.",
+            "Investigar causa raiz da concentração antes do próximo fechamento." if baixas_pacote["prejuizo_total"] else "Sem baixa relevante — manter monitoramento.",
+        )
+    else:
+        label_passivos = "Atenção" if passivos["valor"] else "Em avanço"
+        cor_passivos = COR_ATENCAO if passivos["valor"] else COR_SUCESSO
+        linha_passivos = _linha_scorecard(
+            "Mapeamento de Passivos", label_passivos, cor_passivos,
+            f"{_fmt_moeda(passivos['valor'])} em passivos aprovados mapeados no período.",
+            "Classificar pendências como ajuste de processo ou perda real." if passivos["valor"] else "Sem pendência — manter monitoramento.",
+        )
 
     label_shelf = "Atenção" if shelf["total_lotes_em_risco"] else "Em avanço"
     cor_shelf = COR_ATENCAO if shelf["total_lotes_em_risco"] else COR_SUCESSO
@@ -1325,10 +1482,31 @@ def _montar_scorecard(d: dict):
     # a transferência com o estoque de lote ATUAL, não com uma leitura de disponibilidade
     # tirada no momento exato da transferência - não é um número fechado o bastante pra virar
     # status de scorecard. Essa linha agora reflete a reconciliação diária de verdade.
-    label_mov, cor_mov = _status_maior_melhor(movimentados.get("pct_acuracia"), *_LIMIARES["acuracia"])
+    # "Em avanço" por tendência consistente desde o primeiro mês monitorado
+    # (22/08/2026, pedido do usuário: "atualize... e destaque avanços
+    # alcançados" - mesma regra de _analise_geral: sem essa checagem, o
+    # limiar absoluto (_LIMIARES["acuracia"]) classificava Movimentados como
+    # "Atenção" mesmo com alta real e ininterrupta em todos os meses
+    # monitorados, o que contradizia o texto de Avanços do próprio Resumo
+    # Executivo dizendo que a frente avançou).
+    evol_mov_sc = d["evolucao_movimentados"]
+    tendencia_positiva_mov = (
+        len(evol_mov_sc) >= 2
+        and evol_mov_sc[0].get("pct_acuracia") is not None
+        and movimentados.get("pct_acuracia") is not None
+        and movimentados["pct_acuracia"] > evol_mov_sc[0]["pct_acuracia"]
+    )
+    if tendencia_positiva_mov:
+        label_mov, cor_mov = "Em avanço", COR_SUCESSO
+        leitura_mov = (
+            f"Acurácia da reconciliação diária em {_fmt_pct(movimentados.get('pct_acuracia'))} — alta consistente desde "
+            f"{_nome_mes(evol_mov_sc[0]['mes'])} (+{_fmt_pct(movimentados['pct_acuracia'] - evol_mov_sc[0]['pct_acuracia'])})."
+        )
+    else:
+        label_mov, cor_mov = _status_maior_melhor(movimentados.get("pct_acuracia"), *_LIMIARES["acuracia"])
+        leitura_mov = f"Acurácia da reconciliação diária em {_fmt_pct(movimentados.get('pct_acuracia'))} sobre {_fmt_num(movimentados.get('itens_analisados'))} item(ns) analisado(s) no mês."
     linha_movimentados = _linha_scorecard(
-        "Controle de Movimentados", label_mov, cor_mov,
-        f"Acurácia da reconciliação diária em {_fmt_pct(movimentados.get('pct_acuracia'))} sobre {_fmt_num(movimentados.get('itens_analisados'))} item(ns) analisado(s) no mês.",
+        "Controle de Movimentados", label_mov, cor_mov, leitura_mov,
         "Investigar itens com divergência não resolvida." if movimentados.get("itens_com_divergencia") else "Manter cadência de conferência diária.",
     )
 
@@ -1391,7 +1569,7 @@ def _slide_abertura_secao(prs: Presentation, mes_label: str, pagina: int, numero
     propósito)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, AZUL_INSTITUCIONAL)
-    _texto(slide, MARGEM_IN, 0.32, 4.0, 0.3, f"SEÇÃO {numero_secao} DE 7", tamanho=11, negrito=True, cor=AZUL_CLARO)
+    _texto(slide, MARGEM_IN, 0.32, 4.0, 0.3, f"SEÇÃO {numero_secao} DE 5", tamanho=11, negrito=True, cor=AZUL_CLARO)
     _texto(slide, LARGURA_IN - 2.9, 0.32, 2.4, 0.3, mes_label.upper(), tamanho=11, negrito=True,
            cor=AZUL_CLARO, alinhamento=PP_ALIGN.RIGHT)
     _texto(slide, MARGEM_IN, 1.15, LARGURA_IN - 2 * MARGEM_IN, 1.0, titulo_secao, tamanho=34, negrito=True,
@@ -1420,13 +1598,65 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
     passivos = d["resumo_passivos"]["passivos"]
     shelf = d["resumo_shelf_life"]
     movimentados = d["resumo_movimentados"]
-    label_acuracia, cor_acuracia = _status_maior_melhor(kpis_inv["acuracia_geral_pct"], *_LIMIARES["acuracia"])
+    comp = d["comparativo_acuracia"]
+    evol_pond = d["evolucao_ponderada"]
+    farol_shelf = d.get("farol_shelf_externo") or {}
+    baixas_pacote = (d.get("baixas_operacionais_externo") or {}).get("resumo") or {}
     label_mov, cor_mov = _status_maior_melhor(movimentados.get("pct_acuracia"), *_LIMIARES["acuracia"])
 
+    # KPI 1: IAP (Acurácia Ponderada) no lugar do item-a-item (22/08/2026,
+    # pedido do usuário: "substitua a lógica de inventário Item a Item e
+    # trocar pela análise IAP" - SÓ neste slide, ver decisão registrada na
+    # conversa; Painel de Inventário e Scorecard continuam com item-a-item).
+    label_iap, cor_iap = _status_maior_melhor(comp.get("iap_pct"), *_LIMIARES["acuracia"])
+    variacao_iap_mes = evol_pond[-1].get("variacao_iap_pp") if evol_pond else None
+    if variacao_iap_mes is not None:
+        contexto_iap = f"{'▲' if variacao_iap_mes > 0 else '▼' if variacao_iap_mes < 0 else '▬'} {_fmt_pct(abs(variacao_iap_mes))} vs. mês anterior"
+        cor_contexto_iap = COR_SUCESSO if variacao_iap_mes > 0 else (COR_ERRO if variacao_iap_mes < 0 else CINZA_TEXTO)
+    else:
+        contexto_iap, cor_contexto_iap = label_iap, cor_iap
+
+    # KPI 2: Baixas por Pacote (Baixas Operacionais) no lugar de Passivos
+    # Mapeados (22/08/2026, pedido do usuário) - fonte é o dashboard externo
+    # "Baixas Operacionais (Controle Paralelo)" (mesmo dado do KPI e do slide
+    # dedicado), não o Mapeamento de Passivos nativo (que continua existindo
+    # à parte, em sua própria seção/scorecard, com o valor de `passivos`).
+    if baixas_pacote.get("prejuizo_total") is not None:
+        kpi_baixas = {
+            "valor": _fmt_moeda(baixas_pacote["prejuizo_total"]), "rotulo": "Baixas por Pacote (Baixas Operacionais)",
+            "cor": COR_ERRO, "contexto": f"{_fmt_pct(baixas_pacote.get('pct_concentrado'))} em {baixas_pacote.get('motivo_concentrado', '—')}",
+        }
+    else:
+        # dashboard externo não enviado ainda - cai pro Mapeamento de Passivos nativo, sem quebrar o slide.
+        kpi_baixas = {
+            "valor": _fmt_moeda(passivos["valor"]), "rotulo": "Passivos Mapeados",
+            "cor": AZUL_INSTITUCIONAL, "contexto": f"{_fmt_num(passivos['quantidade'])} baixas aprovadas",
+        }
+
+    # KPI 3: Valor em Risco de Validade a partir do Farol de Shelf externo
+    # (22/08/2026, pedido do usuário: "traga também o valor em risco baseado
+    # no relatório de Farol de Shelf") - antes vinha de resumo_shelf_life
+    # (cálculo nativo do Atlas); o Farol de Shelf externo é o retrato mais
+    # recente que a equipe já mantém em paralelo (mesmo valor do slide
+    # dedicado "Farol de Shelf-Life").
+    if farol_shelf.get("perda_potencial_total") is not None:
+        qtd_farol = farol_shelf.get("qtd_lotes") or {}
+        total_lotes_farol = sum(v for v in qtd_farol.values() if isinstance(v, int))
+        kpi_risco_validade = {
+            "valor": _fmt_moeda(farol_shelf["perda_potencial_total"]), "rotulo": "Valor em Risco de Validade (Farol de Shelf)",
+            "cor": COR_ATENCAO, "contexto": f"{_fmt_num(total_lotes_farol)} lotes · {_fmt_num(qtd_farol.get('vencidos'))} já vencidos",
+        }
+    else:
+        # dashboard externo não enviado ainda - cai pro cálculo nativo, sem quebrar o slide.
+        kpi_risco_validade = {
+            "valor": _fmt_moeda(shelf["valor_total"]), "rotulo": "Valor em Risco de Validade",
+            "cor": AZUL_INSTITUCIONAL, "contexto": f"{_fmt_num(shelf['total_lotes_em_risco'])} lotes",
+        }
+
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_pct(kpis_inv["acuracia_geral_pct"]), "rotulo": "Acurácia do Inventário", "cor": AZUL_INSTITUCIONAL, "contexto": label_acuracia, "cor_contexto": cor_acuracia},
-        {"valor": _fmt_moeda(passivos["valor"]), "rotulo": "Passivos Mapeados", "cor": AZUL_INSTITUCIONAL, "contexto": f"{_fmt_num(passivos['quantidade'])} baixas aprovadas"},
-        {"valor": _fmt_moeda(shelf["valor_total"]), "rotulo": "Valor em Risco de Validade", "cor": AZUL_INSTITUCIONAL, "contexto": f"{_fmt_num(shelf['total_lotes_em_risco'])} lotes"},
+        {"valor": _fmt_pct(comp.get("iap_pct")), "rotulo": "IAP — Acurácia por Valor", "cor": cor_iap, "contexto": contexto_iap, "cor_contexto": cor_contexto_iap},
+        kpi_baixas,
+        kpi_risco_validade,
         {"valor": _fmt_pct(movimentados.get("pct_acuracia")), "rotulo": "Controle de Movimentados", "cor": AZUL_INSTITUCIONAL, "contexto": label_mov, "cor_contexto": cor_mov},
     ], altura=1.30)
 
@@ -1452,7 +1682,9 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
             partes_recorte.append(("     ", CINZA_TEXTO, False))
         sinal = "+" if recorte["variacao_passivos_valor"] > 0 else ""
         cor_passivo_var = COR_ERRO if recorte["variacao_passivos_valor"] > 0 else COR_SUCESSO
-        partes_recorte.append(("Passivos aprovados: ", CINZA_TEXTO, False))
+        # "aprovados (fechamento nativo)" pra não confundir com o KPI "Baixas por Pacote"
+        # acima, que é outra fonte (dashboard externo) - 22/08/2026.
+        partes_recorte.append(("Passivos aprovados (fechamento nativo): ", CINZA_TEXTO, False))
         partes_recorte.append((f"{sinal}{_fmt_moeda(recorte['variacao_passivos_valor'])} vs. mês anterior", cor_passivo_var, True))
 
     if partes_recorte:
@@ -1893,6 +2125,20 @@ def _slide_passivos_evolucao(prs: Presentation, mes_label: str, pagina: int, d: 
             "saldo físico de todo o estoque contado naquele fechamento."
         )
         _texto(slide, MARGEM_IN, 4.80, largura_esquerda, 0.85, texto_distincao, tamanho=10.5, cor=CINZA_TEXTO)
+
+        # % de evolução/involução MoM do passivo aprovado (22/08/2026, pedido do
+        # usuário: rótulo de "percentual de evolução ou involução" no gráfico de
+        # baixas mês a mês - o valor R$ de cada mês já vem rotulado por padrão em
+        # _grafico_categoria_multi; isso complementa com o delta percentual, que
+        # a série R$ por si só não mostra).
+        if len(evolucao) >= 2 and evolucao[-2]["valor"]:
+            variacao_pct = round((ultimo["valor"] - evolucao[-2]["valor"]) / evolucao[-2]["valor"] * 100, 1)
+            seta = "▲" if variacao_pct > 0 else ("▼" if variacao_pct < 0 else "▬")
+            cor_variacao = COR_ERRO if variacao_pct > 0 else (COR_SUCESSO if variacao_pct < 0 else CINZA_TEXTO)
+            _texto(slide, MARGEM_IN, 5.72, largura_esquerda, 0.3,
+                   f"{seta} {abs(variacao_pct):.1f}% de {'evolução' if variacao_pct > 0 else 'involução' if variacao_pct < 0 else 'variação'} "
+                   f"do passivo aprovado vs. {_nome_mes(evolucao[-2]['mes'])}.",
+                   tamanho=10.5, negrito=True, cor=cor_variacao)
     else:
         _caixa_leitura(slide, MARGEM_IN, 1.65, largura_esquerda, 3.9, "Evolução",
                        "Sem histórico mensal suficiente de passivos/fechamento de inventário ainda.")
@@ -2348,32 +2594,56 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
          "cor": COR_ERRO if dado["ops_criticas"] else COR_SUCESSO},
     ], altura=1.25)
 
+    # Tendência Financeira mês a mês (22/08/2026, pedido do usuário: "adicione
+    # rótulo de dados no indicador de Dispersão de Ficha Técnica") - Perda,
+    # Economia e Impacto Líquido, últimos 6 meses até o mês do relatório
+    # (extrator agrega isso com exatidão a partir do JSON embutido - ver
+    # docstring de extrair_dispersao_ficha_tecnica). Rótulos de valor já
+    # vêm de fábrica em _grafico_categoria_multi (has_data_labels=True).
+    evolucao = (dado.get("evolucao_mensal") or [])[-6:]
+    if len(evolucao) >= 2:
+        categorias_evol = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in evolucao]
+        _texto(slide, MARGEM_IN, 2.90, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+               "TENDÊNCIA FINANCEIRA — PERDA × ECONOMIA × IMPACTO LÍQUIDO (R$/MÊS)",
+               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria_multi(
+            slide, MARGEM_IN, 3.18, LARGURA_IN - 2 * MARGEM_IN, 1.42, categorias_evol,
+            [("Perda", [i["perda"] for i in evolucao], COR_ERRO),
+             ("Economia", [i["economia"] for i in evolucao], COR_SUCESSO),
+             ("Impacto Líquido", [i["impacto_liquido"] for i in evolucao], AZUL_INSTITUCIONAL)],
+            formato_numero='#,##0',
+        )
+        y_secao_seguinte = 4.78
+    else:
+        y_secao_seguinte = 3.05
+
     top_perda = dado.get("top_materiais_perda") or []
+    altura_secao = 6.35 - y_secao_seguinte
     if top_perda:
-        amostra = top_perda[:8]
+        amostra = top_perda[:6]
         categorias = [t["descricao"][:26] for t in reversed(amostra)]
         valores = [t["impacto"] for t in reversed(amostra)]
-        _texto(slide, MARGEM_IN, 3.05, 6.3, 0.26, "MATERIAIS COM MAIOR PERDA NO MÊS (R$)", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, MARGEM_IN, 3.35, 6.3, 2.55, categorias, "Perda", valores,
+        _texto(slide, MARGEM_IN, y_secao_seguinte, 6.3, 0.24, "MATERIAIS COM MAIOR PERDA NO MÊS (R$)", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, MARGEM_IN, y_secao_seguinte + 0.28, 6.3, altura_secao - 0.28, categorias, "Perda", valores,
                             tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='#,##0')
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, 6.3, 2.55, "Materiais com maior perda",
+        _caixa_leitura(slide, MARGEM_IN, y_secao_seguinte, 6.3, altura_secao, "Materiais com maior perda",
                         "Nenhum material com perda líquida neste mês.")
 
     x_direita = MARGEM_IN + 6.3 + 0.35
     largura_direita = LARGURA_IN - MARGEM_IN - x_direita
-    _texto(slide, x_direita, 3.05, largura_direita, 0.26, "MATERIAIS COM MAIOR ECONOMIA", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _texto(slide, x_direita, y_secao_seguinte, largura_direita, 0.24, "MATERIAIS COM MAIOR ECONOMIA", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
     top_economia = dado.get("top_materiais_economia") or []
     if top_economia:
         linhas = [[te["descricao"][:24], _fmt_num(te["ops"]), _fmt_moeda(-te["impacto"])] for te in top_economia[:6]]
-        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Material", "OPs", "Economia"], linhas,
-                larguras_relativas=[2.4, 0.8, 1.4], tamanho_fonte=10.5)
+        _tabela(slide, x_direita, y_secao_seguinte + 0.28, largura_direita, altura_secao - 0.28, ["Material", "OPs", "Economia"], linhas,
+                larguras_relativas=[2.4, 0.8, 1.4], tamanho_fonte=10)
     else:
-        _caixa_leitura(slide, x_direita, 3.35, largura_direita, 2.25, "Economia",
+        _caixa_leitura(slide, x_direita, y_secao_seguinte + 0.28, largura_direita, altura_secao - 0.28, "Economia",
                         "Sem economia líquida registrada neste mês.")
 
     _texto(
-        slide, MARGEM_IN, 6.15, LARGURA_IN - 2 * MARGEM_IN, 0.5,
+        slide, MARGEM_IN, 6.45, LARGURA_IN - 2 * MARGEM_IN, 0.5,
         f"Fonte: dashboard Dispersão de Ficha Técnica (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'} — "
         f"Materiais crônicos (≥ {dado.get('limiar_freq_ops', 5)} OPs): {_fmt_num(dado.get('materiais_cronicos'))} · "
         f"Concentração Top 20: {_fmt_pct(dado.get('concentracao_top20_pct'))} do impacto absoluto.",
@@ -2382,12 +2652,39 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
     return slide
 
 
+def _bucket_farol(buckets: list, *rotulos: str):
+    """Acha o bucket do Farol de Shelf pelo texto do título da tabela de
+    origem (ex.: "Top 10 — Urgente (0-30 dias)") - mais robusto que confiar
+    na ORDEM em que dashboards_externos_extrator.extrair_farol_shelf varreu
+    as tabelas do HTML."""
+    for b in buckets:
+        titulo = (b.get("titulo") or "").lower()
+        if any(r.lower() in titulo for r in rotulos):
+            return b
+    return None
+
+
 def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Farol de Shelf-Life (20/08/2026) - dashboard é uma FOTO do estoque no
-    momento da exportação (sem dimensão de mês: lotes com saldo agora e
-    validade em até 90 dias), não um recorte do mês deste relatório - entra
-    como retrato datado, rotulado com a data real da exportação (decisão do
-    usuário), não filtrado pelo mês (ver dashboards_externos_extrator.extrair_farol_shelf)."""
+    """Farol de Shelf-Life (20/08/2026, reestruturado em 22/08/2026 - pedido
+    do usuário: "mudar a estrutura pra caber tudo no indicador... cards com
+    a quantidade de lotes em aberto e uma representação do farol em grana:
+    0-30 dias e valor total em aberto, 31-60 e valor total, 61-90") - dashboard
+    é uma FOTO do estoque no momento da exportação (sem dimensão de mês:
+    lotes com saldo agora e validade em até 90 dias), não um recorte do mês
+    deste relatório - entra como retrato datado, rotulado com a data real da
+    exportação (decisão do usuário), não filtrado pelo mês (ver
+    dashboards_externos_extrator.extrair_farol_shelf).
+
+    NOTA (22/08/2026): o pedido original também incluía duas visões lado a
+    lado ("Risco de Perda por Almoxarifado" e "Custo Total por Grupo e
+    Status") vistas na simulação HTML. Essas duas são gráficos SVG puros no
+    export (sem tabela nem JSON embutido por trás, ao contrário da Dispersão
+    de Ficha Técnica) - extrair_farol_shelf descarta todo <svg> antes de ler
+    (_soup_sem_svg), então os números exatos por almoxarifado/grupo não
+    chegam até aqui hoje. Não foram adicionadas nesta rodada pra não inventar
+    valor a partir de geometria de gráfico em código de produção - ficam
+    pendentes de um extrator dedicado (ou de um export com os dados também
+    em tabela/JSON, como o de Dispersão de Ficha Técnica)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Farol de Shelf-Life", mes_label, pagina,
@@ -2398,35 +2695,63 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
         return slide
 
     qtd = dado.get("qtd_lotes") or {}
+    buckets = dado.get("buckets") or []
+    bucket_urgente = _bucket_farol(buckets, "urgente")
+    bucket_perigo = _bucket_farol(buckets, "perigo")
+    bucket_atencao = _bucket_farol(buckets, "atenção", "atencao")
+
+    def _valor_bucket(bucket):
+        return bucket["total"]["custo"] if bucket and bucket.get("total") else None
+
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_moeda(dado.get("perda_potencial_total")), "rotulo": "Perda Potencial Total", "cor": COR_ERRO},
-        {"valor": _fmt_num(qtd.get("vencidos")), "rotulo": "Lotes Já Vencidos", "cor": COR_ERRO},
-        {"valor": _fmt_num(qtd.get("0_30")), "rotulo": "Lotes 0-30 dias (Urgente)", "cor": COR_ATENCAO},
-        {"valor": _fmt_num((qtd.get("31_60") or 0) + (qtd.get("61_90") or 0)), "rotulo": "Lotes 31-90 dias (Perigo/Atenção)"},
+        {"valor": _fmt_num(qtd.get("vencidos")), "rotulo": "Lotes Já Vencidos",
+         "cor": COR_FAROL_VENCIDO, "contexto": _fmt_moeda(dado.get("perda_ja_vencida")), "cor_contexto": COR_FAROL_VENCIDO},
+        {"valor": _fmt_num(qtd.get("0_30")), "rotulo": "0-30 Dias (Urgente)",
+         "cor": COR_FAROL_URGENTE, "contexto": _fmt_moeda(_valor_bucket(bucket_urgente)), "cor_contexto": COR_FAROL_URGENTE},
+        {"valor": _fmt_num(qtd.get("31_60")), "rotulo": "31-60 Dias (Perigo)",
+         "cor": COR_FAROL_PERIGO, "contexto": _fmt_moeda(_valor_bucket(bucket_perigo)), "cor_contexto": COR_FAROL_PERIGO},
+        {"valor": _fmt_num(qtd.get("61_90")), "rotulo": "61-90 Dias (Atenção)",
+         "cor": COR_FAROL_ATENCAO, "contexto": _fmt_moeda(_valor_bucket(bucket_atencao)), "cor_contexto": COR_FAROL_ATENCAO},
     ], altura=1.25)
 
-    buckets = dado.get("buckets") or []
-    # Mostra o bucket mais urgente com itens (Urgente > Perigo > Atenção) como tabela principal.
-    bucket_principal = next((b for b in buckets if b["itens"]), None)
-    if bucket_principal:
-        linhas = [[it["descricao"][:34], _fmt_moeda(it["custo"]), it["pct"]] for it in bucket_principal["itens"][:8]]
-        _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, (bucket_principal["titulo"] or "").upper(),
-               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _tabela(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0, ["Descrição", "Custo", "% do bucket"], linhas,
-                larguras_relativas=[3.0, 1.2, 1.0], tamanho_fonte=11)
-        if bucket_principal.get("total"):
-            _texto(slide, MARGEM_IN, 6.45, LARGURA_IN - 2 * MARGEM_IN, 0.3,
-                   f"Total do bucket: {bucket_principal['total']['descricao']} — {_fmt_moeda(bucket_principal['total']['custo'])}",
-                   tamanho=10.5, negrito=True, cor=CINZA_TEXTO)
-    else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.0, "Lotes em risco",
+    # As 3 listas Top 10 (uma por faixa), lado a lado - "abaixo as tabelas
+    # como estão" (pedido do usuário) - só encolhidas de 8 pra 5 linhas cada
+    # pra caberem as 3 juntas na largura da página, dado que os cards acima
+    # tomaram o espaço que antes ia pra uma tabela única de 8 linhas.
+    colunas = [
+        ("0-30 DIAS — URGENTE", bucket_urgente, COR_FAROL_URGENTE),
+        ("31-60 DIAS — PERIGO", bucket_perigo, COR_FAROL_PERIGO),
+        ("61-90 DIAS — ATENÇÃO", bucket_atencao, COR_FAROL_ATENCAO),
+    ]
+    gap = 0.3
+    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 2 * gap) / 3
+    y_titulo, y_tabela, altura_tabela = 3.05, 3.35, 2.85
+    algum_bucket_com_itens = False
+    for i, (titulo, bucket, cor) in enumerate(colunas):
+        x = MARGEM_IN + i * (largura_col + gap)
+        _texto(slide, x, y_titulo, largura_col, 0.24, titulo, tamanho=10, negrito=True, cor=cor)
+        if bucket and bucket.get("itens"):
+            algum_bucket_com_itens = True
+            linhas = [[it["descricao"][:26], _fmt_moeda(it["custo"])] for it in bucket["itens"][:5]]
+            _tabela(slide, x, y_tabela, largura_col, altura_tabela, ["Descrição", "Custo"], linhas,
+                    larguras_relativas=[2.2, 1.0], tamanho_fonte=9)
+            if bucket.get("total"):
+                _texto(slide, x, y_tabela + altura_tabela + 0.06, largura_col, 0.22,
+                       f"Total: {_fmt_moeda(bucket['total']['custo'])}", tamanho=9, negrito=True, cor=CINZA_TEXTO)
+        else:
+            _caixa_leitura(slide, x, y_tabela, largura_col, altura_tabela, "Sem itens",
+                            "Nenhum lote nesta faixa.", tamanho_texto=10)
+    if not algum_bucket_com_itens:
+        _caixa_leitura(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela, "Lotes em risco",
                         "Nenhum lote em risco de validade neste retrato.")
 
     exportado = dado.get("exportado_em") or "—"
     _texto(
-        slide, MARGEM_IN, 6.85, LARGURA_IN - 2 * MARGEM_IN, 0.35,
-        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}.",
-        tamanho=10, cor=CINZA_TEXTO, italico=True,
+        slide, MARGEM_IN, 6.75, LARGURA_IN - 2 * MARGEM_IN, 0.45,
+        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}. "
+        "Risco de Perda por Almoxarifado e Custo Total por Grupo e Status pendentes de extração dedicada "
+        "(hoje só existem como gráfico no export, sem tabela/JSON por trás).",
+        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
     )
     return slide
 
@@ -2436,7 +2761,18 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
     (ex.: jan-ago/26 no arquivo de exemplo), não um mês calendário isolado -
     entra como retrato datado do período real do arquivo (decisão do usuário),
     com os KPIs de metodologia de recuperação financeira e os 2 rankings Top 10
-    reais (ver dashboards_externos_extrator.extrair_recuperacao_shelf)."""
+    reais (ver dashboards_externos_extrator.extrair_recuperacao_shelf).
+
+    NOTA (22/08/2026): a simulação HTML aprovada tinha um gráfico "Evolução
+    Mensal" com destaque a partir de abril (mês em que o controle passou a
+    atuar sobre a recuperação efetiva) e rótulo de valor em cada série/mês.
+    Não foi trazido pra este slide pela mesma razão do gráfico de Baixas
+    Operacionais externo: o export deste dashboard não tem tabela nem JSON
+    por trás do gráfico mensal (só SVG, descartado por _soup_sem_svg) - os
+    valores mês a mês só existiam na simulação por reconstrução geométrica
+    aproximada, não confiável pra produção. Precisa de um extrator dedicado
+    (ou de um export com o dado também em tabela/JSON) antes de entrar aqui
+    com números reais."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Recuperação de Shelf", mes_label, pagina,
@@ -2485,7 +2821,21 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     Mapeamento de Passivos). Cobre uma janela móvel (ex.: últimos ~60 dias no
     arquivo de exemplo), não um mês calendário isolado - entra como retrato
     datado (decisão do usuário), sem substituir os slides nativos
-    (ver dashboards_externos_extrator.extrair_baixas_operacionais_externo)."""
+    (ver dashboards_externos_extrator.extrair_baixas_operacionais_externo).
+
+    NOTA (22/08/2026): a simulação HTML aprovada tinha um gráfico "Total de
+    Baixas por Mês" com rótulo de valor total e de % de evolução/involução
+    MoM. Esse gráfico NÃO foi trazido pra este slide - o export HTML deste
+    dashboard não tem tabela nem JSON embutido por trás dele (só o SVG do
+    Recharts, que extrair_baixas_operacionais_externo descarta de propósito
+    via _soup_sem_svg antes de ler), então os valores mês a mês só existiam
+    na simulação por reconstrução geométrica do SVG (aproximada, sem garantia
+    de exatidão) - não confiável pra entrar em código de produção. A MESMA
+    curva de Baixas, com dado 100% exato porque vem direto do banco (não de
+    HTML raspado), já existe no slide "Passivos — Evolução e Concentração"
+    (_slide_passivos_evolucao, usa d["evolucao_passivos_fluxo"]) e já mostra
+    rótulo de valor (todo gráfico de _grafico_categoria_multi tem
+    has_data_labels=True por padrão)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Baixas Operacionais (Controle Paralelo)", mes_label, pagina,
@@ -2948,12 +3298,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     lendo os dados diretamente das funções de negócio do Atlas (sem HTTP,
     sem navegador) e aplicando a identidade visual da Mágio Chocolates.
 
-    Estrutura em 7 seções temáticas, cada uma com capa própria (18/08/2026,
+    Estrutura em 5 seções temáticas, cada uma com capa própria (18/08/2026,
     pedido do usuário: "traga uma visão detalhada modulando os grupos de
     relatório" — respostas às perguntas de esclarecimento: "Reordenar + capa
-    de seção"). A contagem de página é dinâmica (closure `_pag`) porque o
-    número de slides varia com a quantidade de indicadores dinâmicos
-    cadastrados em Outros Dashboards (ver dados["dashboards_extras"])."""
+    de seção"; reduzida de 7 para 5 seções em 22/08/2026, pedido do usuário:
+    FEFO e Testes Industriais deixaram de ter seção/capa própria e passaram
+    a ser slides de detalhe dentro de "Mapeamento de Riscos e Passivos",
+    já que o conteúdo dos dois já é coberto pelo Scorecard de Mapeamento de
+    Riscos dessa seção). A contagem de página é dinâmica (closure `_pag`)
+    porque o número de slides varia com a quantidade de indicadores
+    dinâmicos cadastrados em Outros Dashboards (ver
+    dados["dashboards_extras"])."""
     dados = _coletar_dados_mbr(db, usuario, mes)
     mes_label = _nome_mes(mes)
 
@@ -2985,21 +3340,23 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_controle_movimentados(prs, mes_label, _pag(), dados)
     _slide_scorecard_inventario_almoxarifado(prs, mes_label, _pag(), dados)
 
+    # FEFO e Testes Industriais entraram nesta seção em 22/08/2026 (pedido do
+    # usuário) - tinham cada um sua própria seção de 2 slides (capa +
+    # indicador), mas o conteúdo já é 100% coberto pelas linhas de mesmo nome
+    # no Scorecard de Mapeamento de Riscos abaixo; as duas capas de seção
+    # ("slides de apresentação") foram removidas e os dois slides de
+    # indicador viraram detalhe desta seção, na sequência do Scorecard.
     _secao(3, "Mapeamento de Riscos e Passivos",
-           "Passivos aprovados, validade de lotes e risco de obsolescência por giro insuficiente.",
+           "Passivos aprovados, validade de lotes, risco de obsolescência, FEFO e Testes Industriais.",
            ["Mapeamento de Passivos", "Passivos — Evolução e Concentração", "Shelf Life",
-            "Mapeamento de Risco — Obsolescência", "Scorecard de Mapeamento de Riscos"])
+            "Mapeamento de Risco — Obsolescência", "Scorecard de Mapeamento de Riscos",
+            "FEFO", "Testes Industriais"])
     _slide_mapeamento_passivos(prs, mes_label, _pag(), dados)
     _slide_passivos_evolucao(prs, mes_label, _pag(), dados)
     _slide_shelf_life(prs, mes_label, _pag(), dados)
     _slide_mapeamento_risco_obsolescencia(prs, mes_label, _pag(), dados)
     _slide_scorecard_mapeamento_riscos(prs, mes_label, _pag(), dados)
-
-    _secao(4, "FEFO", "Aderência ao First Expired, First Out nas transferências do período.", ["FEFO"])
     _slide_fefo(prs, mes_label, _pag(), dados)
-
-    _secao(5, "Testes Industriais", "Resultado dos testes industriais realizados no período.",
-           ["Testes Industriais"])
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
 
     # "Outros" (20/08/2026 + indicadores dinâmicos 18/08/2026) - os 3 dashboards
@@ -3016,7 +3373,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
         itens_outros.append(f"+ {len(nomes_extras) - limite_itens_capa} indicador(es) adicional(is)")
     else:
         itens_outros += nomes_extras
-    _secao(6, "Outros",
+    _secao(4, "Outros",
            "Controles paralelos que a equipe já mantém, integrados automaticamente a este relatório.",
            itens_outros)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
@@ -3026,7 +3383,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
-    _secao(7, "Atlas",
+    _secao(5, "Atlas",
            "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
            ["Impacto do Atlas", "Constância e Disciplina — Diário de Bordo", "Atlas + Stock Savvy",
             "Módulos Recentes do Stock Savvy", "Próximos Passos"])

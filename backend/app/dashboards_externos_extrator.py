@@ -399,9 +399,41 @@ def extrair_dispersao_ficha_tecnica(html_content: str, mes: str) -> dict:
     linhas = dados.get("linhas") or []
     lim_freq = dados.get("limFreq", 5)
 
+    # Tendência Financeira mês a mês (22/08/2026, pedido do usuário: "adicione
+    # rótulo de dados no indicador de Dispersão de Ficha Técnica" - a
+    # simulação HTML aprovada tinha um gráfico de evolução de Perda/Economia/
+    # Impacto Líquido por mês, não só a foto do mês do relatório). Diferente
+    # dos outros 3 dashboards externos (Farol/Recuperação/Baixas), este export
+    # tem o dataset completo num único JSON embutido (`linhas`, com "mes" por
+    # registro) - dá pra agregar por mês em Python com exatidão, sem precisar
+    # reconstruir nada a partir de geometria de gráfico SVG. Só até o mês do
+    # relatório (nunca vaza mês posterior, mesmo bug de 22/08/2026 corrigido
+    # em _truncar_serie_mensal no mbr_generator - aqui filtra na origem porque
+    # o "mes" de corte já é um parâmetro desta função).
+    por_mes: dict = {}
+    for r in linhas:
+        mes_r = r.get("mes")
+        if not mes_r or mes_r > mes:
+            continue
+        c = por_mes.setdefault(mes_r, {"perda": 0.0, "economia": 0.0})
+        impacto_mes = r.get("impacto") or 0
+        if impacto_mes > 0:
+            c["perda"] += impacto_mes
+        else:
+            c["economia"] += -impacto_mes
+    evolucao_mensal = [
+        {
+            "mes": mes_r,
+            "perda": round(v["perda"], 2),
+            "economia": round(v["economia"], 2),
+            "impacto_liquido": round(v["perda"] - v["economia"], 2),
+        }
+        for mes_r, v in sorted(por_mes.items())
+    ]
+
     do_mes = [r for r in linhas if r.get("mes") == mes]
     if not do_mes:
-        return {"tem_dados": False, "mes": mes}
+        return {"tem_dados": False, "mes": mes, "evolucao_mensal": evolucao_mensal}
 
     ops, ops_com_furo, ops_criticas = set(), set(), set()
     perda, economia = 0.0, 0.0
@@ -471,4 +503,5 @@ def extrair_dispersao_ficha_tecnica(html_content: str, mes: str) -> dict:
             {"material": mm["material"], "descricao": mm["desc"], "ops": mm["freq"], "impacto": round(mm["liq"], 2)}
             for mm in top_economia
         ],
+        "evolucao_mensal": evolucao_mensal,
     }
