@@ -1,4 +1,4 @@
-# atlas_fix_mbr_secao3_reorder.zip (22/08/2026)
+# atlas_fix_mbr_modelo_final_parte1.zip (22/08/2026)
 
 ## Antes de aplicar
 
@@ -9,104 +9,111 @@ sai idêntico ao anterior.
 
 ## O que é este pacote
 
-Dois pedidos seus, nesta ordem:
+Você me mandou o `MBR_Atlas_202607_Manual.pptx` — a versão que editou à mão
+em PowerPoint e confirmou como "modelo final". Comparei slide a slide com o
+que o gerador produz hoje e conversamos sobre as diferenças. Isso aqui é a
+**parte 1** do trabalho de alinhar o gerador a esse modelo final — a parte
+2 (reconstruir nativamente, com fidelidade ao print, os 4 dashboards que
+você substituiu por captura de tela real do Stock Savvy: Baixas Operacionais
+— Evolução Mensal, Farol de Shelf-Life — Risco por Almoxarifado, Recuperação
+de Shelf e Dispersão de Ficha Técnica) ainda não está pronta — é um trabalho
+bem maior (matriz de criticidade 2x2, gráficos anotados, combos de barra +
+linha) e prefiro te entregar em uma rodada própria.
 
-1. Dar destaque ao IAP/IAQ (Acurácia Ponderada) na Seção 2, por ORDEM —
-   sem reduzir o conteúdo item a item.
-2. Fundir a Seção 3 ("Mapeamento de Riscos e Passivos", nativa) com a
-   antiga Seção 4 ("Outros", dashboards externos), substituindo os
-   indicadores nativos que já têm um dashboard externo com modelo aprovado
-   cobrindo o mesmo assunto.
+Esta parte 1 cobre as duas mudanças mais simples e mais seguras de validar
+isoladamente:
+
+1. Remover os 3 tópicos que você tirou do modelo manual.
+2. Corrigir o bug de rótulo em 2 linhas que você viu no seu arquivo (slide
+   "Resumo Executivo") e encolher os cartões de KPI, como no seu modelo.
 
 Só `backend/app/mbr_generator.py` mudou. Nenhum extrator, endpoint ou
-cálculo foi alterado — é 100% reorganização de quais slides entram, em que
-ordem, dentro do relatório já existente.
+cálculo foi alterado.
 
-## 1) Seção 2 — Inventários e Movimentados: IAP/IAQ primeiro
+## 1) Removidos 3 tópicos (confirmado com você)
 
-Ordem antiga: Painel de Inventário → Painel — Detalhamento Financeiro →
-IAP → IAQ → Concentração de Risco → Detalhamento por Faixa → Controle de
-Movimentados → Scorecard.
+- **Painel de Inventário — Detalhamento Financeiro** (o slide companheiro
+  "SKUs Recorrentes e Cobertura de Conferência", depois de Painel de
+  Inventário na Seção 2).
+- **Mapeamento de Risco — Obsolescência** (slide dedicado na Seção 3).
+- **Scorecard de Mapeamento de Riscos** (capítulo-síntese que fechava a
+  Seção 3).
 
-Ordem nova: IAP → IAQ → Concentração de Risco → Detalhamento por Faixa →
-Painel de Inventário → Painel — Detalhamento Financeiro → Controle de
-Movimentados → Scorecard.
+Os cálculos por trás desses 3 tópicos continuam rodando nos bastidores só
+onde ainda são usados por outro slide (ex.: "Mapeamento de Risco —
+Obsolescência" ainda aparece como uma linha dentro do Scorecard do Mês e no
+Resumo Executivo — só o slide dedicado saiu). As 2 buscas ao banco que só
+alimentavam o slide de SKUs Recorrentes/Cobertura, e as 3 buscas extra ao
+mês anterior que só alimentavam o Scorecard de Mapeamento de Riscos, também
+saíram — sem elas, o Atlas ficaria consultando o banco à toa em toda geração
+de MBR, sem nenhum slide pra usar o resultado.
 
-Nenhum slide teve conteúdo, cálculo ou layout interno alterado — só a
-ORDEM de chamada em `montar_pptx_mbr`. Testado gerando as 8 slides na nova
-ordem com dado sintético (renderizado e inspecionado imagem a imagem):
-página segue contínua, nenhum slide quebrado.
+O relatório passa de 30 pra 27 slides de conteúdo (+ capas), Seção 2 de 8
+pra 7 slides, Seção 3 de 11 pra 9 slides — a numeração de página se ajusta
+automaticamente.
 
-## 2) Fusão da Seção 3 com a antiga Seção 4 ("Outros")
+## 2) Bug do rótulo em 2 linhas + cartões mais baixos
 
-**Removidos** (nativos, substituídos por um dashboard externo com modelo
-já aprovado cobrindo o mesmo assunto):
+**O bug que você viu**: no seu modelo manual, o slide "Resumo Executivo" tem
+2 cartões (KPI) onde o texto do rótulo (ex.: "BAIXAS POR PACOTE (BAIXAS
+OPERACIONAIS)") é longo demais pra 1 linha só, quebra em 2 linhas, e a 2ª
+linha invade visualmente o texto de contexto logo abaixo (ex.: "18,2% em
+Vencimento"). Isso é um bug de verdade no gerador, não só do seu arquivo
+manual — a posição do texto de contexto é fixa, sem levar em conta se o
+rótulo acima ocupou 1 ou 2 linhas.
 
-- Mapeamento de Passivos
-- Passivos — Evolução e Concentração
-- Shelf Life
+**Corrigido de duas formas, uma reforçando a outra:**
 
-**Aviso importante, que você já confirmou ciente antes desta mudança:** os
-3 slides removidos usavam dado 100% exato, direto do banco do Atlas
-(fechamento do mês exato; categorização de motivo própria do Atlas). Os
-dashboards externos que passam a ser a única fonte pra esses assuntos —
-Dashboard Baixas Operacionais e Farol de Shelf-Life — são retrato datado de
-uma janela diferente (~60 dias corridos no caso de Baixas Operacionais;
-momento da exportação do Stock Savvy no caso do Farol de Shelf-Life) e usam
-categorização de motivo própria da equipe, não a do Atlas. Os números dos
-dois podem não bater entre si por desenho — não vai ser bug se isso
-acontecer.
+- Encurtei os 2 rótulos que estavam causando a quebra ("Baixas por Pacote
+  (Baixas Operacionais)" → "Baixas por Pacote"; "Valor em Risco de Validade
+  (Farol de Shelf)" → "Valor em Risco de Validade") — a fonte do dado já
+  fica clara pelo resto do relatório, não precisava repetir dentro do
+  espaço apertado do cartão.
+- Mais importante: o cartão de KPI agora **garante** que o rótulo nunca
+  mais ocupa 2 linhas, seja qual for o texto — se for longo, a fonte do
+  rótulo encolhe automaticamente até caber numa linha, e só corta com "…"
+  no limite. Isso protege contra qualquer rótulo longo no futuro (ex.: nome
+  de indicador dinâmico cadastrado pela equipe), não só os 2 que você viu.
 
-**Ficam** (sem dashboard externo aprovado cobrindo o mesmo assunto):
-Mapeamento de Risco — Obsolescência, Testes Industriais, FEFO, Scorecard de
-Mapeamento de Riscos.
-
-**Entram como conteúdo novo** (já existiam na antiga Seção 4, sem
-equivalente nativo): Recuperação de Shelf + Evolução Mensal, Dispersão de
-Ficha Técnica.
-
-Ordem final da seção fundida (agora Seção 3 de 4, era Seção 3 de 5):
-
-1. Dashboard Baixas Operacionais
-2. Dashboard Baixas Operacionais — Evolução Mensal
-3. Farol de Shelf-Life
-4. Farol de Shelf-Life — Risco por Almoxarifado
-5. Mapeamento de Risco — Obsolescência
-6. Recuperação de Shelf
-7. Recuperação de Shelf — Evolução Mensal
-8. Dispersão de Ficha Técnica
-9. Testes Industriais
-10. FEFO
-11. Scorecard de Mapeamento de Riscos (capítulo-síntese, mesmo padrão do
-    Scorecard de Inventário por Almoxarifado que já fecha a Seção 2)
-12. Indicadores dinâmicos extras (se houver algum cadastrado)
-
-A seção "Outros" deixou de existir — o relatório passa de 5 seções pra 4.
-Corrigi também um efeito colateral que essa mudança causaria se eu não
-tivesse revisado com atenção: a capa de cada seção mostra "SEÇÃO X DE N" —
-esse "N" estava fixo em "5" no código; agora é "4".
-
-Também corrigi 2 textos que apareciam NO SLIDE (não só em comentário)
-chamando o Dashboard Baixas Operacionais de "controle paralelo" — não faz
-mais sentido chamar de paralelo algo que passou a ser a única fonte.
+**Cartões mais baixos**: medi os cartões do seu modelo manual (ex.: IAP em
+0,837in, Painel de Inventário em 0,739in, contra os 1,05-1,10in atuais) e
+apliquei uma altura padrão de 0,85in em todos os 13 lugares do relatório que
+usam esse cartão — bem na faixa que você usou. O número continua o elemento
+dominante do cartão (só encolheu um pouco, de 32 pra 27pt, pra caber sem
+esbarrar no rótulo abaixo).
 
 ## Testado
 
 - `python3 -m py_compile` limpo.
-- Seção 2 completa (8 slides) gerada na ordem nova com dado sintético,
-  renderizada e inspecionada imagem a imagem.
-- Seção 3 fundida completa (capa + 11 slides) gerada na ordem nova,
-  usando os MESMOS arquivos HTML reais de Farol de Shelf-Life, Recuperação
-  de Shelf e Baixas Operacionais já validados na Fase 2 (não dado
-  fabricado) — renderizada e inspecionada imagem a imagem: capa mostra
-  "SEÇÃO 3 DE 4" corretamente, títulos/legendas novos cabem sem quebrar
-  linha, paginação contínua, nenhum slide com defeito visual.
-- Mapeamento de Risco — Obsolescência, Dispersão de Ficha Técnica, Testes
-  Industriais e FEFO testados também pelo caminho "ainda não
-  enviado/sem dados" (mensagem de estado, já existente) — sem exceção.
+- Seção 1 (Resumo Executivo + Scorecard do Mês), Seção 2 completa (7
+  slides) e Seção 3 completa (capa + 9 slides) geradas com dado real (mesmos
+  arquivos HTML de Farol de Shelf-Life e Baixas Operacionais já validados na
+  Fase 2) e dado sintético onde não havia fixture real — renderizadas e
+  inspecionadas imagem a imagem, incluindo um teste isolado do cartão de KPI
+  com rótulos deliberadamente muito longos (mais longos que o bug original)
+  pra confirmar que a correção segura qualquer caso, não só os 2 rótulos
+  específicos que você viu.
+- Confirmado no Resumo Executivo com dado real: os 2 cartões que antes
+  quebravam linha agora mostram "BAIXAS POR PACOTE" e "VALOR EM RISCO DE
+  VALIDADE" numa linha só, sem invadir o contexto.
+- Nenhuma referência solta a algo que foi removido (revisei todo texto que
+  aparece NO SLIDE, não só comentário de código, procurando por menções aos
+  3 tópicos removidos — encontrei e corrigi 2: um rodapé no slide de
+  Inventário Item a Item que dizia "SKUs recorrentes e cobertura de
+  conferência: próximo slide" e uma linha no slide "Stock Savvy — Módulos
+  Recentes" que citava o Scorecard de Mapeamento de Riscos como destino).
 
-Não testado nesta rodada (dependeria de um MBR gerado de verdade, com
-banco de produção e os dashboards externos reais enviados): se a fusão
-bate exatamente com o que você tinha em mente ao ver o PDF final completo.
-Recomendo gerar um MBR novo depois do deploy e revisar a Seção 3 fundida
-com atenção antes de considerar isso fechado.
+**Não relacionado a este pacote, encontrado durante a revisão visual**: no
+slide "Recuperação de Shelf — Evolução Mensal", os rótulos de valor de 2
+barras (Abr/26 e Mai/26) ficam parcialmente atrás da barra vizinha. Esse
+slide é exatamente um dos 4 que serão refeitos na parte 2 (reconstrução
+nativa com fidelidade ao print) — não vale a pena corrigir separadamente
+agora, seria retrabalho.
+
+## Não incluído neste pacote
+
+Os 4 dashboards que você substituiu por print (Baixas Operacionais —
+Evolução Mensal, Farol de Shelf-Life — Risco por Almoxarifado, Recuperação
+de Shelf, Dispersão de Ficha Técnica) continuam exatamente como estão hoje
+no gerador — ainda não reconstruídos com a fidelidade visual do print que
+você aprovou. Isso é a parte 2, ainda por vir.

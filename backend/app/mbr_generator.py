@@ -63,7 +63,7 @@ from . import fefo as fefo_mod
 from . import dashboards_externos_extrator as dash_ext
 from .routers import (
     fechamento_router, baixas_operacionais_router, movimentados_router,
-    divergencias_router, cadastros_router,
+    cadastros_router,
 )
 
 # ---------------------------------------------------------------------------
@@ -181,9 +181,9 @@ def _mes_anterior(mes: str) -> str:
 
 
 def _ultimo_dia_mes(mes: str) -> str:
-    """"YYYY-MM" -> "YYYY-MM-DD" do último dia daquele mês (usado pra passar
-    como data-limite pra indicadores que trabalham em janela de dias, ex.:
-    cobertura_conferencia)."""
+    """"YYYY-MM" -> "YYYY-MM-DD" do último dia daquele mês (data-limite pra
+    indicadores que trabalham em janela de dias contados a partir de uma
+    data de referência)."""
     ano, m = (int(parte) for parte in mes.split("-"))
     ultimo_dia = calendar.monthrange(ano, m)[1]
     return f"{ano}-{m:02d}-{ultimo_dia:02d}"
@@ -442,23 +442,65 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
     # (o indicador) MAIOR e mais dominante em relação à moldura/rótulo -
     # fonte-base do valor sobe de 28 pra 32pt, e o rótulo encolhe um pouco
     # (10.5 -> 10pt) pra reforçar a hierarquia número > rótulo.
-    tamanho_valor = 32
+    #
+    # 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o
+    # modelo final" - cartões ainda mais baixos no modelo manual, ex.: IAP
+    # 0,837in, Painel de Inventário 0,739in, medidos diretamente no arquivo
+    # dela) e BUG que ela reportou nesse mesmo arquivo (2 cartões do Resumo
+    # Executivo com o rótulo em 2 linhas invadindo o texto de contexto
+    # abaixo, ambos com posição fixa - ver print do slide 3): cartão mais
+    # baixo de novo (ver _linha_kpis) e rótulo agora GARANTIDO numa linha só
+    # - reduz a fonte do rótulo (mesmo esquema de encolher-e-truncar já usado
+    # no valor acima) até caber, e só trunca com reticências no piso da
+    # fonte. Antes disso, a altura da caixa do rótulo era fixa (uma linha),
+    # então um rótulo comprido que quebrasse em 2 linhas invadia visualmente
+    # a caixa de contexto logo abaixo, cuja posição também é fixa - esse
+    # bug não tinha como acontecer com o valor numérico (que já encolhe/
+    # corta), só com o rótulo, que não tinha a mesma proteção.
+    #
+    # O valor também encolhe um pouco no tamanho-base (32 -> 27pt) pra caber
+    # OK no cartão mais baixo: a caixa de texto do python-pptx não corta
+    # visualmente o que não cabe nela (sem "overflow: hidden") - o que evita
+    # a invasão de verdade é a altura de LINHA real do texto vs. o espaço até
+    # o próximo elemento, não a altura declarada da caixa. Em 32pt/0,85in de
+    # cartão o valor invadia visualmente o rótulo por baixo (visto na
+    # renderização) - 27pt reabre a folga necessária.
+    tamanho_valor = 27
     texto_valor = valor_texto
     if isinstance(valor_texto, str) and valor_texto:
-        while tamanho_valor > 15 and len(valor_texto) > max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57))):
+        while tamanho_valor > 14 and len(valor_texto) > max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57))):
             tamanho_valor -= 1
         max_chars = max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57)))
         if len(valor_texto) > max_chars:
             texto_valor = valor_texto[:max(1, max_chars - 1)].rstrip() + "…"
-    _texto(slide, x + pad, y + 0.12, w - 2 * pad, 0.46, texto_valor, tamanho=tamanho_valor,
+    _texto(slide, x + pad, y + 0.08, w - 2 * pad, 0.34, texto_valor, tamanho=tamanho_valor,
            negrito=True, cor=cor_valor, fonte=FONTE_TITULO)
-    y_rotulo = y + h - (0.42 if contexto else 0.26)
-    _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.22, rotulo.upper(), tamanho=10, negrito=True, cor=CINZA_TEXTO)
+
+    # Rótulo: mesmo esquema de encolher-e-truncar do valor acima, mas com um
+    # fator de largura por caractere bem mais conservador (0.72, contra 0.57
+    # do valor) - é MAIÚSCULO e em negrito (ver rotulo.upper() abaixo), então
+    # cada caractere ocupa bem mais espaço que numa string mista qualquer; um
+    # fator subestimado permitiria mais caracteres do que cabem de verdade,
+    # e o texto "truncado" ainda quebraria em 2 linhas (visto na QA visual
+    # com o fator antigo de 0.60 - ainda não era conservador o suficiente).
+    # Garante rótulo numa linha só, então a posição fixa do contexto abaixo
+    # (calculada a partir de h) nunca mais é invadida por uma 2ª linha.
+    texto_rotulo = rotulo.upper()
+    tamanho_rotulo = 10.0
+    if texto_rotulo:
+        max_chars = max(1, int(largura_texto / ((tamanho_rotulo / 72.0) * 0.72)))
+        while tamanho_rotulo > 7.5 and len(texto_rotulo) > max_chars:
+            tamanho_rotulo -= 0.5
+            max_chars = max(1, int(largura_texto / ((tamanho_rotulo / 72.0) * 0.72)))
+        if len(texto_rotulo) > max_chars:
+            texto_rotulo = texto_rotulo[:max(1, max_chars - 1)].rstrip() + "…"
+    y_rotulo = y + h - (0.32 if contexto else 0.18)
+    _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.16, texto_rotulo, tamanho=tamanho_rotulo, negrito=True, cor=CINZA_TEXTO)
     if contexto:
-        _texto(slide, x + pad, y + h - 0.22, w - 2 * pad, 0.22, contexto, tamanho=9.5, cor=cor_contexto or CINZA_TEXTO)
+        _texto(slide, x + pad, y + h - 0.16, w - 2 * pad, 0.16, contexto, tamanho=9.5, cor=cor_contexto or CINZA_TEXTO)
 
 
-def _linha_kpis(slide, y, kpis, altura=1.10):
+def _linha_kpis(slide, y, kpis, altura=0.85):
     n = len(kpis)
     largura_total = LARGURA_IN - 2 * MARGEM_IN
     gap = 0.22
@@ -1345,123 +1387,20 @@ def _linha_scorecard_almoxarifado(item: dict) -> dict:
     }
 
 
-def _coletar_scorecard_mapeamento_riscos(db: Session, usuario: models.Usuario, mes: str, dados: dict) -> list:
-    """Scorecard de Mapeamento de Riscos (20/08/2026, pedido do usuário: "faça
-    o Scorecard por ação de mapeamento e controle [...] o indicador de
-    Dispersão de lote tem que ser apurado junto [...] bem como os testes
-    industriais e o mapeamento de FEFO que implicam em riscos para o
-    negócio [...] evoluções e involuções [...] e sugestão de próximos
-    passos"). Uma linha por ação de mapeamento/controle - reaproveita os
-    dicts já coletados em `dados` (resumo_shelf_life, mapeamento_risco_
-    obsolescencia, dispersao_ficha_tecnica_externo, testes_industriais_externo,
-    fefo_externo) e busca o MESMO indicador do mês anterior pra calcular a
-    variação, usando as mesmas funções de extração já existentes
-    (_extrair_resumo_auditoria_fefo, _extrair_dashboard_externo,
-    _extrair_dashboard_externo_por_nome) - só troca o `mes`. Shelf Life é
-    fotografia do dia (sem série mensal persistida, ver docstring de
-    shelf_life.py) - entra sem variação, avaliado só pelo nível atual."""
-    mes_ant = _mes_anterior(mes)
-    linhas = []
-
-    shelf = dados["resumo_shelf_life"]
-    risco_obs = dados["mapeamento_risco_obsolescencia"]
-    if risco_obs.get("quantidade_criticos"):
-        status_label, status_cor = "Crítico", COR_ERRO
-    elif shelf.get("total_lotes_em_risco"):
-        status_label, status_cor = "Atenção", COR_ATENCAO
-    else:
-        status_label, status_cor = "Em avanço", COR_SUCESSO
-    leitura = (
-        f"{_fmt_num(shelf.get('total_lotes_em_risco'))} lote(s) em risco ({_fmt_moeda(shelf.get('valor_total'))}) · "
-        f"{_fmt_num(risco_obs.get('quantidade_criticos'))} crítico(s) por giro zero — foto do dia, sem série mensal."
-    )
-    if risco_obs.get("quantidade_criticos"):
-        proximo_passo = "Ação comercial/promocional imediata nos itens críticos (giro zero) antes do vencimento."
-    elif shelf.get("total_lotes_em_risco"):
-        proximo_passo = "Priorizar consumo/transferência dos lotes vencidos ou a vencer em até 90 dias."
-    else:
-        proximo_passo = "Manter monitoramento — sem lote em risco relevante neste recorte."
-    linhas.append({"frente": "Shelf Life (Farol + Obsolescência)", "status_label": status_label,
-                   "status_cor": status_cor, "leitura": leitura, "proximo_passo": proximo_passo})
-
-    dispersao_atual = dados["dispersao_ficha_tecnica_externo"]
-    dispersao_ant = _extrair_dashboard_externo_por_nome(db, "Dispersão de Ficha Técnica", dash_ext.extrair_dispersao_ficha_tecnica, mes_ant)
-    linhas.append(_linha_risco_com_evolucao(
-        "Dispersão de Ficha Técnica (Produção)", dispersao_atual, dispersao_ant,
-        campo_pct="taxa_furo_pct", menor_e_melhor=True,
-        rotulo_pct="taxa de furo", tela_upload="Auditoria > Outros Dashboards",
-        texto_extra=lambda d: f"{_fmt_num(d.get('ops_criticas'))} OP(s) crítica(s), impacto líquido {_fmt_moeda(d.get('impacto_liquido'))}.",
-        passo_involucao="Investigar causa raiz nos materiais crônicos que mais furaram no mês.",
-        passo_estavel="Manter a auditoria de ficha técnica nos materiais críticos já mapeados.",
-    ))
-
-    testes_atual = dados["testes_industriais_externo"]
-    testes_ant = _extrair_dashboard_externo(db, "testes_industriais", dash_ext.extrair_testes_industriais, mes_ant)
-    linhas.append(_linha_risco_com_evolucao(
-        "Testes Industriais", testes_atual, testes_ant,
-        campo_pct="gasto_total", menor_e_melhor=True, eh_moeda=True,
-        rotulo_pct="gasto no mês", tela_upload="Auditoria > Outros Dashboards",
-        texto_extra=lambda d: f"{_fmt_num(d.get('ops'))} OP(s) testada(s), custo médio {_fmt_moeda(d.get('custo_medio_op'))} por OP.",
-        passo_involucao="Revisar consumo de matéria-prima em teste — gasto subiu além do esperado.",
-        passo_estavel="Manter o acompanhamento de custo por OP testada.",
-    ))
-
-    fefo_atual = dados["fefo_externo"]
-    fefo_ant = _extrair_resumo_auditoria_fefo(db, mes_ant)
-    linhas.append(_linha_risco_com_evolucao(
-        "FEFO (Auditoria importada)", fefo_atual, fefo_ant,
-        campo_pct="taxa_quebra_pct", menor_e_melhor=True,
-        rotulo_pct="taxa de quebra", tela_upload="tela FEFO ('Auditoria FEFO — histórico importado')",
-        texto_extra=lambda d: f"{_fmt_num(d.get('total_quebras'))} quebra(s) em {_fmt_num(d.get('total_auditaveis'))} movimento(s) auditável(is).",
-        passo_involucao="Investigar destinos com mais quebras registradas no mês (ver slide FEFO).",
-        passo_estavel="Manter a auditoria FEFO importada atualizada mês a mês.",
-    ))
-
-    return linhas
-
-
-def _linha_risco_com_evolucao(nome_frente, atual, anterior, campo_pct, menor_e_melhor, rotulo_pct,
-                               tela_upload, texto_extra, passo_involucao, passo_estavel, eh_moeda=False):
-    """Monta uma linha do Scorecard de Mapeamento de Riscos pra um indicador
-    externo (Dispersão de Ficha Técnica, Testes Industriais, FEFO) comparando
-    o mês do relatório com o anterior - trata de forma explícita os 3 estados
-    "sem dado real" que _slide_externo_indisponivel já usa nos slides
-    dedicados (nunca importado / erro de leitura / sem dado neste mês), pra
-    não fabricar uma leitura de "Estável"/"Evolução" sobre dado que não existe."""
-    fmt = _fmt_moeda if eh_moeda else _fmt_pct
-    if not atual.get("enviado"):
-        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
-                "leitura": f"Ainda não importado — sem dado real de {rotulo_pct} neste relatório.",
-                "proximo_passo": f"Importar/enviar este indicador em {tela_upload}."}
-    if atual.get("erro_extracao"):
-        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
-                "leitura": "Arquivo enviado não pôde ser lido (formato inesperado).",
-                "proximo_passo": f"Reenviar o arquivo em {tela_upload}."}
-    if not atual.get("tem_dados"):
-        return {"frente": nome_frente, "status_label": "Sem dado", "status_cor": COR_SEM_DADO,
-                "leitura": f"Nenhum dado neste mês para {rotulo_pct}.",
-                "proximo_passo": "Confirmar se o arquivo/histórico do período está atualizado."}
-
-    valor_atual = atual.get(campo_pct)
-    valor_anterior = anterior.get(campo_pct) if (anterior.get("enviado") and anterior.get("tem_dados") and not anterior.get("erro_extracao")) else None
-    delta = round(valor_atual - valor_anterior, 2) if (valor_atual is not None and valor_anterior is not None) else None
-    status_label, status_cor = _status_evolucao(delta, menor_e_melhor=menor_e_melhor)
-
-    partes = [f"{rotulo_pct.capitalize()} {fmt(valor_atual)}"]
-    if delta is not None:
-        sinal = "+" if delta >= 0 else ""
-        partes.append(f"({sinal}{fmt(delta)} vs. mês anterior)")
-    leitura = " ".join(partes) + " · " + texto_extra(atual)
-
-    if status_label == "Involução":
-        proximo_passo = passo_involucao
-    elif status_label == "Sem histórico":
-        proximo_passo = "Sem mês anterior para comparar — leitura de evolução aparece a partir do próximo mês."
-    else:
-        proximo_passo = passo_estavel
-
-    return {"frente": nome_frente, "status_label": status_label, "status_cor": status_cor,
-            "leitura": leitura, "proximo_passo": proximo_passo}
+# 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o modelo
+# final"): o Scorecard de Mapeamento de Riscos foi removido do relatório (ela
+# editou o MBR manualmente pra tirar esse tópico). As duas funções que só
+# existiam pra montar aquele slide - _coletar_scorecard_mapeamento_riscos
+# (reaproveitava resumo_shelf_life/mapeamento_risco_obsolescencia/
+# dispersao_ficha_tecnica_externo/testes_industriais_externo/fefo_externo já
+# coletados, e ainda buscava o MESMO indicador do mês anterior via
+# _extrair_dashboard_externo(_por_nome)/_extrair_resumo_auditoria_fefo só pra
+# calcular a variação) e _linha_risco_com_evolucao (montava cada linha) -
+# foram removidas junto, senão ficariam fazendo 3 consultas extra ao mês
+# anterior a cada MBR gerado sem nenhum slide pra usar o resultado. Os dicts
+# que elas reaproveitavam (resumo_shelf_life, mapeamento_risco_obsolescencia
+# etc.) continuam sendo coletados normalmente - outros slides/KPIs ainda leem
+# deles (ver comentário de decisão antes de _slide_controle_movimentados).
 
 
 # ---------------------------------------------------------------------------
@@ -1580,7 +1519,6 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "evolucao_inventario": _truncar_serie_mensal(
             fechamento_router.dashboard_evolucao_mensal(almoxarifado=None, usuario=usuario, db=db), mes
         ),
-        "top_recorrentes": fechamento_router.dashboard_top_recorrentes(almoxarifado=None, limite=5, usuario=usuario, db=db),
         "comparativo_acuracia": fechamento_router.dashboard_comparativo_acuracia(almoxarifado=None, mes=mes, usuario=usuario, db=db),
         "evolucao_ponderada": _truncar_serie_mensal(
             fechamento_router.dashboard_evolucao_ponderada_mensal(almoxarifado=None, usuario=usuario, db=db), mes
@@ -1612,16 +1550,6 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
             fechamento_router.dashboard_itens_por_magnitude(faixa_idx=i, almoxarifado=None, mes=mes, usuario=usuario, db=db)
             for i in range(4)
         ],
-        # Cobertura de Conferência (divergencias_router) - saúde do PROCESSO de conferência
-        # (dias conferidos x pendentes por almoxarifado), usada pra reforçar/contextualizar
-        # a curva de evolução de acurácia do Painel de Inventário (20/08/2026). Por padrão
-        # essa função trabalha em D-1 de HOJE (não do mês do relatório) - 22/08/2026:
-        # passamos data_referencia=último dia do mês do relatório, senão um MBR gerado
-        # depois do fechamento (o caso normal) mede a janela de 90 dias terminando hoje,
-        # não terminando no mês selecionado.
-        "cobertura_conferencia": divergencias_router.cobertura_conferencia(
-            dias=90, almoxarifado=None, data_referencia=_ultimo_dia_mes(mes), usuario=usuario, db=db
-        ),
         "resumo_passivos": baixas_operacionais_router.resumo_executivo(
             ano=ano_int, mes=mes_int, data_inicio=None, data_fim=None, almoxarifado=None, motivo=None, usuario=usuario, db=db
         ),
@@ -1712,13 +1640,12 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         db, chaves_excluir={chave_dispersao_ficha} if chave_dispersao_ficha else None
     )
 
-    # Scorecards por almoxarifado/ação de mapeamento (20/08/2026, pedido do
-    # usuário) - montados depois do dict principal porque o de Riscos
-    # reaproveita indicadores já coletados acima (resumo_shelf_life,
-    # mapeamento_risco_obsolescencia, dispersao_ficha_tecnica_externo,
-    # testes_industriais_externo, fefo_externo) em vez de recalculá-los.
+    # Scorecard por almoxarifado (20/08/2026, pedido do usuário) - montado
+    # depois do dict principal por padrão, embora não reaproveite nada dele
+    # (o Scorecard de Mapeamento de Riscos, que reaproveitava indicadores
+    # já coletados acima, foi removido em 22/08/2026 - ver comentário de
+    # decisão antes de _slide_controle_movimentados).
     dados["scorecard_inventario_almoxarifado"] = _coletar_scorecard_inventario_almoxarifado(db, usuario, mes)
-    dados["scorecard_mapeamento_riscos"] = _coletar_scorecard_mapeamento_riscos(db, usuario, mes, dados)
     dados["diario_bordo"] = _coletar_indicador_diario_bordo(mes)
 
     return dados
@@ -2151,13 +2078,22 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
     # "Dashboard Baixas Operacionais" (mesmo dado do KPI e do slide dedicado),
     # que em 22/08/2026 passou a ser a ÚNICA fonte pra esse assunto no MBR -
     # o slide nativo "Mapeamento de Passivos" foi removido (ver comentário de
-    # decisão antes de _slide_mapeamento_risco_obsolescencia). O fallback
+    # decisão antes de _slide_controle_movimentados). O fallback
     # abaixo (`passivos["valor"]`, de d["resumo_passivos"]) continua existindo
     # só pra este KPI específico não quebrar se o dashboard externo ainda não
     # tiver sido enviado - não é mais um slide dedicado nativo no relatório.
+    #
+    # Rótulo encurtado pra "Baixas por Pacote" (22/08/2026, bug reportado pela
+    # usuária no modelo manual: com o texto completo "Baixas por Pacote
+    # (Baixas Operacionais)", 40 caracteres, o rótulo quebrava em 2 linhas
+    # dentro do cartão de KPI e invadia a caixa de contexto logo abaixo, cuja
+    # posição é fixa - mesma classe de bug já corrigida em títulos de slide
+    # (Faixas, Baixas Operacionais), agora também no cartão de KPI. A fonte
+    # ("Dashboard Baixas Operacionais") já está clara pelo resto do relatório;
+    # não precisa repetir aqui dentro do espaço apertado do cartão.
     if baixas_pacote.get("prejuizo_total") is not None:
         kpi_baixas = {
-            "valor": _fmt_moeda(baixas_pacote["prejuizo_total"]), "rotulo": "Baixas por Pacote (Baixas Operacionais)",
+            "valor": _fmt_moeda(baixas_pacote["prejuizo_total"]), "rotulo": "Baixas por Pacote",
             "cor": COR_ERRO, "contexto": f"{_fmt_pct(baixas_pacote.get('pct_concentrado'))} em {baixas_pacote.get('motivo_concentrado', '—')}",
         }
     else:
@@ -2174,11 +2110,19 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
     # slide dedicado "Farol de Shelf-Life") é, desde 22/08/2026, a ÚNICA
     # fonte pra esse assunto no MBR - o slide nativo "Shelf Life" foi
     # removido (ver mesmo comentário de decisão citado acima).
+    #
+    # Rótulo encurtado pra "Valor em Risco de Validade" (22/08/2026, mesmo bug
+    # de rótulo em 2 linhas reportado pela usuária, ver comentário do KPI 2
+    # acima) - com o sufixo "(Farol de Shelf)" o texto passava de 40
+    # caracteres e quebrava em 2 linhas, invadindo o contexto abaixo. Sem o
+    # sufixo, o rótulo fica igual ao do caminho nativo (fallback abaixo) -
+    # tudo bem, é o mesmo conceito de indicador nos dois casos, só a fonte
+    # do dado muda.
     if farol_shelf.get("perda_potencial_total") is not None:
         qtd_farol = farol_shelf.get("qtd_lotes") or {}
         total_lotes_farol = sum(v for v in qtd_farol.values() if isinstance(v, int))
         kpi_risco_validade = {
-            "valor": _fmt_moeda(farol_shelf["perda_potencial_total"]), "rotulo": "Valor em Risco de Validade (Farol de Shelf)",
+            "valor": _fmt_moeda(farol_shelf["perda_potencial_total"]), "rotulo": "Valor em Risco de Validade",
             "cor": COR_ATENCAO, "contexto": f"{_fmt_num(total_lotes_farol)} lotes · {_fmt_num(qtd_farol.get('vencidos'))} já vencidos",
         }
     else:
@@ -2193,7 +2137,7 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
         kpi_baixas,
         kpi_risco_validade,
         {"valor": _fmt_pct(movimentados.get("pct_acuracia")), "rotulo": "Controle de Movimentados", "cor": AZUL_INSTITUCIONAL, "contexto": label_mov, "cor_contexto": cor_mov},
-    ], altura=1.10)
+    ], altura=0.85)
 
     analise = _analise_geral(d)
 
@@ -2330,9 +2274,13 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
     a usuária rejeitou isso como "totalmente diferente do modelo
     aprovado... tabelas abaixo do indicador contando a história do
     recorte", 22/08/2026, "premissas inegociáveis"). SKUs Recorrentes e
-    Cobertura de Conferência continuam existindo, só que como conteúdo
-    INFORMATIVO num slide companheiro à parte (_slide_painel_inventario_
-    detalhe), não mais neste slide principal.
+    Cobertura de Conferência passaram a viver como conteúdo INFORMATIVO num
+    slide companheiro à parte (_slide_painel_inventario_detalhe) - esse
+    slide companheiro foi removido depois, ainda em 22/08/2026, a pedido da
+    usuária ("fiz uma versão manual [...] esse é o modelo final"; ver
+    comentário de decisão antes de _slide_acuracia_ponderada_iap). Não há
+    mais nenhum slide no MBR mostrando SKUs Recorrentes/Cobertura de
+    Conferência.
 
     Pedido explícito da mesma mensagem: dar ênfase ao IAP/IAQ (ponderados)
     e deixar esta leitura item a item "apenas para conhecimento" - por
@@ -2354,7 +2302,7 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
         {"valor": _fmt_num(kpis["total_itens"]), "rotulo": "Itens Avaliados"},
         {"valor": _fmt_num(kpis["total_divergentes"]), "rotulo": "Itens Divergentes"},
         {"valor": _fmt_moeda(kpis["resultado_liquido"]), "rotulo": "Resultado Líquido", "cor": COR_SUCESSO if (kpis["resultado_liquido"] or 0) >= 0 else COR_ERRO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     evolucao = d["evolucao_inventario"][-6:]
@@ -2411,7 +2359,7 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
     if y_rodape < y_zona_segura_fim:
         _texto(slide, MARGEM_IN, y_rodape, largura_cheia, 0.20,
                "\"Resultado\" por almoxarifado e os dois rankings cobrem só os itens da lista de concentração de valor "
-               "(até 50 maiores por valor do mês). SKUs recorrentes e cobertura de conferência: próximo slide.",
+               "(até 50 maiores por valor do mês).",
                tamanho=8, italico=True, cor=CINZA_TEXTO)
     return slide
 
@@ -2502,92 +2450,14 @@ def _tabelas_almoxarifado_e_top10(slide, y_topo, itens_conc, comp_almox, campo_p
     return y_topo + altura_titulo + altura_tabela, (comp_ordenado[0] if comp_ordenado else None), faltas, sobras
 
 
-def _slide_painel_inventario_detalhe(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """SKUs Recorrentes e Cobertura de Conferência (22/08/2026, reescrito —
-    conteúdo movido pra aqui de dentro do slide principal de Inventário
-    Item a Item, que agora segue o modelo aprovado v4 1:1 — ver docstring
-    de _slide_painel_inventario). Slide companheiro EXPLICITAMENTE
-    informativo (pedido da usuária: leitura item a item "apenas para
-    conhecimento") — SKUs com divergência recorrente mês a mês e a
-    cobertura de conferência que sustenta (ou não) a leitura de evolução
-    do slide anterior."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    # Título encurtado (22/08/2026): a versão completa ("Inventário Item a
-    # Item — SKUs Recorrentes e Cobertura", 54 caracteres) quebra em 2 linhas
-    # dentro da caixa de título do cabeçalho (27pt/9.7in) e invade a caixa de
-    # subtítulo de posição fixa — mesma classe de bug já corrigida 2x antes
-    # neste arquivo (Faixas, Baixas Operacionais). "Item a Item" já fica
-    # implícito no contexto (slide companheiro do anterior) e no subtítulo.
-    _cabecalho(slide, "Inventário — SKUs Recorrentes e Cobertura", mes_label, pagina,
-               "Informativo — SKUs com divergência recorrente e cobertura de conferência que sustenta a leitura de evolução")
-
-    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
-    y_zona_segura_fim = ALTURA_IN - 0.55
-    altura_topo = 2.55
-
-    _texto(slide, MARGEM_IN, 1.65, largura_cheia, 0.28, "SKUS MAIS RECORRENTES (DIVERGÊNCIA REPETIDA MÊS A MÊS)",
-           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    top = d["top_recorrentes"][:6]
-    if top:
-        linhas = [[t["sku"], (t["descricao"] or "—")[:40], _fmt_num(t["ocorrencias"]), _fmt_moeda(t["valor_total"])] for t in top]
-        _tabela(slide, MARGEM_IN, 1.93, largura_cheia, altura_topo, ["SKU", "Descrição", "Ocor.", "Valor"], linhas,
-                larguras_relativas=[1.1, 2.6, 0.7, 1.1], tamanho_fonte=11)
-    else:
-        _caixa_leitura(slide, MARGEM_IN, 1.93, largura_cheia, altura_topo, "SKUs recorrentes",
-                       "Nenhum SKU com divergência recorrente neste recorte.")
-
-    # Cobertura de Conferência (20/08/2026, pedido do usuário) - reforça a curva de evolução
-    # do slide anterior: uma queda/estabilidade de acurácia lida junto com baixa cobertura de
-    # conferência é um sinal diferente de queda com cobertura alta (aqui é falta de dado, lá
-    # é perda real). Layout com orçamento vertical explícito (mostra só as 3 piores, e o texto
-    # de insight usa altura calculada a partir do texto real + _caber_no_espaco) pra nunca
-    # estourar o rodapé.
-    y_cobertura = 1.93 + altura_topo + 0.22
-    cobertura = d["cobertura_conferencia"]
-    por_almox = [linha for linha in cobertura["por_almoxarifado"] if not linha.get("sem_dados")]
-    _texto(slide, MARGEM_IN, y_cobertura, largura_cheia, 0.24,
-           f"COBERTURA DE CONFERÊNCIA (ÚLTIMOS {cobertura['periodo_dias']} DIAS) — SUSTENTA A LEITURA DE EVOLUÇÃO DO SLIDE ANTERIOR",
-           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    if por_almox:
-        piores = por_almox[:3]  # já vem ordenado do pior pro melhor
-        linhas_cobertura = [
-            [
-                linha["almoxarifado"],
-                _fmt_pct(linha["pct_cobertura"]),
-                f'{_fmt_num(linha["dias_desde_ultima_conferencia"])} dia(s)' if linha["dias_desde_ultima_conferencia"] is not None else "—",
-                f'{_fmt_num(linha["maior_furo_dias"])} dia(s)' if linha["maior_furo_dias"] else "—",
-            ]
-            for linha in piores
-        ]
-        y_tabela_cobertura = y_cobertura + 0.25
-        altura_tabela_cobertura = 0.24 + 0.24 * len(piores)  # cabeçalho + 1 linha por almoxarifado
-        _tabela(slide, MARGEM_IN, y_tabela_cobertura, largura_cheia, altura_tabela_cobertura,
-                ["Almoxarifado (pior cobertura primeiro)", "% Cobertura", "Dias s/ conferência", "Maior furo"],
-                linhas_cobertura, larguras_relativas=[2.4, 1.1, 1.5, 1.1], tamanho_fonte=10.5)
-
-        abaixo_70 = [linha for linha in por_almox if (linha["pct_cobertura"] or 0) < 70]
-        if abaixo_70:
-            pior_cobertura = por_almox[0]
-            insight_cobertura = (
-                f"{_fmt_num(len(abaixo_70))} almoxarifado(s) com cobertura de conferência abaixo de 70% — "
-                f"pior caso: {pior_cobertura['almoxarifado']} ({_fmt_pct(pior_cobertura['pct_cobertura'])}). Acurácia baixa combinada com "
-                "cobertura baixa é falta de dado, não perda confirmada; vale reforçar a rotina de conferência antes de tratar como perda real."
-            )
-        else:
-            insight_cobertura = "Cobertura de conferência acima de 70% em todos os almoxarifados neste recorte — a curva de acurácia do slide anterior reflete o estoque de fato, não uma lacuna de dado."
-
-        y_insight = y_tabela_cobertura + altura_tabela_cobertura + 0.06
-        altura_insight = min(
-            _altura_necessaria_caixa_leitura(insight_cobertura, largura_cheia, 10.5, altura_rotulo=0, pad=0),
-            max(0.22, y_zona_segura_fim - y_insight),
-        )
-        texto_insight_cortado = _caber_no_espaco(insight_cobertura, largura_cheia, altura_insight, 10.5)
-        _texto(slide, MARGEM_IN, y_insight, largura_cheia, altura_insight, texto_insight_cortado, tamanho=10.5, cor=CINZA_TEXTO)
-    else:
-        _texto(slide, MARGEM_IN, y_cobertura + 0.30, largura_cheia, 0.4,
-               "Sem almoxarifado com dado de conferência suficiente neste recorte ainda.", tamanho=11, cor=CINZA_TEXTO)
-    return slide
+# 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o modelo
+# final"): o slide "Painel de Inventário — Detalhamento Financeiro" (função
+# _slide_painel_inventario_detalhe, companheiro informativo do Painel de
+# Inventário com SKUs Recorrentes + Cobertura de Conferência) foi removido -
+# ela editou o MBR manualmente pra tirar esse tópico. Os dados que só esse
+# slide usava (dados["top_recorrentes"], dados["cobertura_conferencia"])
+# foram removidos junto de _coletar_dados_mbr, senão ficariam sendo buscados
+# no banco a cada MBR gerado sem nenhum slide pra usar o resultado.
 
 
 def _slide_acuracia_ponderada_iap(prs: Presentation, mes_label: str, pagina: int, d: dict):
@@ -2621,7 +2491,7 @@ def _slide_acuracia_ponderada_iap(prs: Presentation, mes_label: str, pagina: int
          "rotulo": "Variação do IAP (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
          "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
          "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     if len(evolucao) >= 2:
@@ -2718,7 +2588,7 @@ def _slide_acuracia_ponderada_iaq(prs: Presentation, mes_label: str, pagina: int
          "rotulo": "Variação do IAQ (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
          "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
          "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     if len(evolucao) >= 2:
@@ -3097,103 +2967,21 @@ def _leitura_passivos(resumo: dict) -> str:
 # d["evolucao_passivos_fluxo"], d["resultado_por_almoxarifado"],
 # d["resumo_shelf_life"]) continuam rodando em _coletar_dados_mbr sem
 # alteração - NÃO foram removidos, porque outros slides do relatório (Resumo
-# Executivo, Scorecard do Mês, Scorecard de Mapeamento de Riscos e o próprio
-# _slide_mapeamento_risco_obsolescencia, abaixo, que NÃO foi removido por
-# não ter equivalente externo aprovado) continuam lendo dessas mesmas
-# chaves.
-
-
-def _slide_mapeamento_risco_obsolescencia(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Mapeamento de Risco - Obsolescência (pedido do usuário, 18/08/2026:
-    "Senti falta do Mapeamento de risco, baseado nos itens que representam
-    um risco para o negócio por obsolescência") - cruza o Farol de Shelf
-    Life (validade próxima) com o giro recente de Movimentados (saída real)
-    pra separar "vai vencer, mas está saindo rápido o bastante" de "vai
-    vencer E está parado" - só o segundo caso é risco real de virar perda
-    (ver shelf_life.calcular_mapeamento_risco_obsolescencia)."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Mapeamento de Risco — Obsolescência", mes_label, pagina,
-               "Itens perto de vencer E com giro recente insuficiente — risco real de virar perda, não só validade próxima")
-
-    risco = d["mapeamento_risco_obsolescencia"]
-    if not risco.get("tem_dados"):
-        _caixa_leitura(
-            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Sem itens em risco de obsolescência",
-            "Nenhum lote ativo está, ao mesmo tempo, perto de vencer (até 90 dias) e com saída recente insuficiente "
-            "pra escoar o estoque a tempo, neste recorte.",
-            cor_fundo=OFF_WHITE, cor_rotulo=COR_SUCESSO, tamanho_texto=13,
-        )
-        return slide
-
-    _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_moeda(risco["valor_total_risco"]), "rotulo": "Valor Total em Risco", "cor": COR_ERRO},
-        {"valor": _fmt_num(risco["quantidade_itens"]), "rotulo": "Itens em Risco de Obsolescência"},
-        {"valor": _fmt_num(risco["quantidade_criticos"]), "rotulo": "Itens Críticos (giro zero)",
-         "cor": COR_ERRO if risco["quantidade_criticos"] else COR_SUCESSO},
-        {"valor": _fmt_moeda(risco["valor_criticos"]), "rotulo": "Valor em Itens Críticos", "cor": COR_ERRO},
-    ], altura=1.05)
-
-    top = risco.get("itens") or []
-    linhas = [
-        [
-            f"{it['sku']} — {(it['descricao_produto'] or '—')[:24]}",
-            it["almoxarifado"] or "—",
-            it["dias_para_vencer"] if it["dias_para_vencer"] is not None else "—",
-            _fmt_num(it["giro_recente"]),
-            _fmt_moeda(it["valor_estimado"]),
-            it["classificacao"],
-        ]
-        for it in top[:8]
-    ]
-    _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, "TOP ITENS EM RISCO DE OBSOLESCÊNCIA",
-           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    _tabela(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0,
-            ["Item", "Almoxarifado", "Dias p/ Vencer", "Giro Recente", "Valor Estimado", "Classificação"],
-            linhas, larguras_relativas=[2.6, 1.3, 1.0, 1.0, 1.1, 1.1], tamanho_fonte=10.5)
-
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
-        f"Metodologia: cruza o Farol de Shelf Life (vencido/30/60/90 dias) com a saída registrada em Movimentados nos "
-        f"últimos {risco['janela_dias']} dias, por SKU — \"Crítico\" = zero saída na janela; \"Atenção\" = saída "
-        f"recente menor que a quantidade em estoque hoje. Embalagens não entram neste indicador.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
-    return slide
-
-
-def _slide_scorecard_mapeamento_riscos(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Scorecard de Mapeamento de Riscos (20/08/2026, pedido do usuário: "faça
-    o Scorecard por ação de mapeamento e controle [...] o indicador de
-    Dispersão de lote tem que ser apurado junto [...] bem como os testes
-    industriais e o mapeamento de FEFO que implicam em riscos para o
-    negócio [...] evoluções e involuções [...] e sugestão de próximos
-    passos"). Uma linha por ação de mapeamento/controle (Shelf Life,
-    Dispersão de Ficha Técnica, Testes Industriais, FEFO) - ver
-    _coletar_scorecard_mapeamento_riscos pra como cada linha é montada."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Scorecard de Mapeamento de Riscos", mes_label, pagina,
-               "Shelf Life, Dispersão de Ficha Técnica, Testes Industriais e FEFO — evolução vs. o mês anterior e próximo passo")
-
-    linhas_scorecard = d["scorecard_mapeamento_riscos"]
-    linhas_tabela = [
-        [(l["frente"], AZUL_INSTITUCIONAL, True), (l["status_label"], l["status_cor"], True),
-         (l["leitura"], CINZA_TEXTO, False), (l["proximo_passo"], CINZA_TEXTO, False)]
-        for l in linhas_scorecard
-    ]
-    _tabela(slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 3.6,
-            ["Ação de Mapeamento/Controle", "Status", "Leitura Executiva", "Próximo Passo"], linhas_tabela,
-            larguras_relativas=[1.8, 1.0, 3.6, 3.1], tamanho_fonte=12.5)
-
-    _texto(
-        slide, MARGEM_IN, 5.5, LARGURA_IN - 2 * MARGEM_IN, 0.7,
-        "Shelf Life é fotografia do dia (sem série mensal persistida) — avaliado pelo nível atual, não por variação. "
-        "Dispersão de Ficha Técnica, Testes Industriais e FEFO comparam o mês deste relatório com o mês anterior, "
-        "a partir dos mesmos arquivos/histórico já importados nas telas correspondentes.",
-        tamanho=10, cor=CINZA_TEXTO, italico=True,
-    )
-    return slide
+# Executivo e Scorecard do Mês) continuam lendo dessas mesmas chaves.
+#
+# 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o
+# modelo final"): os dois slides que viviam aqui - "Mapeamento de Risco —
+# Obsolescência" (_slide_mapeamento_risco_obsolescencia) e "Scorecard de
+# Mapeamento de Riscos" (_slide_scorecard_mapeamento_riscos, capítulo-síntese
+# que fechava a Seção 3) - foram REMOVIDOS do relatório; ela editou o MBR
+# manualmente pra tirar esses dois tópicos. d["mapeamento_risco_obsolescencia"]
+# continua sendo calculado em _coletar_dados_mbr (Scorecard do Mês e Resumo
+# Executivo ainda leem dessa chave, ver _linha_scorecard mais acima e KPI 2/3
+# do Resumo Executivo mais abaixo) - só o slide dedicado saiu. Já
+# d["scorecard_mapeamento_riscos"] e as duas funções que só existiam pra
+# montar esse slide (_coletar_scorecard_mapeamento_riscos e
+# _linha_risco_com_evolucao) foram removidas também - ver comentário de
+# decisão mais acima, logo antes da seção "Diário de Bordo / Rotina Master".
 
 
 def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int, d: dict):
@@ -3223,7 +3011,7 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
          "cor": COR_ATENCAO if resumo.get("itens_com_divergencia") else COR_SUCESSO},
         {"valor": (f"+{_fmt_pct(delta_implantacao)}" if delta_implantacao is not None and delta_implantacao >= 0 else _fmt_pct(delta_implantacao)),
          "rotulo": "Ganho desde a Implantação", "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     # Altura da seção de topo encolhida (era 3.35/3.65) pra abrir espaço pra
     # tabela "Resultado por Almoxarifado" abaixo (22/08/2026, mockup aprovado v9).
@@ -3395,7 +3183,7 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
         {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
         {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
         {"valor": _fmt_num(fefo.get("total_sem_correspondencia")), "rotulo": "Sem Correspondência no Mês"},
-    ], altura=1.05)
+    ], altura=0.85)
 
     top = fefo.get("top_produtos_com_quebra") or []
     if top:
@@ -3461,7 +3249,7 @@ def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d:
         {"valor": _fmt_moeda(dado["gasto_total"]), "rotulo": "Gasto Total no Mês", "cor": COR_ATENCAO},
         {"valor": _fmt_num(dado["ops"]), "rotulo": "OPs Testadas"},
         {"valor": _fmt_moeda(dado["custo_medio_op"]), "rotulo": "Custo Médio por OP"},
-    ], altura=1.05)
+    ], altura=0.85)
 
     top = dado.get("top_materias_primas") or []
     if top:
@@ -3520,7 +3308,7 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
          "cor": COR_ERRO if (dado["impacto_liquido"] or 0) > 0 else COR_SUCESSO},
         {"valor": _fmt_num(dado["ops_criticas"]), "rotulo": "OPs Críticas",
          "cor": COR_ERRO if dado["ops_criticas"] else COR_SUCESSO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     # Tendência Financeira mês a mês (22/08/2026, pedido do usuário: "adicione
     # rótulo de dados no indicador de Dispersão de Ficha Técnica") - Perda,
@@ -3637,7 +3425,7 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
          "cor": COR_FAROL_PERIGO, "contexto": _fmt_moeda(_valor_bucket(bucket_perigo)), "cor_contexto": COR_FAROL_PERIGO},
         {"valor": _fmt_num(qtd.get("61_90")), "rotulo": "61-90 Dias (Atenção)",
          "cor": COR_FAROL_ATENCAO, "contexto": _fmt_moeda(_valor_bucket(bucket_atencao)), "cor_contexto": COR_FAROL_ATENCAO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     # As 3 listas Top 10 (uma por faixa), lado a lado - "abaixo as tabelas
     # como estão" (pedido do usuário) - só encolhidas de 8 pra 5 linhas cada
@@ -3805,7 +3593,7 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
         {"valor": _fmt_moeda(kpis.get("perda_evitada")), "rotulo": "Perda Evitada", "cor": COR_SUCESSO},
         {"valor": _fmt_moeda(kpis.get("perda_real")), "rotulo": "Perda Real", "cor": COR_ERRO},
         {"valor": _fmt_moeda(kpis.get("saving_recuperado")), "rotulo": "Saving Recuperado"},
-    ], altura=1.05)
+    ], altura=0.85)
 
     tabelas = dado.get("tabelas") or {}
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
@@ -3901,7 +3689,7 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     promovido a FONTE OFICIAL do assunto "Passivos/Baixas" no MBR,
     substituindo os slides nativos _slide_mapeamento_passivos e
     _slide_passivos_evolucao, removidos - ver comentário de decisão logo
-    antes de _slide_mapeamento_risco_obsolescencia). Usa categorização de
+    antes de _slide_controle_movimentados). Usa categorização de
     motivo própria da equipe (Stock Savvy), diferente da categorização
     nativa do Atlas que os slides removidos usavam. Cobre uma janela móvel
     (ex.: últimos ~60 dias no arquivo de exemplo), não um mês calendário
@@ -3936,7 +3724,7 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
         {"valor": _fmt_pct(resumo.get("pct_concentrado")), "rotulo": f"Concentrado em {resumo.get('motivo_concentrado', '—')}"},
         {"valor": resumo.get("setor_maior_impacto") or "—", "rotulo": "Setor de Maior Impacto"},
         {"valor": resumo.get("grupo_maior_impacto") or "—", "rotulo": "Grupo de Maior Impacto"},
-    ], altura=1.05)
+    ], altura=0.85)
 
     tabelas = dado.get("tabelas") or {}
     tabela_motivo = tabelas.get("Baixas por Motivo")
@@ -4167,7 +3955,7 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
          "rotulo": "Ganho de Acurácia (Movimentados)",
          "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
         {"valor": _fmt_moeda(valor_visibilidade), "rotulo": "Valor sob Visibilidade Ativa", "cor": AZUL_INSTITUCIONAL},
-    ], altura=1.05)
+    ], altura=0.85)
 
     largura_esquerda = 6.3
     _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "COBERTURA DE PROCESSOS HOJE", tamanho=11,
@@ -4242,7 +4030,7 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
          "cor": COR_SUCESSO},
         {"valor": _fmt_num(len(lapsos)), "rotulo": "Lapsos em Dias Úteis",
          "cor": COR_ATENCAO if lapsos else COR_SUCESSO},
-    ], altura=1.05)
+    ], altura=0.85)
 
     largura_esquerda = 7.1
     semanas = dado.get("semanas") or []
@@ -4366,7 +4154,7 @@ def _slide_atlas_stock_savvy_modulos(prs: Presentation, mes_label: str, pagina: 
             ("Produção", AZUL_INSTITUCIONAL, True),
             "Dispersão de Lote (Ficha Técnica x consumo real por OP, com Ações Corretivas rastreadas por "
             "responsável/status) e Auditoria de Ficha Técnica (cobertura de cadastro de BOM por produto).",
-            "Alimenta o slide de Dispersão de Ficha Técnica do MBR e o Scorecard de Mapeamento de Riscos "
+            "Alimenta o slide de Dispersão de Ficha Técnica do MBR "
             "(taxa de furo, materiais crônicos, impacto líquido).",
         ],
         [
@@ -4458,8 +4246,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     relatório" — respostas às perguntas de esclarecimento: "Reordenar + capa
     de seção"; reduzida de 7 para 5 seções em 22/08/2026 (FEFO e Testes
     Industriais deixaram de ter seção/capa própria - virou slide de
-    detalhe dentro de "Mapeamento de Riscos e Passivos", já 100% coberto
-    pelo Scorecard de Mapeamento de Riscos dessa seção); e de 5 para 4
+    detalhe dentro de "Mapeamento de Riscos e Passivos"); e de 5 para 4
     seções ainda em 22/08/2026, pedido não-negociável da usuária de fundir
     a antiga seção "Outros" (dashboards externos) com "Mapeamento de Riscos
     e Passivos" (nativa), substituindo os indicadores nativos que já têm
@@ -4467,7 +4254,15 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     decisão dentro da seção 3, abaixo). A contagem de página é dinâmica
     (closure `_pag`) porque o número de slides varia com a quantidade de
     indicadores dinâmicos cadastrados em Outros Dashboards (ver
-    dados["dashboards_extras"])."""
+    dados["dashboards_extras"]).
+
+    22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o
+    modelo final"): "Painel de Inventário — Detalhamento Financeiro",
+    "Mapeamento de Risco — Obsolescência" e "Scorecard de Mapeamento de
+    Riscos" (que fazia a síntese de FEFO/Testes Industriais citada no
+    parágrafo acima) saíram do relatório - ver os comentários de decisão
+    antes de _slide_acuracia_ponderada_iap e antes de
+    _slide_controle_movimentados."""
     dados = _coletar_dados_mbr(db, usuario, mes)
     mes_label = _nome_mes(mes)
 
@@ -4498,22 +4293,26 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # 22/08/2026, pedido não-negociável da usuária ("dar ênfase ao inventário
     # ponderado IAP e IAQ. Deixe a visão item a item, porém não dê destaque
     # à mesma, apenas para conhecimento"): IAP/IAQ (ponderados) passam a
-    # abrir a seção; a leitura item a item (Inventário Item a Item + seu
-    # companheiro de SKUs Recorrentes/Cobertura) desce pro final da seção,
-    # antes de Movimentados/Scorecard — o CONTEÚDO de cada slide não muda
-    # (ver docstring de _slide_painel_inventario), só a ORDEM.
+    # abrir a seção; a leitura item a item (Inventário Item a Item) desce
+    # pro final da seção, antes de Movimentados/Scorecard — o CONTEÚDO de
+    # cada slide não muda (ver docstring de _slide_painel_inventario), só a
+    # ORDEM.
+    #
+    # 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o
+    # modelo final"): o slide companheiro "Inventário — SKUs Recorrentes e
+    # Cobertura" (_slide_painel_inventario_detalhe) foi removido - ver
+    # comentário de decisão antes de _slide_acuracia_ponderada_iap.
     _secao(2, "Inventários e Movimentados",
            "Acurácia de fechamento, ponderação por valor e reconciliação diária sistema x físico.",
            ["Acurácia Ponderada (IAP)", "Acurácia Ponderada (IAQ)",
             "Acurácia Ponderada — Concentração de Risco", "Acurácia Ponderada — Detalhamento por Faixa",
-            "Inventário Item a Item", "Inventário — SKUs Recorrentes e Cobertura",
+            "Inventário Item a Item",
             "Controle de Movimentados", "Scorecard de Inventário por Almoxarifado"])
     _slide_acuracia_ponderada_iap(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_iaq(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_detalhe(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_faixas(prs, mes_label, _pag(), dados)
     _slide_painel_inventario(prs, mes_label, _pag(), dados)
-    _slide_painel_inventario_detalhe(prs, mes_label, _pag(), dados)
     _slide_controle_movimentados(prs, mes_label, _pag(), dados)
     _slide_scorecard_inventario_almoxarifado(prs, mes_label, _pag(), dados)
 
@@ -4524,24 +4323,24 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # dashboard externo aprovado cobrindo o mesmo assunto, em vez de manter
     # as duas fontes lado a lado. Mapeamento de Passivos/Passivos-Evolução e
     # Shelf Life (nativos) foram REMOVIDOS (ver comentário de decisão antes
-    # de _slide_mapeamento_risco_obsolescencia, mais abaixo no arquivo) -
-    # Dashboard Baixas Operacionais e Farol de Shelf-Life (externos, modelo
-    # já aprovado) passam a ser a única fonte pra esses 2 assuntos.
-    # Mapeamento de Risco — Obsolescência, Testes Industriais e FEFO ficam
-    # (sem equivalente externo aprovado); Recuperação de Shelf e Dispersão
-    # de Ficha Técnica entram como conteúdo novo (não substituem nada). O
-    # Scorecard de Mapeamento de Riscos fecha a seção como capítulo-síntese
-    # (mesmo padrão do Scorecard de Inventário por Almoxarifado, que fecha a
-    # Seção 2) - ele já cruza Shelf Life/Dispersão de Ficha Técnica/Testes
-    # Industriais/FEFO com evolução mês a mês, então funciona melhor depois
-    # do detalhe de cada frente, não antes.
+    # de _slide_controle_movimentados, mais acima no arquivo) - Dashboard
+    # Baixas Operacionais e Farol de Shelf-Life (externos, modelo já
+    # aprovado) passam a ser a única fonte pra esses 2 assuntos. Testes
+    # Industriais e FEFO ficam (sem equivalente externo aprovado);
+    # Recuperação de Shelf e Dispersão de Ficha Técnica entram como
+    # conteúdo novo (não substituem nada).
     #
     # FEFO e Testes Industriais entraram nesta seção em 22/08/2026 (pedido
     # anterior do usuário) - tinham cada um sua própria seção de 2 slides
-    # (capa + indicador), mas o conteúdo já é 100% coberto pelas linhas de
-    # mesmo nome no Scorecard de Mapeamento de Riscos; as duas capas de
-    # seção ("slides de apresentação") foram removidas e os dois slides de
-    # indicador viraram detalhe desta seção.
+    # (capa + indicador); as duas capas de seção ("slides de apresentação")
+    # foram removidas e os dois slides de indicador viraram detalhe desta
+    # seção.
+    #
+    # 22/08/2026, pedido da usuária ("fiz uma versão manual [...] esse é o
+    # modelo final"): "Mapeamento de Risco — Obsolescência" e "Scorecard de
+    # Mapeamento de Riscos" (capítulo-síntese que fechava a seção) foram
+    # REMOVIDOS - ver comentário de decisão antes de _slide_controle_
+    # movimentados, mais acima no arquivo.
     #
     # Cap defensivo na lista "NESTA SEÇÃO" da capa (não no relatório em si -
     # todo indicador dinâmico enviado ainda gera seu slide completo abaixo)
@@ -4552,10 +4351,8 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Dashboard Baixas Operacionais — Evolução Mensal",
         "Farol de Shelf-Life", "Farol de Shelf-Life — Risco por Almoxarifado",
-        "Mapeamento de Risco — Obsolescência",
         "Recuperação de Shelf", "Recuperação de Shelf — Evolução Mensal",
         "Dispersão de Ficha Técnica", "Testes Industriais", "FEFO",
-        "Scorecard de Mapeamento de Riscos",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -4563,20 +4360,18 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     else:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
-           "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, risco de "
-           "obsolescência, recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
+           "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
+           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_baixas_operacionais_evolucao(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_risco_almoxarifado(prs, mes_label, _pag(), dados)
-    _slide_mapeamento_risco_obsolescencia(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_evolucao(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
     _slide_fefo(prs, mes_label, _pag(), dados)
-    _slide_scorecard_mapeamento_riscos(prs, mes_label, _pag(), dados)
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
