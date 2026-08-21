@@ -195,6 +195,67 @@ def _truncar_serie_mensal(serie: list, mes_limite: str) -> list:
     return [ponto for ponto in serie if ponto.get("mes", "") <= mes_limite]
 
 
+def _tendencia_linear(valores: list) -> dict:
+    """Regressão linear simples (mínimos quadrados) sobre uma série mensal
+    igualmente espaçada — devolve a inclinação (variação média por mês) e
+    um selo de texto pronto pra badge de tendência (pedido do usuário,
+    22/08/2026, mockups aprovados de Painel de Inventário/Acurácia
+    Ponderada: "não só qual o nível hoje, pra onde isso está indo").
+
+    Simplificação deliberada: o mockup desenhava essa tendência como uma
+    linha tracejada SOBRE o gráfico de barras (combo bar+linha na mesma
+    escala). O python-pptx não expõe gráfico combinado (dois tipos de
+    série na mesma área de plotagem) na API de alto nível — só seria
+    possível via edição direta do XML do gráfico, risco desproporcional ao
+    benefício aqui. Em vez disso, a tendência aparece como um selo de
+    texto (mesmo padrão visual dos badges de status já usados no MBR), com
+    a mesma informação (direção + p.p./mês) que a linha do mockup
+    carregava. Limiar de 0.3 p.p./mês pra não chamar de "tendência" uma
+    variação que é só ruído mês a mês."""
+    pontos = [v for v in valores if v is not None]
+    n = len(pontos)
+    if n < 2:
+        return {"inclinacao": None, "rotulo": None, "cor": COR_SEM_DADO}
+    media_x = (n - 1) / 2
+    media_y = sum(pontos) / n
+    numerador = sum((i - media_x) * (v - media_y) for i, v in enumerate(pontos))
+    denominador = sum((i - media_x) ** 2 for i in range(n))
+    inclinacao = round(numerador / denominador, 2) if denominador else 0.0
+    if inclinacao > 0.3:
+        rotulo = f"▲ Tendência de melhora: +{_fmt_num(inclinacao, 1)} p.p./mês"
+        cor = COR_SUCESSO
+    elif inclinacao < -0.3:
+        rotulo = f"▼ Tendência de piora: -{_fmt_num(abs(inclinacao), 1)} p.p./mês"
+        cor = COR_ERRO
+    else:
+        rotulo = "▬ Tendência estável no período"
+        cor = COR_SEM_DADO
+    return {"inclinacao": inclinacao, "rotulo": rotulo, "cor": cor}
+
+
+def _prejuizo_por_almoxarifado(itens_concentracao: list) -> dict:
+    """A partir dos itens de dashboard_concentracao_valor (cada item já tem
+    almoxarifado/valor/divergencia_qtd), soma o resultado financeiro NETO
+    por almoxarifado — sobra (divergencia_qtd > 0) soma positivo, falta
+    (divergencia_qtd < 0) soma negativo, mesma convenção de sinal usada em
+    kpis_inventario['resultado_liquido']. Usado nas tabelas "Resultado por
+    Almoxarifado" dos slides de Painel de Inventário/IAP/IAQ (22/08/2026,
+    mockups aprovados v4/v5).
+
+    Atenção, limitação conhecida: só cobre itens que entraram na lista de
+    concentração de valor (até 50 maiores por valor — ver docstring de
+    dashboard_concentracao_valor). Em recortes com muitos itens divergentes
+    de valor baixo, um almoxarifado com só itens fora desse top 50 aparece
+    aqui com prejuízo R$ 0, mesmo tendo divergência real — documentado no
+    rodapé dos slides que usam este cálculo, não escondido."""
+    por_almox = defaultdict(float)
+    for item in itens_concentracao:
+        qtd = item.get("divergencia_qtd") or 0
+        sinal = 1 if qtd > 0 else -1
+        por_almox[item.get("almoxarifado") or "—"] += sinal * (item.get("valor") or 0)
+    return dict(por_almox)
+
+
 # ---------------------------------------------------------------------------
 # Formatação (padrão numérico brasileiro: milhar "." decimal ",")
 # ---------------------------------------------------------------------------
@@ -1096,8 +1157,30 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # Pareto (concentração de valor) e distribuição por magnitude - já recortados pelo
         # mês do relatório (não o histórico inteiro), pra "mais exemplos do período" serem
         # de fato exemplos DESTE mês (20/08/2026).
-        "concentracao_valor": fechamento_router.dashboard_concentracao_valor(almoxarifado=None, mes=mes, top_n=10, usuario=usuario, db=db),
+        # top_n bumped de 10 pra 20 (22/08/2026, mockup aprovado "Concentração de
+        # Risco" v8): o Pareto agora mostra 20 SKUs individuais + uma barra
+        # agregada pro resto da cauda, e o Top 10 detalhado ganhou colunas de
+        # Almoxarifado/Qtd. Sistêmica/Qtd. Conferência/Dif. que já vêm neste
+        # mesmo endpoint — sem chamada nova ao backend. A lista de itens em si
+        # já vinha com até 50 (curva[:50] no router), então isso só muda o
+        # cálculo de top_n_pct_do_valor, não o que fica disponível pro slide.
+        "concentracao_valor": fechamento_router.dashboard_concentracao_valor(almoxarifado=None, mes=mes, top_n=20, usuario=usuario, db=db),
         "distribuicao_magnitude": fechamento_router.dashboard_distribuicao_magnitude(almoxarifado=None, mes=mes, usuario=usuario, db=db),
+        # Os 3 modelos (item a item/IAQ/IAP) por almoxarifado, só do mês do
+        # relatório (22/08/2026, mockups aprovados v4/v5) - alimenta a tabela
+        # "Resultado por Almoxarifado" dos slides de Painel de Inventário e
+        # Acurácia Ponderada (IAP/IAQ). O "Prejuízo" em R$ dessas tabelas é
+        # derivado de concentracao_valor acima (ver _prejuizo_por_almoxarifado),
+        # não vem deste endpoint (que só devolve os 3 percentuais).
+        "comparativo_por_almoxarifado": fechamento_router.dashboard_comparativo_por_almoxarifado(mes=mes, usuario=usuario, db=db),
+        # Top 10 por faixa de magnitude (22/08/2026, mockup aprovado v8, slide
+        # novo "Detalhamento por Faixa de Magnitude") - uma chamada por faixa
+        # (só 4), mesma função já usada pelo duplo-clique na tela de Acurácia
+        # Ponderada, agora reaproveitada pra imprimir no MBR.
+        "magnitude_por_faixa_itens": [
+            fechamento_router.dashboard_itens_por_magnitude(faixa_idx=i, almoxarifado=None, mes=mes, usuario=usuario, db=db)
+            for i in range(4)
+        ],
         # Cobertura de Conferência (divergencias_router) - saúde do PROCESSO de conferência
         # (dias conferidos x pendentes por almoxarifado), usada pra reforçar/contextualizar
         # a curva de evolução de acurácia do Painel de Inventário (20/08/2026). Por padrão
@@ -1135,6 +1218,10 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # "movimentacao") - indicador PRÓPRIO, separado do Fechamento de Inventário
         # periódico. Ver docstring de movimentados_router.py (20/08/2026).
         "resumo_movimentados": movimentados_router.dashboard_resumo(mes=mes, almoxarifado=None, usuario=usuario, db=db),
+        # Quebra por almoxarifado do mês (22/08/2026, mockup aprovado v9) -
+        # alimenta a tabela nova "Resultado por Almoxarifado (Movimentados)"
+        # no slide Controle de Movimentados.
+        "movimentados_por_almoxarifado": movimentados_router.dashboard_por_almoxarifado(mes=mes, usuario=usuario, db=db),
         # Ambas as "evolução mensal" abaixo leem de snapshots persistidos que a própria
         # docstring do router documenta como "o mês corrente sempre reflete o estado
         # mais recente" - ou seja, histórico completo, sem corte. Truncadas pra
@@ -1806,7 +1893,13 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
     if evolucao:
         categorias = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in evolucao]
         valores = [item["acuracia_pct"] or 0 for item in evolucao]
-        _texto(slide, MARGEM_IN, 3.05, 6.0, 0.28, "EVOLUÇÃO DA ACURÁCIA (ÚLTIMOS MESES)", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        # Selo de tendência (22/08/2026, mockup aprovado v4) — ver _tendencia_linear
+        # sobre por que é texto, não uma linha desenhada sobre o gráfico.
+        tendencia = _tendencia_linear([item.get("acuracia_pct") for item in evolucao])
+        _texto(slide, MARGEM_IN, 3.05, 3.6, 0.28, "EVOLUÇÃO DA ACURÁCIA (ÚLTIMOS MESES)", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        if tendencia["rotulo"]:
+            _texto(slide, MARGEM_IN + 3.65, 3.05, 2.35, 0.28, tendencia["rotulo"], tamanho=9, negrito=True,
+                   cor=tendencia["cor"], alinhamento=PP_ALIGN.RIGHT)
         _grafico_categoria(slide, MARGEM_IN, 3.35, 6.0, altura_topo, categorias, "Acurácia geral", valores, cor_serie=VERDE_AMAZONIA)
     else:
         _caixa_leitura(slide, MARGEM_IN, 3.05, 6.0, altura_topo + 0.30, "Evolução", "Sem histórico suficiente de fechamentos para montar a série mensal ainda.")
@@ -1880,77 +1973,254 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
     return slide
 
 
-def _slide_acuracia_ponderada(prs: Presentation, mes_label: str, pagina: int, d: dict):
+def _tabelas_almoxarifado_e_top10(slide, y_topo, itens_conc, comp_almox, campo_pct, rotulo_pct,
+                                   ordenar_por="valor", rotulo_qtd_ou_valor="Valor"):
+    """3 tabelas lado a lado — Resultado por Almoxarifado + Top Faltas + Top
+    Sobras — reaproveitada pelos 3 slides que o pedem com o mesmo layout
+    (Painel de Inventário, IAP, IAQ; 22/08/2026, mockups aprovados v4/v5).
+    `campo_pct` escolhe qual dos 3 modelos mostrar na coluna de acurácia
+    (item_a_item_pct/iaq_pct/iap_pct); `ordenar_por` escolhe se o ranking é
+    por valor financeiro (R$, usado em Painel de Inventário e IAP) ou por
+    quantidade (unidades, usado em IAQ — reordena os MESMOS itens de
+    concentracao_valor pela magnitude de divergencia_qtd, sem chamada nova
+    ao backend).
+
+    Limitação avisada no rodapé de cada slide que chama isto: `itens_conc`
+    é a lista de concentração de valor (até 50 maiores POR VALOR do mês) —
+    quando ordenado por quantidade (IAQ), um item de alto volume mas baixo
+    valor unitário pode estar fora dessa lista e não aparecer no ranking."""
+    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 2 * 0.28) / 3
+    x1, x2, x3 = MARGEM_IN, MARGEM_IN + largura_col + 0.28, MARGEM_IN + 2 * (largura_col + 0.28)
+    altura_titulo = 0.24
+    altura_tabela = 2.75
+    prejuizo_almox = _prejuizo_por_almoxarifado(itens_conc)
+
+    _texto(slide, x1, y_topo, largura_col, altura_titulo, f"RESULTADO POR ALMOXARIFADO ({rotulo_pct.upper()})",
+           tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
+    comp_ordenado = sorted(comp_almox, key=lambda x: x.get(campo_pct) if x.get(campo_pct) is not None else 999)
+    if comp_ordenado:
+        linhas_almox = []
+        for item in comp_ordenado[:8]:
+            almox = item["almoxarifado"]
+            prejuizo = prejuizo_almox.get(almox, 0.0)
+            linhas_almox.append([
+                almox, _fmt_pct(item.get(campo_pct)),
+                (f"-{_fmt_moeda(abs(prejuizo))}" if prejuizo < 0 else _fmt_moeda(prejuizo),
+                 COR_ERRO if prejuizo < 0 else COR_SUCESSO, True),
+            ])
+        _tabela(slide, x1, y_topo + altura_titulo, largura_col, altura_tabela,
+                ["Almox.", rotulo_pct[:8], "Result."], linhas_almox,
+                larguras_relativas=[1.5, 0.8, 1.1], tamanho_fonte=9.5)
+    else:
+        _caixa_leitura(slide, x1, y_topo + altura_titulo, largura_col, altura_tabela, "Almoxarifado",
+                       "Sem dado de fechamento por almoxarifado neste recorte.")
+
+    chave_ordem = (lambda i: i["valor"]) if ordenar_por == "valor" else (lambda i: abs(i.get("divergencia_qtd") or 0))
+    faltas = sorted([i for i in itens_conc if (i.get("divergencia_qtd") or 0) < 0], key=chave_ordem, reverse=True)[:8]
+    sobras = sorted([i for i in itens_conc if (i.get("divergencia_qtd") or 0) > 0], key=chave_ordem, reverse=True)[:8]
+
+    def _rotulo_item(item):
+        return _fmt_moeda(item["valor"]) if ordenar_por == "valor" else f"{_fmt_num(abs(item.get('divergencia_qtd') or 0))} un."
+
+    _texto(slide, x2, y_topo, largura_col, altura_titulo, f"TOP FALTAS DO MÊS ({rotulo_qtd_ou_valor.upper()})",
+           tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if faltas:
+        linhas_faltas = [[it["sku"], (it.get("descricao") or "—")[:15], (f"-{_rotulo_item(it)}", COR_ERRO, True)] for it in faltas]
+        _tabela(slide, x2, y_topo + altura_titulo, largura_col, altura_tabela,
+                ["SKU", "Descrição", rotulo_qtd_ou_valor[:8]], linhas_faltas,
+                larguras_relativas=[1.1, 1.6, 1.0], tamanho_fonte=9.5)
+    else:
+        _caixa_leitura(slide, x2, y_topo + altura_titulo, largura_col, altura_tabela, "Faltas",
+                       "Sem falta calculável neste recorte.")
+
+    _texto(slide, x3, y_topo, largura_col, altura_titulo, f"TOP SOBRAS DO MÊS ({rotulo_qtd_ou_valor.upper()})",
+           tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if sobras:
+        linhas_sobras = [[it["sku"], (it.get("descricao") or "—")[:15], (f"+{_rotulo_item(it)}", COR_SUCESSO, True)] for it in sobras]
+        _tabela(slide, x3, y_topo + altura_titulo, largura_col, altura_tabela,
+                ["SKU", "Descrição", rotulo_qtd_ou_valor[:8]], linhas_sobras,
+                larguras_relativas=[1.1, 1.6, 1.0], tamanho_fonte=9.5)
+    else:
+        _caixa_leitura(slide, x3, y_topo + altura_titulo, largura_col, altura_tabela, "Sobras",
+                       "Sem sobra calculável neste recorte.")
+
+    return y_topo + altura_titulo + altura_tabela, (comp_ordenado[0] if comp_ordenado else None), faltas, sobras
+
+
+def _slide_painel_inventario_detalhe(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Segundo slide do Painel de Inventário (22/08/2026, mockup aprovado v4):
+    resultado por almoxarifado e os dois rankings financeiros (maiores
+    faltas/sobras do mês), fechando com uma leitura de ciclo — slide-
+    detalhe companheiro do slide principal, não substituto dele (mesmo
+    padrão já usado em Acurácia Ponderada — Concentração de Risco)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "Acurácia Ponderada", mes_label, pagina, "Item a item vs. ponderado por quantidade (IAQ) e por valor (IAP)")
+    _cabecalho(slide, "Painel de Inventário — Detalhamento Financeiro", mes_label, pagina,
+               "Resultado por almoxarifado e maiores exemplos do mês, em R$")
+
+    itens_conc = d["concentracao_valor"].get("itens", [])
+    y_fim_tabelas, pior, faltas, _sobras = _tabelas_almoxarifado_e_top10(
+        slide, 1.65, itens_conc, d["comparativo_por_almoxarifado"], "item_a_item_pct", "Acur.",
+        ordenar_por="valor", rotulo_qtd_ou_valor="Valor",
+    )
+
+    y_resumo = y_fim_tabelas + 0.18
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    if pior and faltas:
+        texto_resumo = (
+            f"{pior['almoxarifado']} tem a menor acurácia item a item do mês ({_fmt_pct(pior.get('item_a_item_pct'))}) "
+            f"— maior prioridade de reconferência. O maior exemplo de falta é {faltas[0]['sku']} "
+            f"({(faltas[0].get('descricao') or '—')[:30]}, -{_fmt_moeda(faltas[0]['valor'])})."
+        )
+    else:
+        texto_resumo = "Sem dado suficiente neste recorte para fechar a leitura do ciclo."
+    y_zona_segura_fim = ALTURA_IN - 0.55
+    altura_resumo = min(max(0.75, _altura_necessaria_caixa_leitura(texto_resumo, largura_cheia, 11.5)),
+                         max(0.5, y_zona_segura_fim - y_resumo))
+    _caixa_leitura(slide, MARGEM_IN, y_resumo, largura_cheia, altura_resumo, "Resumo do Ciclo — Painel de Inventário",
+                   texto_resumo, cor_fundo=OFF_WHITE, tamanho_texto=11.5)
+
+    y_rodape = y_resumo + altura_resumo + 0.05
+    if y_rodape < y_zona_segura_fim:
+        _texto(slide, MARGEM_IN, y_rodape, largura_cheia, 0.28,
+               "\"Resultado\" por almoxarifado e os dois rankings cobrem só os itens que entraram na lista de "
+               "concentração de valor (até 50 maiores por valor do mês) — não o universo completo de itens divergentes.",
+               tamanho=8.5, italico=True, cor=CINZA_TEXTO)
+    return slide
+
+
+def _slide_acuracia_ponderada_iap(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Acurácia Ponderada — por Valor (IAP), slide próprio (22/08/2026,
+    mockup aprovado v5 — separa o que antes era um único slide IAQ+IAP em
+    dois, cada um com sua própria evolução/tendência, resultado por
+    almoxarifado e ranking financeiro em R$)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Acurácia Ponderada — por Valor (IAP)", mes_label, pagina,
+               "Leitura ponderada pelo valor financeiro do inventário, fechamento por almoxarifado e ranking financeiro")
 
     comp = d["comparativo_acuracia"]
+    evolucao = d["evolucao_ponderada"][-6:]
+    ultimo = evolucao[-1] if evolucao else {}
     gap = comp.get("gap_item_vs_iap_pp")
+    delta_mom = ultimo.get("variacao_iap_pp")
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_pct(comp.get("item_a_item_pct")), "rotulo": "Item a Item"},
-        {"valor": _fmt_pct(comp.get("iaq_pct")), "rotulo": "IAQ (por Quantidade)"},
         {"valor": _fmt_pct(comp.get("iap_pct")), "rotulo": "IAP (por Valor)", "cor": VERDE_AMAZONIA},
+        {"valor": (f"R$ {_fmt_num(ultimo.get('valor_mod'), 2)}" if ultimo.get("valor_mod") is not None else "—"),
+         "rotulo": "Valor do Inventário em Jogo", "contexto": "Valor Mod — sobra vs. falta"},
         {"valor": _fmt_pct(abs(gap)) if gap is not None else "—", "rotulo": "Distorção (Item vs. IAP)",
          "cor": COR_ATENCAO if (gap is not None and abs(gap) >= 3) else COR_SUCESSO},
+        {"valor": (f"+{_fmt_pct(delta_mom)}" if delta_mom is not None and delta_mom >= 0 else _fmt_pct(delta_mom)),
+         "rotulo": "Variação do IAP (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
+         "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
+         "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
     ], altura=1.25)
 
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    if len(evolucao) >= 2:
+        categorias = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in evolucao]
+        valores_iap = [item.get("iap_pct") or 0 for item in evolucao]
+        tendencia = _tendencia_linear([item.get("iap_pct") for item in evolucao])
+        _texto(slide, MARGEM_IN, 3.05, largura_cheia - 3.2, 0.26, "EVOLUÇÃO MENSAL (MOM) — IAP", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        if tendencia["rotulo"]:
+            _texto(slide, MARGEM_IN + largura_cheia - 3.2, 3.05, 3.2, 0.26, tendencia["rotulo"], tamanho=9,
+                   negrito=True, cor=tendencia["cor"], alinhamento=PP_ALIGN.RIGHT)
+        _grafico_categoria(slide, MARGEM_IN, 3.33, largura_cheia, 1.45, categorias, "IAP (por valor)", valores_iap, cor_serie=AZUL_INSTITUCIONAL)
+        y_tabelas = 3.33 + 1.45 + 0.15
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 3.05, largura_cheia, 1.60, "Evolução do IAP",
+                       "Sem histórico suficiente de fechamentos ainda.")
+        y_tabelas = 3.05 + 1.60 + 0.15
+
+    itens_conc = d["concentracao_valor"].get("itens", [])
+    y_fim_tabelas, pior, faltas, sobras = _tabelas_almoxarifado_e_top10(
+        slide, y_tabelas, itens_conc, d["comparativo_por_almoxarifado"], "iap_pct", "IAP",
+        ordenar_por="valor", rotulo_qtd_ou_valor="Valor",
+    )
+    y_rodape = y_fim_tabelas + 0.08
+    if y_rodape < ALTURA_IN - 0.42:
+        _texto(slide, MARGEM_IN, y_rodape, largura_cheia, 0.26,
+               "IAP pondera cada divergência pelo valor financeiro do SKU. Ranking e resultado por almoxarifado "
+               "cobrem só os itens da lista de concentração de valor (até 50 maiores por valor do mês).",
+               tamanho=8.5, italico=True, cor=CINZA_TEXTO)
+    return slide
+
+
+def _slide_acuracia_ponderada_iaq(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Acurácia Ponderada — por Quantidade (IAQ), slide próprio (22/08/2026,
+    mockup aprovado v5 — espelha o slide de IAP, mas ponderando/ordenando
+    por unidades, não por R$)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Acurácia Ponderada — por Quantidade (IAQ)", mes_label, pagina,
+               "Leitura ponderada pela quantidade de itens do inventário, fechamento por almoxarifado e ranking por unidades")
+
+    comp = d["comparativo_acuracia"]
     evolucao = d["evolucao_ponderada"][-6:]
-    if evolucao:
+    ultimo = evolucao[-1] if evolucao else {}
+    gap_iaq = None
+    if comp.get("item_a_item_pct") is not None and comp.get("iaq_pct") is not None:
+        gap_iaq = round(comp["item_a_item_pct"] - comp["iaq_pct"], 2)
+    delta_mom = ultimo.get("variacao_iaq_pp")
+    # Nota: o mockup aprovado v5 tinha uma 2ª métrica "Quantidade em Jogo" (Qtd.
+    # Mod, equivalente por unidades ao Valor Mod do IAP) — mas o próprio mockup
+    # já marcava esse número como "ilustrativo", e não existe hoje um cálculo
+    # real equivalente no backend (dashboard_evolucao_ponderada_mensal só tem
+    # valor_mod, em R$, não uma versão em unidades). Em vez de inventar o
+    # número, o 2º cartão aqui usa "Itens Divergentes no Mês" (kpis_inventario,
+    # já real e coerente com uma leitura por quantidade).
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_pct(comp.get("iaq_pct")), "rotulo": "IAQ (por Quantidade)"},
+        {"valor": _fmt_num(d["kpis_inventario"].get("total_divergentes")), "rotulo": "Itens Divergentes no Mês"},
+        {"valor": _fmt_pct(abs(gap_iaq)) if gap_iaq is not None else "—", "rotulo": "Distorção (Item vs. IAQ)",
+         "cor": COR_ATENCAO if (gap_iaq is not None and abs(gap_iaq) >= 3) else COR_SUCESSO},
+        {"valor": (f"+{_fmt_pct(delta_mom)}" if delta_mom is not None and delta_mom >= 0 else _fmt_pct(delta_mom)),
+         "rotulo": "Variação do IAQ (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
+         "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
+         "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
+    ], altura=1.25)
+
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    if len(evolucao) >= 2:
         categorias = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in evolucao]
         valores_iaq = [item.get("iaq_pct") or 0 for item in evolucao]
-        valores_iap = [item.get("iap_pct") or 0 for item in evolucao]
-        # Gráfico encolhido (era 2.55) pra abrir espaço suficiente pra caixa de Leitura MoM
-        # abaixo não truncar em meses com frase mais longa (20/08/2026) - ver altura dinâmica
-        # da caixa logo abaixo, calculada a partir do texto real em vez de um valor fixo.
-        altura_grafico = 2.05
-        _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.28, "IAQ E IAP MÊS A MÊS", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria_multi(
-            slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, altura_grafico,
-            categorias, [("IAQ (quantidade)", valores_iaq, VERDE_AMAZONIA), ("IAP (valor)", valores_iap, AZUL_INSTITUCIONAL)],
-        )
-
-        # Análise MoM detalhada (20/08/2026, pedido do usuário: "mais exemplos do período") -
-        # variação ponto a ponto do ÚLTIMO mês frente ao anterior, já calculada por
-        # dashboard_evolucao_ponderada_mensal, incluindo o "Valor Mod" (impacto financeiro
-        # total do mês, sobra e falta juntos) - leitura em R$, não só em %.
-        ultimo = evolucao[-1]
-        frases_mom = []
-        if ultimo.get("variacao_iap_pp") is not None:
-            direcao = "melhorou" if ultimo["variacao_iap_pp"] > 0 else ("piorou" if ultimo["variacao_iap_pp"] < 0 else "manteve")
-            frases_mom.append(f"o IAP {direcao} {_fmt_pct(abs(ultimo['variacao_iap_pp']))} frente ao mês anterior")
-        if ultimo.get("variacao_iaq_pp") is not None:
-            direcao_q = "melhorou" if ultimo["variacao_iaq_pp"] > 0 else ("piorou" if ultimo["variacao_iaq_pp"] < 0 else "manteve")
-            frases_mom.append(f"o IAQ {direcao_q} {_fmt_pct(abs(ultimo['variacao_iaq_pp']))}")
-        if ultimo.get("valor_mod") is not None:
-            frases_mom.append(f"R$ {_fmt_num(ultimo['valor_mod'], 2)} em jogo neste mês entre sobra e falta (Valor Mod)")
-        texto_mom = (
-            ("Este mês, " + ", ".join(frases_mom) + ". ") if frases_mom else ""
-        ) + (
-            "O IAP pondera cada divergência pelo valor financeiro do SKU — quando ele fica bem abaixo do item a item, "
-            "poucos itens de alto valor estão puxando o risco financeiro para baixo mesmo com a maioria dos SKUs certa."
-        )
-        y_leitura_mom = 3.35 + altura_grafico + 0.20
-        y_zona_segura_fim = ALTURA_IN - 0.55  # reserva o rodapé (número de página)
-        largura_caixa_mom = LARGURA_IN - 2 * MARGEM_IN
-        altura_leitura_mom = min(
-            max(1.05, _altura_necessaria_caixa_leitura(texto_mom, largura_caixa_mom, 11.5)),
-            y_zona_segura_fim - y_leitura_mom,
-        )
-        _caixa_leitura(slide, MARGEM_IN, y_leitura_mom, largura_caixa_mom, altura_leitura_mom, "Leitura MoM", texto_mom,
-                       cor_fundo=OFF_WHITE, tamanho_texto=11.5)
+        tendencia = _tendencia_linear([item.get("iaq_pct") for item in evolucao])
+        _texto(slide, MARGEM_IN, 3.05, largura_cheia - 3.2, 0.26, "EVOLUÇÃO MENSAL (MOM) — IAQ", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        if tendencia["rotulo"]:
+            _texto(slide, MARGEM_IN + largura_cheia - 3.2, 3.05, 3.2, 0.26, tendencia["rotulo"], tamanho=9,
+                   negrito=True, cor=tendencia["cor"], alinhamento=PP_ALIGN.RIGHT)
+        _grafico_categoria(slide, MARGEM_IN, 3.33, largura_cheia, 1.45, categorias, "IAQ (quantidade)", valores_iaq, cor_serie=VERDE_AMAZONIA)
+        y_tabelas = 3.33 + 1.45 + 0.15
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.7, "Evolução Ponderada",
-                       "Sem histórico suficiente de fechamentos para montar a série mensal do IAP ainda.")
+        _caixa_leitura(slide, MARGEM_IN, 3.05, largura_cheia, 1.60, "Evolução do IAQ",
+                       "Sem histórico suficiente de fechamentos ainda.")
+        y_tabelas = 3.05 + 1.60 + 0.15
+
+    itens_conc = d["concentracao_valor"].get("itens", [])
+    y_fim_tabelas, pior, faltas, sobras = _tabelas_almoxarifado_e_top10(
+        slide, y_tabelas, itens_conc, d["comparativo_por_almoxarifado"], "iaq_pct", "IAQ",
+        ordenar_por="quantidade", rotulo_qtd_ou_valor="Qtd.",
+    )
+    y_rodape = y_fim_tabelas + 0.08
+    if y_rodape < ALTURA_IN - 0.42:
+        _texto(slide, MARGEM_IN, y_rodape, largura_cheia, 0.26,
+               "IAQ pondera cada divergência pela quantidade de itens do SKU (não pelo valor). Ranking por unidades "
+               "calculado sobre os 50 maiores itens POR VALOR do mês — pode omitir um item de alto volume e baixo "
+               "valor unitário fora dessa lista.",
+               tamanho=8.5, italico=True, cor=CINZA_TEXTO)
     return slide
 
 
 def _slide_acuracia_ponderada_detalhe(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Segundo slide de Acurácia Ponderada (20/08/2026, pedido do usuário):
-    curva de Pareto (concentração de valor) e distribuição por magnitude da
-    divergência, com exemplos REAIS do mês (não do histórico inteiro) - ver
-    _coletar_dados_mbr, concentracao_valor/distribuicao_magnitude já
-    recortados por `mes`."""
+    """Segundo slide de Acurácia Ponderada (20/08/2026, pedido do usuário;
+    ampliado em 22/08/2026, mockup aprovado v8): curva de Pareto agora com
+    20 SKUs individuais + uma categoria agregada pro resto da cauda ("de
+    ponta a ponta" até 100% — o ponto agregado usa 100% de propósito, já
+    que por definição inclui todo o restante dos itens divergentes, sem
+    precisar do valor exato de cada um deles), e uma tabela Top 10
+    detalhada (Almoxarifado/Qtd. Sistêmica/Qtd. Conferência/Dif./Valor/%
+    Acum. — todos campos que já vêm de dashboard_concentracao_valor, sem
+    chamada nova ao backend) no lugar da versão anterior de 3 linhas."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Acurácia Ponderada — Concentração de Risco", mes_label, pagina,
@@ -1958,31 +2228,31 @@ def _slide_acuracia_ponderada_detalhe(prs: Presentation, mes_label: str, pagina:
 
     pareto = d["concentracao_valor"]
     largura_esquerda = 7.3
-    itens_pareto = pareto.get("itens", [])[:10]
+    itens_pareto = pareto.get("itens", [])[:20]
+    total_divergentes = pareto.get("total_itens_divergentes") or 0
     if itens_pareto:
         categorias = [item["sku"] for item in itens_pareto]
         valores_pct_acum = [item["pct_valor_acumulado"] for item in itens_pareto]
-        _texto(slide, MARGEM_IN, 1.65, largura_esquerda, 0.28, "CURVA DE PARETO — % DO VALOR ACUMULADO (TOP 10 SKUS DO MÊS)",
-               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, MARGEM_IN, 1.95, largura_esquerda, 2.55, categorias, "% acumulado", valores_pct_acum,
-                            tipo=XL_CHART_TYPE.LINE_MARKERS, cor_serie=VERDE_AMAZONIA)
+        resto = total_divergentes - len(itens_pareto)
+        if resto > 0:
+            categorias.append(f"+{_fmt_num(resto)} itens")
+            valores_pct_acum.append(100.0)
+        _texto(slide, MARGEM_IN, 1.65, largura_esquerda, 0.24,
+               f"CURVA DE PARETO — % DO VALOR ACUMULADO (TOP {len(itens_pareto)} SKUS + CAUDA)",
+               tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, MARGEM_IN, 1.93, largura_esquerda, 1.85, categorias, "% acumulado", valores_pct_acum,
+                            tipo=XL_CHART_TYPE.LINE_MARKERS, cor_serie=VERDE_AMAZONIA, formato_numero='0"%"')
 
         top_n_pct = pareto.get("top_n_pct_do_valor")
         top_n = pareto.get("top_n")
         linha_pareto_texto = (
             f"Os {top_n} maiores SKUs divergentes concentram {_fmt_pct(top_n_pct)} do valor em risco do mês "
-            f"({_fmt_moeda(pareto.get('valor_total'))} no total, {_fmt_num(pareto.get('total_itens_divergentes'))} itens divergentes)."
+            f"({_fmt_moeda(pareto.get('valor_total'))} no total, {_fmt_num(total_divergentes)} itens divergentes)."
             if top_n_pct is not None else "Concentração de valor não disponível neste recorte."
         )
-        _texto(slide, MARGEM_IN, 4.60, largura_esquerda, 0.5, linha_pareto_texto, tamanho=10.5, cor=CINZA_TEXTO)
-
-        top_3 = itens_pareto[:3]
-        linhas_top3 = [[it["sku"], (it.get("descricao") or "—")[:24], _fmt_moeda(it["valor"]), _fmt_pct(it["pct_valor_acumulado"])] for it in top_3]
-        _texto(slide, MARGEM_IN, 5.15, largura_esquerda, 0.26, "3 MAIORES EXEMPLOS DO MÊS", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _tabela(slide, MARGEM_IN, 5.42, largura_esquerda, 1.55, ["SKU", "Descrição", "Valor", "% Acum."], linhas_top3,
-                larguras_relativas=[1.1, 2.6, 1.1, 0.9], tamanho_fonte=10.5)
+        _texto(slide, MARGEM_IN, 3.83, largura_esquerda, 0.45, linha_pareto_texto, tamanho=10, cor=CINZA_TEXTO)
     else:
-        _caixa_leitura(slide, MARGEM_IN, 1.65, largura_esquerda, 5.3, "Curva de Pareto",
+        _caixa_leitura(slide, MARGEM_IN, 1.65, largura_esquerda, 2.6, "Curva de Pareto",
                        "Sem item divergente com custo cadastrado neste recorte para montar a curva de concentração de valor.")
 
     x_direita = MARGEM_IN + largura_esquerda + 0.35
@@ -1993,24 +2263,100 @@ def _slide_acuracia_ponderada_detalhe(prs: Presentation, mes_label: str, pagina:
         categorias_mag = [f["faixa"] for f in faixas]
         valores_mag = [f["quantidade_itens"] for f in faixas]
         cores_mag = [COR_SUCESSO, COR_INFO, COR_ATENCAO, COR_ERRO]
-        _texto(slide, x_direita, 1.65, largura_direita, 0.28, "DISTRIBUIÇÃO POR MAGNITUDE (ITENS)", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, x_direita, 1.95, largura_direita, 2.55, categorias_mag, "Itens", valores_mag,
+        _texto(slide, x_direita, 1.65, largura_direita, 0.24, "DISTRIBUIÇÃO POR MAGNITUDE (ITENS)", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_categoria(slide, x_direita, 1.93, largura_direita, 1.85, categorias_mag, "Itens", valores_mag,
                             cores_pontos=cores_mag[:len(valores_mag)], formato_numero='0')
         pct_pequenas = magnitude.get("pct_divergencias_pequenas")
         texto_magnitude = (
-            f"{_fmt_pct(pct_pequenas)} das divergências do mês são pequenas (0 a 5 unidades) — a métrica item a item trata "
-            "essas igual às grandes, mesmo pesando muito menos no risco financeiro real."
+            f"{_fmt_pct(pct_pequenas)} das divergências do mês são pequenas (0 a 5 unidades) — a métrica item a item "
+            "trata essas igual às grandes, mesmo pesando muito menos no risco financeiro real. Detalhamento por "
+            "faixa no próximo slide."
             if pct_pequenas is not None else "Sem divergência neste recorte para distribuir por magnitude."
         )
-        _texto(slide, x_direita, 4.60, largura_direita, 0.65, texto_magnitude, tamanho=10.5, cor=CINZA_TEXTO)
-
-        linhas_faixas = [[f["faixa"], _fmt_num(f["quantidade_itens"]), _fmt_moeda(f["valor_total"])] for f in faixas]
-        _texto(slide, x_direita, 5.35, largura_direita, 0.26, "VALOR POR FAIXA", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _tabela(slide, x_direita, 5.62, largura_direita, 1.35, ["Faixa", "Itens", "Valor"], linhas_faixas,
-                larguras_relativas=[1.6, 0.9, 1.3], tamanho_fonte=10.5)
+        _texto(slide, x_direita, 3.83, largura_direita, 0.45, texto_magnitude, tamanho=10, cor=CINZA_TEXTO)
     else:
-        _caixa_leitura(slide, x_direita, 1.65, largura_direita, 5.3, "Distribuição por magnitude",
+        _caixa_leitura(slide, x_direita, 1.65, largura_direita, 2.6, "Distribuição por magnitude",
                        "Sem divergência neste recorte para distribuir por magnitude.")
+
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    y_tabela_titulo = 4.38
+    _texto(slide, MARGEM_IN, y_tabela_titulo, largura_cheia, 0.24, "TOP 10 MAIORES EXEMPLOS DO MÊS",
+           tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    top10 = pareto.get("itens", [])[:10]
+    if top10:
+        linhas_top10 = [
+            [
+                it["sku"], (it.get("descricao") or "—")[:22], it.get("almoxarifado") or "—",
+                _fmt_num(it.get("qtd_sistema")), _fmt_num(it.get("qtd_contagem")),
+                (_fmt_num(it.get("divergencia_qtd")), COR_ERRO if (it.get("divergencia_qtd") or 0) < 0 else COR_SUCESSO, False),
+                _fmt_moeda(it["valor"]), _fmt_pct(it["pct_valor_acumulado"]),
+            ]
+            for it in top10
+        ]
+        y_zona_segura_fim = ALTURA_IN - 0.42
+        _tabela(slide, MARGEM_IN, y_tabela_titulo + 0.26, largura_cheia, y_zona_segura_fim - (y_tabela_titulo + 0.26),
+                ["SKU", "Descrição", "Almox.", "Qtd. Sist.", "Qtd. Conf.", "Dif.", "Valor", "% Acum."], linhas_top10,
+                larguras_relativas=[1.05, 2.1, 1.3, 0.95, 0.95, 0.8, 1.1, 0.85], tamanho_fonte=9.5)
+    else:
+        _texto(slide, MARGEM_IN, y_tabela_titulo + 0.30, largura_cheia, 0.4,
+               "Sem exemplo disponível neste recorte.", tamanho=10.5, cor=CINZA_TEXTO)
+    return slide
+
+
+def _slide_acuracia_ponderada_faixas(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Detalhamento por Faixa de Magnitude (22/08/2026, mockup aprovado v8) —
+    Top 5 por valor dentro de cada faixa (0-5un/5-20un/20-100un/mais de 100
+    un.), lado a lado, via dashboard_itens_por_magnitude (função já
+    existente e já usada pelo duplo-clique na tela — uma chamada por faixa,
+    ver _coletar_dados_mbr/magnitude_por_faixa_itens)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    # Título encurtado (22/08/2026): a versão completa ("... de Magnitude")
+    # passa de ~45 caracteres e quebra em 2 linhas dentro da caixa de título
+    # do cabeçalho (27pt/9.7in), invadindo a caixa de subtítulo de posição
+    # fixa - "de Magnitude" já fica implícito no subtítulo e nos rótulos das
+    # 4 colunas (0 a 5 un./5 a 20 un./etc.). Também alinha com o nome já
+    # usado na lista de itens da capa de seção (_secao, ver montar_pptx_mbr).
+    _cabecalho(slide, "Acurácia Ponderada — Detalhamento por Faixa", mes_label, pagina,
+               "Top 5 por valor dentro de cada faixa — onde o risco financeiro está dentro de cada grupo de tamanho")
+
+    faixas_itens = d.get("magnitude_por_faixa_itens", [])
+    faixas_resumo = {f["faixa"]: f for f in d["distribuicao_magnitude"].get("faixas", [])}
+    cores_faixa = [COR_SUCESSO, COR_INFO, COR_ATENCAO, COR_ERRO]
+
+    n = len(faixas_itens) or 1
+    largura_total = LARGURA_IN - 2 * MARGEM_IN
+    gap = 0.18
+    largura_col = (largura_total - gap * (n - 1)) / n
+    y_topo = 1.65
+    y_zona_segura_fim = ALTURA_IN - 0.42
+
+    algum_item = False
+    x = MARGEM_IN
+    for idx, bloco in enumerate(faixas_itens):
+        faixa_nome = bloco.get("faixa", "—")
+        resumo_faixa = faixas_resumo.get(faixa_nome, {})
+        cor_faixa = cores_faixa[idx % len(cores_faixa)]
+        _texto(slide, x, y_topo, largura_col, 0.24, faixa_nome.upper(), tamanho=10, negrito=True, cor=cor_faixa)
+        subtitulo_faixa = (
+            f"{_fmt_num(resumo_faixa.get('quantidade_itens'))} itens · {_fmt_moeda(resumo_faixa.get('valor_total'))} no total"
+            if resumo_faixa else ""
+        )
+        _texto(slide, x, y_topo + 0.24, largura_col, 0.22, subtitulo_faixa, tamanho=9, cor=CINZA_TEXTO)
+        itens_faixa = sorted(bloco.get("itens", []), key=lambda i: i.get("valor") or 0, reverse=True)[:5]
+        if itens_faixa:
+            algum_item = True
+            linhas = [[(it.get("descricao") or it.get("sku") or "—")[:22], _fmt_moeda(it.get("valor"))] for it in itens_faixa]
+            _tabela(slide, x, y_topo + 0.50, largura_col, y_zona_segura_fim - (y_topo + 0.50),
+                    ["Descrição", "Valor"], linhas, larguras_relativas=[2.0, 1.0], tamanho_fonte=9.5)
+        else:
+            _caixa_leitura(slide, x, y_topo + 0.50, largura_col, y_zona_segura_fim - (y_topo + 0.50), "Sem itens",
+                           "Nenhum item divergente nesta faixa neste recorte.", tamanho_texto=9.5)
+        x += largura_col + gap
+
+    if not faixas_itens or not algum_item:
+        _caixa_leitura(slide, MARGEM_IN, y_topo, largura_total, y_zona_segura_fim - y_topo,
+                       "Detalhamento por Faixa", "Sem divergência neste recorte para detalhar por faixa de magnitude.")
     return slide
 
 
@@ -2327,14 +2673,17 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
          "rotulo": "Ganho desde a Implantação", "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
     ], altura=1.25)
 
+    # Altura da seção de topo encolhida (era 3.35/3.65) pra abrir espaço pra
+    # tabela "Resultado por Almoxarifado" abaixo (22/08/2026, mockup aprovado v9).
+    altura_secao_topo = 2.10
     largura_esquerda = 7.5
     if len(evolucao) >= 2:
         categorias = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in evolucao]
         valores = [item.get("pct_acuracia") or 0 for item in evolucao]
         _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "ACURÁCIA DA RECONCILIAÇÃO — DESDE A IMPLANTAÇÃO", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, MARGEM_IN, 3.35, largura_esquerda, 3.35, categorias, "Acurácia", valores, cor_serie=VERDE_AMAZONIA)
+        _grafico_categoria(slide, MARGEM_IN, 3.35, largura_esquerda, altura_secao_topo, categorias, "Acurácia", valores, cor_serie=VERDE_AMAZONIA)
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, largura_esquerda, 3.65, "Evolução",
+        _caixa_leitura(slide, MARGEM_IN, 3.05, largura_esquerda, altura_secao_topo + 0.30, "Evolução",
                        "Ainda só há um mês de histórico monitorado - a série de evolução aparece a partir do segundo mês de dados.")
 
     x_direita = MARGEM_IN + largura_esquerda + 0.35
@@ -2355,8 +2704,35 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
             )
     else:
         texto_impacto = "Ainda não há dado suficiente pra comparar com o ponto de partida da implantação."
-    _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.65, "Impacto da Implantação", texto_impacto,
+    _caixa_leitura(slide, x_direita, 3.05, largura_direita, altura_secao_topo + 0.30, "Impacto da Implantação", texto_impacto,
                    cor_fundo=OFF_WHITE, tamanho_texto=12)
+
+    # Resultado por Almoxarifado (22/08/2026, mockup aprovado v9) - quebra do
+    # mês já real (movimentados_router.dashboard_por_almoxarifado, já existia,
+    # só não estava plugada no MBR ainda).
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    y_tabela = 3.35 + altura_secao_topo + 0.16
+    _texto(slide, MARGEM_IN, y_tabela, largura_cheia, 0.22, "RESULTADO POR ALMOXARIFADO (MOVIMENTADOS)",
+           tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    por_almox = d.get("movimentados_por_almoxarifado", [])
+    y_zona_segura_fim = ALTURA_IN - 0.42
+    if por_almox:
+        ordenado = sorted(por_almox, key=lambda x: x.get("pct_acuracia") if x.get("pct_acuracia") is not None else 999)
+        linhas_almox = []
+        for item in ordenado[:7]:
+            divergentes = (item.get("itens_analisados") or 0) - (item.get("itens_sem_divergencia") or 0)
+            pct = item.get("pct_acuracia")
+            _, cor_pct = _status_maior_melhor(pct, *_LIMIARES["acuracia"])
+            linhas_almox.append([
+                item["almoxarifado"], _fmt_num(item.get("itens_analisados")), _fmt_num(divergentes),
+                (_fmt_pct(pct), cor_pct, True),
+            ])
+        _tabela(slide, MARGEM_IN, y_tabela + 0.24, largura_cheia, max(0.5, y_zona_segura_fim - (y_tabela + 0.24)),
+                ["Almoxarifado", "Itens Analisados", "Itens c/ Divergência", "Acurácia"], linhas_almox,
+                larguras_relativas=[2.0, 1.3, 1.3, 1.0], tamanho_fonte=9.5)
+    else:
+        _texto(slide, MARGEM_IN, y_tabela + 0.28, largura_cheia, 0.3,
+               "Sem quebra por almoxarifado neste recorte.", tamanho=10, cor=CINZA_TEXTO)
     return slide
 
 
@@ -3330,13 +3706,23 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_resumo_executivo(prs, mes_label, _pag(), dados)
     _slide_scorecard(prs, mes_label, _pag(), dados)
 
+    # 22/08/2026 (mockups aprovados v4/v5/v8): Painel de Inventário e Acurácia
+    # Ponderada ganharam slide de detalhamento financeiro/tendência cada, e
+    # Acurácia Ponderada foi de 1 slide combinado (IAQ+IAP) pra 2 dedicados
+    # (IAP, IAQ) + o novo "Detalhamento por Faixa de Magnitude" - a seção foi
+    # de 5 pra 8 slides de indicador.
     _secao(2, "Inventários e Movimentados",
            "Acurácia de fechamento, ponderação por valor e reconciliação diária sistema x físico.",
-           ["Painel de Inventário", "Acurácia Ponderada", "Acurácia Ponderada — Concentração de Risco",
+           ["Painel de Inventário", "Painel de Inventário — Detalhamento Financeiro",
+            "Acurácia Ponderada (IAP)", "Acurácia Ponderada (IAQ)",
+            "Acurácia Ponderada — Concentração de Risco", "Acurácia Ponderada — Detalhamento por Faixa",
             "Controle de Movimentados", "Scorecard de Inventário por Almoxarifado"])
     _slide_painel_inventario(prs, mes_label, _pag(), dados)
-    _slide_acuracia_ponderada(prs, mes_label, _pag(), dados)
+    _slide_painel_inventario_detalhe(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada_iap(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada_iaq(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_detalhe(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada_faixas(prs, mes_label, _pag(), dados)
     _slide_controle_movimentados(prs, mes_label, _pag(), dados)
     _slide_scorecard_inventario_almoxarifado(prs, mes_label, _pag(), dados)
 

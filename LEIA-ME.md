@@ -1,21 +1,19 @@
-# atlas_fix_mbr_secoes_e_fechamento.zip (21/08/2026)
+# atlas_fix_mbr_grupo1.zip (21/08/2026)
 
-## Por que o relatório não mudava até agora
+## Antes de aplicar — o passo que faltava nas entregas anteriores
 
-Nada disso é bug de código: o MBR que estava sendo gerado continuava vindo do
-código antigo porque nenhuma das entregas anteriores desta sessão chegou a
-alcançar o servidor real. O Atlas roda no Render, e o Render só passa a usar
-código novo depois de um deploy explícito (subir este zip e redeployar) — os
-arquivos que te mandei antes soltos (.py e depois via device bridge, na pasta
-local `Atlas\Atlas`) nunca chegaram lá. Foi isso, não uma falha na correção
-em si. A partir de agora sigo o mesmo padrão já usado nas entregas anteriores
-deste projeto (zip + LEIA-ME).
+O Atlas roda no Render (nuvem), e o Render só passa a usar código novo depois
+de um deploy explícito — subir o zip e redeployar, do mesmo jeito que já é
+feito com os pacotes `atlas-vNN.zip`. Arquivo enviado solto no chat, ou
+gravado na sua pasta local `Atlas\Atlas`, não chega ao servidor que gera o
+MBR. Se o próximo relatório gerado continuar idêntico ao anterior, o passo do
+deploy no Render é o primeiro lugar a checar.
 
 ## Como aplicar
 
-1. Suba este zip e faça o deploy do backend no Render (mesmo processo já usado
-   nos pacotes anteriores, ex. `atlas-v19.zip`).
-2. Depois do deploy, gere o MBR de novo escolhendo o fechamento de Julho e
+1. Suba este zip e faça o deploy do backend no Render (mesmo processo já
+   usado nos pacotes anteriores).
+2. Depois do deploy, gere o MBR de novo escolhendo o fechamento de julho e
    confira os pontos abaixo.
 
 ## O que está dentro
@@ -24,51 +22,60 @@ deste projeto (zip + LEIA-ME).
 - `backend/app/dashboards_externos_extrator.py`
 - `backend/app/routers/divergencias_router.py`
 
-## Checklist do que foi aprovado e já está implementado
+## O que foi implementado neste pacote (Grupo 1 — dado real já existente no backend)
 
-**Correção de bug — parâmetro de fechamento**
-Todas as séries de evolução mensal usadas no MBR (Painel de Inventário,
-Acurácia Ponderada, Movimentados, Transferências, Passivos) agora são
-cortadas no mês de fechamento escolhido — nenhuma mais mostra o mês corrente
-quando você gera um relatório de mês passado. Cobertura de Conferência e o
-Scorecard por Almoxarifado também passaram a respeitar o mês escolhido.
+Isto cobre o que foi aprovado nos mockups v4/v5/v8/v9/v10/v11 e que já tem uma
+fonte de dado real e confiável no Atlas (sem precisar inventar número nem
+reconstruir gráfico a partir de SVG). O que ficou de fora está listado na
+seção "O que ainda não entrou" abaixo — nenhum item foi descartado, só
+priorizado.
 
-**Estrutura de seções**
-FEFO e Testes Industriais deixam de ter slide de apresentação (divisória)
-próprio — o conteúdo passa a fazer parte da seção "Mapeamento de Passivos e
-Riscos". O relatório passa de 7 para 5 seções.
+**Correção de bug — parâmetro de fechamento** (já confirmada nas entregas
+anteriores, reforçada aqui): todas as séries mensais usadas no MBR são
+cortadas no mês de fechamento escolhido.
 
-**Resumo Executivo — linha de KPIs**
-IAP (Acurácia Ponderada por Valor) no lugar da Acurácia item a item, com a
-variação do mês anterior. Baixas Operacionais em pacote (com o total do
-prejuízo) no lugar de Passivos Mapeados isolado — cai para o dado nativo se o
-dashboard externo não tiver sido enviado. Risco de Validade vindo do Farol de
-Shelf externo (perda potencial total) — mesma lógica de fallback nativo.
-Controle de Movimentados sem mudança de posição.
+**Painel de Inventário**
+- Selo de tendência (melhora/piora/estável) ao lado do gráfico de evolução da
+  acurácia, calculado por regressão linear simples sobre os últimos meses.
+- Novo slide "Painel de Inventário — Detalhamento Financeiro": tabela por
+  almoxarifado + Top Faltas + Top Sobras + resumo do ciclo.
 
-**Scorecard do Mês**
-Linha de passivos passa a se chamar "Baixas Operacionais (Pacote)" quando o
-dashboard externo existir. Controle de Movimentados ganha um status "Em
-avanço" quando a tendência real de vários meses é de melhora — evita
-contradizer o texto do Resumo Executivo.
+**Acurácia Ponderada**
+- Slide único (IAQ+IAP) virou 2 slides dedicados — "Acurácia Ponderada (IAP)"
+  e "Acurácia Ponderada (IAQ)" — cada um com KPI, gráfico de evolução, selo de
+  tendência e as mesmas 3 tabelas (Almoxarifado / Top Faltas / Top Sobras).
+- "Concentração de Risco": curva de Pareto ampliada de 10 para 20 SKUs (+
+  ponto de cauda "+N itens"), e a tabela de exemplos ampliada de 3 para
+  10 linhas, 8 colunas (SKU, Descrição, Almoxarifado, Qtd. Sistema, Qtd.
+  Conferida, Diferença, Valor, % Acumulado).
+- Novo slide "Detalhamento por Faixa": Top 5 por valor dentro de cada faixa
+  de magnitude (0-5 un. / 5-20 un. / 20-100 un. / mais de 100 un.), lado a
+  lado.
 
-**Farol de Shelf Life externo**
-Reestruturado em 4 cartões (Vencidos / 0-30 / 31-60 / 61-90 dias) com o valor
-exato de cada faixa, mais 3 tabelas Top-5 lado a lado. Os dois gráficos
-("Risco por Almoxarifado" e "Custo por Grupo e Status") não entraram porque a
-fonte só existe como SVG no HTML exportado — sem tabela ou JSON por trás, não
-dava pra extrair com confiança. Isso está documentado no próprio código.
+**Controle de Movimentados**
+- Nova tabela "Resultado por Almoxarifado (Movimentados)", ordenada do pior
+  para o melhor por acurácia da reconciliação.
 
-**Baixas Operacionais externo e Recuperação de Shelf**
-Mesma decisão: os gráficos mensais dessas duas telas também só existem como
-SVG na exportação — não foram adicionados como gráfico nativo no MBR, e o
-motivo está no docstring de cada slide. O equivalente nativo já mostrado no
-MBR (slide "Passivos — Evolução") ganhou um texto novo com a variação % mês a
-mês.
+Todos os itens acima foram validados com dados sintéticos (populados e vazios)
+sem erro, e inspecionados visualmente slide a slide — sem estouro de texto,
+sobreposição ou corte.
 
-**Dispersão de Ficha Técnica**
-Novo gráfico "Tendência Financeira" (Perda × Economia × Impacto Líquido,
-últimos 6 meses).
+## O que ainda não entrou (Grupo 2 — fica para o próximo pacote)
 
-Nenhum destes itens tem crítica pendente — todos foram aprovados na rodada de
-mockups. O único passo que falta é o deploy.
+Estes itens dependem de coisas que não têm dado estruturado hoje, e por isso
+exigem trabalho adicional antes de entrar com segurança:
+
+- **Farol de Shelf Life** — os 2 gráficos "Risco por Almoxarifado" e "Custo
+  por Grupo e Status": só existem como `<svg>` no HTML exportado da tela
+  externa, sem tabela ou JSON por trás — precisaria reconstruir a geometria
+  do SVG para virar gráfico nativo, o que ainda não foi feito.
+- **Recuperação de Shelf** — gráfico de evolução mensal: mesma limitação (só
+  SVG na exportação).
+- **Baixas Operacionais externo (Pacote)** — gráfico mensal: mesma limitação.
+- **Controle de Movimentados — 2º slide** (Causas Confirmadas + Top 10 Ações):
+  o endpoint `dashboard_distribuicao_causas` hoje só aceita período relativo
+  (não aceita um mês exato de fechamento) — precisa de uma mudança no backend
+  antes de alimentar este slide.
+
+Nenhum destes tem dado fabricado ou aproximado neste pacote — preferi deixar
+de fora a mostrar número que não bate com a fonte real.
