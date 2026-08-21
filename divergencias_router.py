@@ -10,6 +10,8 @@ from ..investigation import investigar, reconciliar
 from ..ml import predict as ml_predict
 from ..deps import requer_papel, obter_usuario_atual, filtrar_por_almoxarifado_permitido
 from ..audit import registrar_log
+from .. import ia_generativa
+from ..baixas_operacionais import buscar_avisos_baixa_pendente
 
 router = APIRouter(prefix="/divergencias", tags=["divergencias"])
 
@@ -111,6 +113,7 @@ def listar(
     divergencias = q.offset((pagina - 1) * tamanho_pagina).limit(tamanho_pagina).all()
     _preencher_descricao_produto(db, divergencias)
     _marcar_investigacao_pendente(db, divergencias)
+    buscar_avisos_baixa_pendente(db, divergencias)
 
     return {
         "itens": [schemas.DivergenciaOut.model_validate(d).model_dump() for d in divergencias],
@@ -194,7 +197,13 @@ def _calcular_furos(dias_operacionais_ordenados: list, dias_conferidos: set) -> 
 
 
 @router.get("/dashboard/cobertura-conferencia")
-def cobertura_conferencia(dias: int = 90, almoxarifado: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+def cobertura_conferencia(
+    dias: int = 90,
+    almoxarifado: str | None = None,
+    data_referencia: str | None = Query(None, description="YYYY-MM-DD - fim da janela de 'dias'. Por padrão usa D-1 de hoje (hoje ainda não está encerrado operacionalmente). Informar em relatórios retroativos (ex.: MBR de um mês já fechado), senão a janela sempre termina hoje, vazando dias de meses posteriores ao do relatório."),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
     """Dias conferidos × dias pendentes de conferência, por almoxarifado -
     mede a saúde do PROCESSO de controle, não do estoque em si.
 
@@ -207,10 +216,16 @@ def cobertura_conferencia(dias: int = 90, almoxarifado: str | None = None, usuar
     conciliar por um fluxo, pelo outro, ou pelos dois ao mesmo tempo em
     dias diferentes.
 
-    A análise sempre trabalha em D-1 (hoje ainda não está encerrado
-    operacionalmente)."""
+    Por padrão a análise trabalha em D-1 de hoje (hoje ainda não está
+    encerrado operacionalmente). Passe "data_referencia" pra ancorar a
+    janela em outra data - usado pelo MBR (22/08/2026, bug: relatório de
+    um mês fechado trazia a janela de 90 dias terminando HOJE, não no mês
+    do relatório)."""
     from datetime import date, timedelta
-    data_fim = date.today() - timedelta(days=1)
+    if data_referencia:
+        data_fim = date.fromisoformat(data_referencia)
+    else:
+        data_fim = date.today() - timedelta(days=1)
     data_inicio = data_fim - timedelta(days=dias - 1)
 
     q = db.query(models.Almoxarifado).filter_by(ativo=True, participa_contagem_diaria=True)
@@ -372,6 +387,34 @@ def detalhar(div_id: int, usuario: models.Usuario = Depends(obter_usuario_atual)
         raise HTTPException(404, "Divergência não encontrada")
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
+    return div
+
+
+@router.post("/{div_id}/resumir-ia", response_model=schemas.DivergenciaOut)
+def resumir_divergencia_com_ia(
+    div_id: int,
+    usuario: models.Usuario = Depends(requer_papel("admin", "analista")),
+    db: Session = Depends(get_db),
+):
+    """Chama a IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py)
+    pra traduzir num resumo executivo curto os sinais já calculados desta
+    divergência (hipótese de regras + modelo estatístico + evidências +
+    casos similares). Não recalcula nem substitui hipotese_ia/confianca_ia -
+    só preenche ia_gen_resumo, sempre revisável, sob pedido explícito."""
+    div = db.query(models.Divergencia).get(div_id)
+    if not div:
+        raise HTTPException(404, "Divergência não encontrada")
+    try:
+        resultado = ia_generativa.resumir_divergencia(div)
+    except ia_generativa.IAGenerativaIndisponivel as erro:
+        raise HTTPException(503, str(erro))
+    div.ia_gen_resumo = resultado["resumo"]
+    div.ia_gen_analisado_em = datetime.utcnow()
+    db.commit()
+    _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -392,6 +435,7 @@ def marcar_investigacao(div_id: int, usuario: models.Usuario = Depends(requer_pa
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
     _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -655,6 +699,8 @@ def reinvestigar(div_id: int, usuario: models.Usuario = Depends(requer_papel("ad
     db.commit()
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
 
 
@@ -698,4 +744,6 @@ def confirmar(div_id: int, payload: schemas.ConfirmarDivergencia, usuario: model
     db.commit()
     db.refresh(div)
     _preencher_descricao_produto(db, [div])
+    _marcar_investigacao_pendente(db, [div])
+    buscar_avisos_baixa_pendente(db, [div])
     return div
