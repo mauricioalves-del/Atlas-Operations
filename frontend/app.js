@@ -7076,6 +7076,23 @@ function _ehGatilhoAssistente(textoSemAtivacaoNormalizado) {
   return GATILHOS_ASSISTENTE_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
 }
 
+// "Atlas, Mensagens" (23/08/2026) - substitui o antigo gatilho de "duas
+// palmas" (ver histórico: configurarDetectorDePalmas foi removido porque a
+// fala do próprio Atlas ao ler o resumo das pendências voltava pelo
+// microfone e era interpretada como uma nova palma, causando loop infinito
+// de disparo). Reaproveita o reconhecimento de fala normal, que já ignora
+// tudo enquanto window.__atlasFalando é true - por isso não sofre do mesmo
+// problema.
+const GATILHOS_MENSAGENS_VOZ = [
+  "mensagens", "minhas mensagens", "ver mensagens",
+  "pendencias", "pendências", "ver pendencias", "ver pendências",
+  "e-mails", "emails", "ver e-mails", "ver emails",
+];
+
+function _ehGatilhoMensagens(textoSemAtivacaoNormalizado) {
+  return GATILHOS_MENSAGENS_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
+}
+
 // (09/08/2026 - pedido do Maurício) Segunda forma de acionar o assistente por
 // voz, além de dizer "Atlas, [a pergunta toda]" numa frase só: dizer só
 // "Atlas, Assistente", esperar o convite ("Pois não. Pode perguntar.") e
@@ -7227,6 +7244,15 @@ function configurarComandoDeVoz() {
           setTimeout(() => abrirPainelAssistenteAtlas(), 400);
           _registrarComandoDeVozNoBanco(transcricao, "hub");
           window.__atlasAguardandoPerguntaAssistenteAte = Date.now() + JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS;
+          continue;
+        }
+
+        if (_ehGatilhoMensagens(semAtivacao)) {
+          // "Atlas, Mensagens" (23/08/2026) - busca e fala as pendências de
+          // Gmail/Slack, substituindo o antigo gatilho de "duas palmas".
+          status.textContent = `✅ "${transcricao}" → buscando pendências de e-mail e Slack.`;
+          verPendenciasExternas();
+          _registrarComandoDeVozNoBanco(transcricao, null);
           continue;
         }
 
@@ -7540,8 +7566,12 @@ document.getElementById("assistente-atlas-input").addEventListener("keydown", (e
 // fluxo de "Conectar"/"Desconectar" por usuário. Por isso só visível pra
 // Admin (ver aplicarPermissoesNaUI()) - sem essa restrição, qualquer pessoa
 // logada no Atlas veria a caixa de entrada/Slack pessoal de quem configurou.
-// Acionado pelo botão "👏 Ver pendências agora" OU batendo duas palmas perto
-// do microfone (ver configurarDetectorDePalmas mais abaixo).
+// Acionado pelo botão "👏 Ver pendências agora" OU pelo comando de voz
+// "Atlas, Mensagens" (ver GATILHOS_MENSAGENS_VOZ acima). Até 23/08/2026
+// existia também um gatilho por "duas palmas" (configurarDetectorDePalmas),
+// removido por causar loop infinito: a fala do próprio Atlas ao ler o
+// resumo das pendências voltava pelo microfone e era interpretada como uma
+// nova palma, disparando a busca de novo, que falava de novo, indefinidamente.
 async function carregarStatusIntegracoesPessoais() {
   const painel = document.getElementById("painel-pendencias-externas");
   if (!painel || painel.classList.contains("hidden")) return; // não-admin: nem consulta
@@ -7553,21 +7583,14 @@ async function carregarStatusIntegracoesPessoais() {
     const elSlack = document.getElementById("status-integracao-slack");
     if (elGmail) elGmail.textContent = `Gmail: ${status.gmail.configurado ? "configurado." : "não configurado neste ambiente."}`;
     if (elSlack) elSlack.textContent = `Slack: ${status.slack.configurado ? "configurado." : "não configurado neste ambiente."}`;
-
-    // Só ativa o detector de "duas palmas" se pelo menos 1 integração
-    // estiver configurada - senão não tem porquê pedir permissão de
-    // microfone extra pra essa finalidade.
-    if (status.gmail.configurado || status.slack.configurado) {
-      configurarDetectorDePalmas();
-    }
   } catch (e) {
     console.warn("Atlas: não consegui carregar o status das integrações pessoais.", e);
   }
 }
 
-// Chamada tanto pelo botão manual quanto pelo gatilho de duas palmas -
-// busca pendências de Gmail/Slack, mostra a lista com links pra abrir cada
-// item, e fala um resumo curto em voz alta.
+// Chamada tanto pelo botão manual quanto pelo comando de voz "Atlas,
+// Mensagens" - busca pendências de Gmail/Slack, mostra a lista com links
+// pra abrir cada item, e fala um resumo curto em voz alta.
 async function verPendenciasExternas() {
   const area = document.getElementById("resultado-pendencias-externas");
   if (area) {
@@ -7628,87 +7651,6 @@ async function verPendenciasExternas() {
 }
 
 document.getElementById("btn-ver-pendencias-externas")?.addEventListener("click", () => verPendenciasExternas());
-
-// ---------- Detector de "duas palmas" (19/08/2026) ----------
-// Gatilho de áudio alternativo ao botão acima - detecta 2 estouros curtos e
-// próximos no microfone (uma palma dupla) via análise de amplitude, sem
-// depender do reconhecimento de fala (que só entende palavras, não palmas).
-// IMPORTANTE: isso é uma heurística simples baseada em volume - ambientes
-// barulhentos (chão de fábrica, conversas, ar-condicionado forte) podem
-// gerar falsos positivos ou negativos. O botão "👏 Ver pendências agora" é
-// sempre o caminho confiável; as palmas são um atalho a mais, não uma
-// substituição.
-let __atlasDetectorPalmasAtivo = false;
-
-function configurarDetectorDePalmas() {
-  if (__atlasDetectorPalmasAtivo) return; // já está rodando - não abre um 2º stream de áudio
-  if (!navigator.mediaDevices?.getUserMedia) return;
-  __atlasDetectorPalmasAtivo = true;
-
-  navigator.mediaDevices.getUserMedia({ audio: true })
-    .then((stream) => {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const fonte = ctx.createMediaStreamSource(stream);
-      const analisador = ctx.createAnalyser();
-      analisador.fftSize = 512;
-      fonte.connect(analisador);
-
-      const buffer = new Uint8Array(analisador.fftSize);
-      let pisoDeRuido = 0.02;
-      const picos = []; // timestamps (ms) dos últimos estouros de volume detectados
-      let bloqueadoAte = 0; // evita disparar de novo logo em seguida (debounce)
-
-      // Janela aceitável entre as 2 palmas - rápida o suficiente pra
-      // diferenciar de ruído contínuo, folgada o suficiente pra gente real
-      // bater palma sem precisão de robô.
-      const INTERVALO_MIN_MS = 120;
-      const INTERVALO_MAX_MS = 900;
-
-      function _rms() {
-        analisador.getByteTimeDomainData(buffer);
-        let soma = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          const v = (buffer[i] - 128) / 128;
-          soma += v * v;
-        }
-        return Math.sqrt(soma / buffer.length);
-      }
-
-      function _loop() {
-        if (!__atlasDetectorPalmasAtivo) return;
-        const nivel = _rms();
-        // piso de ruído se ajusta devagar ao ambiente (média móvel bem lenta)
-        pisoDeRuido = pisoDeRuido * 0.995 + nivel * 0.005;
-        const limite = Math.max(0.12, pisoDeRuido * 4.5);
-
-        const agora = performance.now();
-        if (nivel > limite && agora > bloqueadoAte) {
-          picos.push(agora);
-          bloqueadoAte = agora + 150; // ignora reverberação do mesmo estouro por 150ms
-          // mantém só os picos dos últimos ~1s
-          while (picos.length && agora - picos[0] > 1000) picos.shift();
-
-          if (picos.length >= 2) {
-            const intervalo = picos[picos.length - 1] - picos[picos.length - 2];
-            if (intervalo >= INTERVALO_MIN_MS && intervalo <= INTERVALO_MAX_MS && picos.length === 2) {
-              picos.length = 0;
-              bloqueadoAte = agora + 2000; // não deixa disparar de novo por 2s (evita repetir com o eco/aplauso continuando)
-              verPendenciasExternas();
-            } else if (picos.length > 2) {
-              picos.length = 0; // mais de 2 estouros seguidos = provavelmente ruído/aplauso de verdade, não o gatilho
-            }
-          }
-        }
-        requestAnimationFrame(_loop);
-      }
-      requestAnimationFrame(_loop);
-    })
-    .catch((e) => {
-      console.warn("Atlas: não consegui ativar o detector de palmas (permissão de microfone?).", e);
-      __atlasDetectorPalmasAtivo = false;
-    });
-}
 
 // ---------- Dashboard de Acompanhamento - Controle de Movimentados (19/08/2026) ----------
 // "Movimentação" aqui é Transferência entre almoxarifados (esclarecido pelo

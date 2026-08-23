@@ -55,8 +55,14 @@ function mostrarApp() {
     abrirFechamentoDetalhe(fechamentoLink);
   } else {
     mostrarView("hub");
+    // Saudação personalizada (19/08/2026) - toca só AQUI, uma vez por login,
+    // não em toda troca de tela (ver apresentarModuloAgora/window.__atlasFalando
+    // pra entender por que a narração automática por tela foi removida).
+    falarSaudacaoPersonalizada();
   }
   window.ativarEscutaAtlasSeNecessario();
+  carregarPerguntasPadraoAssistente();
+  carregarStatusIntegracoesPessoais();
 }
 
 function aplicarPermissoesNaUI() {
@@ -83,6 +89,21 @@ function aplicarPermissoesNaUI() {
   if (btnGerarCiencia) btnGerarCiencia.classList.toggle("hidden", usuarioAtual.papel === "leitura");
   const btnCriarPedido = document.getElementById("btn-criar-pedido");
   if (btnCriarPedido) btnCriarPedido.classList.toggle("hidden", usuarioAtual.papel === "leitura");
+
+  // Configuração de perguntas padrão do assistente (09/08/2026) - só admin
+  const btnConfigPerguntasPadrao = document.getElementById("btn-config-perguntas-padrao");
+  if (btnConfigPerguntasPadrao) btnConfigPerguntasPadrao.classList.toggle("hidden", usuarioAtual.papel !== "admin");
+
+  // Pendências Gmail/Slack (09/08/2026) - credenciais são de UMA conta
+  // pessoal fixada no servidor, não por usuário - só Admin vê este painel,
+  // senão qualquer pessoa logada veria a caixa de entrada/Slack pessoal de
+  // quem configurou (ver routers/integracoes_pessoais_router.py, mesma
+  // restrição aplicada no backend). Este toggle roda ANTES de
+  // carregarStatusIntegracoesPessoais() (ver ordem em mostrarApp()), então
+  // ela já encontra o painel visível ou não, corretamente, quando decidir
+  // se consulta o status ou nem tenta.
+  const painelPendencias = document.getElementById("painel-pendencias-externas");
+  if (painelPendencias) painelPendencias.classList.toggle("hidden", usuarioAtual.papel !== "admin");
 }
 
 document.getElementById("form-login").addEventListener("submit", async (ev) => {
@@ -535,6 +556,15 @@ document.getElementById("btn-tema").addEventListener("click", () => {
 });
 aplicarTemaSalvo();
 
+// ---------- botão de áudio no topo (19/08/2026) ----------
+// Substitui a apresentação automática por tela (ver apresentarModuloAgora) -
+// agora é opcional: a pessoa clica aqui quando QUISER ouvir a apresentação
+// do módulo em que está (ou a saudação personalizada, se estiver no hub).
+// Fica sempre visível na rail, então funciona em qualquer tela.
+document.getElementById("btn-narrar-modulo-atual")?.addEventListener("click", () => {
+  apresentarModuloAgora(window.__atlasViewAtual || "hub");
+});
+
 const HIPOTESE_LABEL = {
   Transferencia_Pendente: "Transferência Pendente",
   Consumo_Parcial_OP: "Consumo Parcial de OP",
@@ -731,12 +761,19 @@ if (rail && btnToggleRail) {
   console.warn("Botão de recolher menu não encontrado - verifique se o index.html está atualizado.");
 }
 
+// Rastreia a view atual (19/08/2026) - usado pelo botão de áudio no topo da
+// rail (#btn-narrar-modulo-atual) pra saber O QUE narrar quando clicado,
+// já que a apresentação de módulo NÃO é mais automática (ver
+// apresentarModuloAgora mais abaixo - antes disparava sozinha em toda
+// troca de tela via apresentarModuloSeNecessario, removido daqui).
+window.__atlasViewAtual = "hub";
+
 function mostrarView(nome) {
   document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
   document.getElementById("view-" + nome).classList.remove("hidden");
   document.querySelectorAll(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
   document.querySelectorAll(".bottom-nav-item[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
-  apresentarModuloSeNecessario(nome);
+  window.__atlasViewAtual = nome;
   if (nome === "hub") { renderizarHub(); carregarMapaDemandas(); }
   if (nome === "dashboard") carregarDashboard();
   if (nome === "lista") carregarLista();
@@ -757,6 +794,8 @@ function mostrarView(nome) {
   if (nome === "acuracia-ponderada") carregarAcuraciaPonderada();
   if (nome === "compras") carregarPedidosCompra();
   if (nome === "pos-inventario") carregarAcoesPosInventario();
+  if (nome === "movimentados") carregarMovimentados();
+  if (nome === "fefo") carregarFefo();
 }
 
 // ---------- barra inferior mobile (13/08/2026) ----------
@@ -1331,7 +1370,7 @@ async function carregarLista(pagina = 1) {
   tbody.innerHTML = divs
     .map(
       (d) => `<tr data-id="${d.id}">
-        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
+        <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}${d.aviso_baixa_pendente ? ` <span title="${d.aviso_baixa_pendente.replace(/"/g, "&quot;")}" style="color:var(--medio)">🕒</span>` : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
         <td>${formatarDataCurta(d.data_deteccao)}</td>
         <td>${formatarMoeda(d.valor_estimado)}</td>
         <td>${rotulo(d.hipotese_ia)}</td><td>${d.confianca_ia != null ? d.confianca_ia + "%" : "—"}</td>
@@ -1437,12 +1476,24 @@ async function abrirDetalhe(id) {
           </div>
         </div>
         ${d.tem_investigacao_pendente ? `<p style="color:var(--alto)">⚠️ Este SKU já tem outro caso ainda em investigação - pode ser reincidência antes da causa anterior ser resolvida.</p>` : ""}
+        ${d.aviso_baixa_pendente ? `<p style="color:var(--medio)">🕒 ${d.aviso_baixa_pendente}</p>` : ""}
         <p><strong>Hipótese (motor de regras):</strong> ${rotulo(d.hipotese_regras)} ${d.confianca_regras != null ? "(" + d.confianca_regras + "%)" : ""}</p>
         <p><strong>Hipótese (modelo estatístico):</strong> ${rotulo(d.hipotese_ml)} ${d.confianca_ml != null ? "(" + d.confianca_ml + "%)" : ""}</p>
         <p><strong>Hipótese final reconciliada:</strong> ${rotulo(d.hipotese_ia)} ${d.confianca_ia != null ? "(" + d.confianca_ia + "%)" : ""}</p>
         <p>Saldo sistema: <strong>${d.saldo_sistema}</strong> · Saldo físico: <strong>${d.saldo_fisico}</strong> · Divergência: <strong>${d.divergencia_qtd}</strong></p>
         <p>Valor estimado: <strong>${formatarMoeda(d.valor_estimado)}</strong>${d.valor_estimado === 0 ? " <span class='hint' style='display:inline'>(sem custo cadastrado para este SKU)</span>" : ""}</p>
         <p>Data de detecção: <strong>${formatarDataCurta(d.data_deteccao)}</strong></p>
+      </div>
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2>Resumo por IA Generativa</h2>
+          ${podeEditar ? `<button class="btn-secundario" id="btn-resumir-ia">${d.ia_gen_resumo ? "🔄 Atualizar resumo" : "✨ Resumir com IA"}</button>` : ""}
+        </div>
+        ${
+          d.ia_gen_resumo
+            ? `<p>${d.ia_gen_resumo}</p><p class="hint">Gerado em ${new Date(d.ia_gen_analisado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })} por um modelo de IA generativa externo — sugestão, sempre revisável, não substitui a hipótese reconciliada acima.</p>`
+            : `<p class="hint">Ainda sem resumo gerado. Um modelo de IA generativa externo (opcional, configurado pelo administrador do Atlas) pode traduzir os sinais acima — hipóteses, evidências, casos similares — numa leitura corrida, em português.</p>`
+        }
       </div>
       <div class="panel"><h2>Observação original (planilha)</h2>${obsHtml}</div>
       <div class="panel"><h2>Evidências</h2>${evidenciasHtml}</div>
@@ -1526,6 +1577,23 @@ async function abrirDetalhe(id) {
         abrirDetalhe(d.id);
       });
     }
+  }
+  const btnResumirIA = document.getElementById("btn-resumir-ia");
+  if (btnResumirIA) {
+    btnResumirIA.addEventListener("click", async () => {
+      const textoOriginal = btnResumirIA.textContent;
+      btnResumirIA.disabled = true;
+      btnResumirIA.textContent = "Gerando resumo...";
+      const res = await apiFetch(`${API}/divergencias/${d.id}/resumir-ia`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.detail || "Não foi possível gerar o resumo com IA.");
+        btnResumirIA.disabled = false;
+        btnResumirIA.textContent = textoOriginal;
+        return;
+      }
+      abrirDetalhe(d.id);
+    });
   }
   tentarRenderizar(() => renderHistoricoSku(historico));
   tentarRenderizar(() => renderProjecaoSku(historico));
@@ -4247,6 +4315,8 @@ document.getElementById("btn-reinvestigar-falhas").addEventListener("click", asy
 async function carregarAuditoria(pagina = 1) {
   carregarStatusBackup();
   carregarStatusMl();
+  popularFiltroMesMbr();
+  carregarDashboardsExternos();
   const resposta = await apiFetch(`${API}/auditoria?pagina=${pagina}&tamanho_pagina=50`).then((r) => r.json());
   document.querySelector("#tabela-auditoria tbody").innerHTML = resposta.itens
     .map(
@@ -4269,6 +4339,208 @@ async function carregarAuditoria(pagina = 1) {
   if (btnAnt) btnAnt.addEventListener("click", () => carregarAuditoria(resposta.pagina - 1));
   if (btnProx) btnProx.addEventListener("click", () => carregarAuditoria(resposta.pagina + 1));
 }
+
+// ---------- Gerar MBR (Monthly Business Review) - PPTX com dados reais, sem prints de tela (reescrito 20/08/2026) ----------
+// O usuário escolhe o mês (decisão explícita, sem cálculo automático de
+// "último mês fechado") - a lista de meses aqui é só gerada a partir da
+// data de hoje (últimos 24 meses), não depende de já existir dado pra esse
+// mês: quem decide se o mês escolhido faz sentido é a própria pessoa.
+let mbrFiltroMesCarregado = false;
+function popularFiltroMesMbr() {
+  if (mbrFiltroMesCarregado) return;
+  const sel = document.getElementById("mbr-filtro-mes");
+  const hoje = new Date();
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    const valor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const opt = document.createElement("option");
+    opt.value = valor;
+    opt.textContent = valor;
+    sel.appendChild(opt);
+  }
+  mbrFiltroMesCarregado = true;
+}
+
+document.getElementById("btn-gerar-mbr").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-gerar-mbr");
+  const status = document.getElementById("mbr-status");
+  const mes = document.getElementById("mbr-filtro-mes").value;
+  if (!mes) return;
+  btn.disabled = true;
+  btn.textContent = "Gerando...";
+  status.textContent = "Gerando o PPTX com os dados do mês... deve levar só alguns segundos.";
+  try {
+    const res = await apiFetch(`${API}/auditoria/gerar-mbr?mes=${encodeURIComponent(mes)}`, { method: "POST" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      status.textContent = `Erro: ${data.detail || "não foi possível gerar o MBR."}`;
+    } else {
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `MBR_Atlas_${mes}.pptx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      status.textContent = `MBR de ${mes} gerado e baixado com sucesso.`;
+    }
+  } catch (erro) {
+    status.textContent = "Falha ao gerar o MBR: " + erro.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "Gerar MBR";
+});
+
+// ---------- Outros Dashboards (HTML autocontido, embutido via iframe) - 20/08/2026 ----------
+// Nasceu da conversa sobre o slide de FEFO do MBR: em vez de forçar uma métrica de
+// "quebra de FEFO" que a base de dados não sustenta com confiança (não há hoje uma
+// leitura de disponibilidade do lote concorrente tirada na hora exata da transferência),
+// o admin sobe aqui o HTML já pronto de cada dashboard que a equipe já mantém por fora
+// (Controle de FEFO, Farol de Shelf-Life, Recuperação de Shelf, Testes Industriais,
+// Dashboard Baixas Operacionais), e ele fica acessível dentro do próprio Atlas.
+const dashboardsExternosAbertos = new Set(); // chaves com iframe expandido no momento
+
+async function carregarDashboardsExternos() {
+  const container = document.getElementById("lista-dashboards-externos");
+  try {
+    const lista = await apiFetch(`${API}/dashboards-externos`).then((r) => r.json());
+    renderDashboardsExternos(lista);
+  } catch (erro) {
+    container.innerHTML = `<p class="hint">Não consegui carregar: ${erro.message}</p>`;
+  }
+}
+
+function renderDashboardsExternos(lista) {
+  const container = document.getElementById("lista-dashboards-externos");
+  container.innerHTML = lista
+    .map((d) => {
+      const aberto = dashboardsExternosAbertos.has(d.chave);
+      const meta = d.enviado
+        ? `Enviado por ${d.enviado_por || "—"} em ${new Date(d.enviado_em).toLocaleString("pt-BR")} · ${d.nome_arquivo_original || ""}`
+        : "Nenhum arquivo enviado ainda.";
+      return `
+        <div class="dashboard-externo-item" data-chave="${d.chave}">
+          <div class="dashboard-externo-linha">
+            <div class="dashboard-externo-info">
+              <span class="dashboard-externo-nome">${d.nome_exibicao}
+                <span class="badge ${d.enviado ? "badge-dash-enviado" : "badge-dash-vazio"}">${d.enviado ? "Enviado" : "Vazio"}</span>
+                ${d.personalizado ? `<span class="badge badge-dash-personalizado">Personalizado</span>` : ""}
+              </span>
+              <span class="dashboard-externo-meta">${meta}</span>
+            </div>
+            <div class="dashboard-externo-acoes">
+              ${d.enviado ? `<button class="btn-secundario btn-dash-abrir" data-chave="${d.chave}">${aberto ? "Fechar" : "Abrir"}</button>` : ""}
+              <label class="btn-secundario" style="cursor:pointer">
+                ${d.enviado ? "Substituir" : "Enviar"} .html
+                <input type="file" accept=".html,.htm" class="input-dash-upload" data-chave="${d.chave}" style="display:none">
+              </label>
+              ${d.enviado || d.personalizado ? `<button class="btn-secundario btn-dash-remover" data-chave="${d.chave}" data-personalizado="${d.personalizado ? "1" : ""}">Remover</button>` : ""}
+            </div>
+          </div>
+          ${aberto ? `<div class="dashboard-externo-iframe-wrap"><iframe id="iframe-dash-${d.chave}"></iframe></div>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  container.querySelectorAll(".btn-dash-abrir").forEach((btn) => {
+    btn.addEventListener("click", () => alternarDashboardExterno(btn.dataset.chave, lista));
+  });
+  container.querySelectorAll(".input-dash-upload").forEach((input) => {
+    input.addEventListener("change", (ev) => enviarDashboardExterno(input.dataset.chave, ev.target.files[0]));
+  });
+  container.querySelectorAll(".btn-dash-remover").forEach((btn) => {
+    btn.addEventListener("click", () => removerDashboardExterno(btn.dataset.chave, btn.dataset.personalizado === "1"));
+  });
+
+  // se algum dashboard já estava marcado como aberto (ex: reload da lista depois de um
+  // upload), recarrega o conteúdo no iframe agora que ele acabou de ser recriado no DOM.
+  dashboardsExternosAbertos.forEach((chave) => {
+    const item = lista.find((d) => d.chave === chave);
+    if (item && item.enviado) carregarConteudoIframe(chave);
+  });
+}
+
+function alternarDashboardExterno(chave, lista) {
+  if (dashboardsExternosAbertos.has(chave)) {
+    dashboardsExternosAbertos.delete(chave);
+  } else {
+    dashboardsExternosAbertos.add(chave);
+  }
+  renderDashboardsExternos(lista);
+}
+
+async function carregarConteudoIframe(chave) {
+  const iframe = document.getElementById(`iframe-dash-${chave}`);
+  if (!iframe) return;
+  try {
+    const html = await apiFetch(`${API}/dashboards-externos/${chave}/conteudo`).then((r) => r.text());
+    // srcdoc (não src) porque o conteúdo já foi buscado com o token de autenticação -
+    // um <iframe src="/api/..."> comum não manda o cabeçalho Authorization.
+    iframe.srcdoc = html;
+  } catch (erro) {
+    iframe.srcdoc = `<p style="font-family:sans-serif; padding:20px">Falha ao carregar: ${erro.message}</p>`;
+  }
+}
+
+async function enviarDashboardExterno(chave, arquivo) {
+  if (!arquivo) return;
+  const formData = new FormData();
+  formData.append("arquivo", arquivo);
+  try {
+    const res = await apiFetch(`${API}/dashboards-externos/${chave}/upload`, { method: "POST", body: formData });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Erro ao enviar: ${data.detail || "falha desconhecida."}`);
+      return;
+    }
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao enviar: " + erro.message);
+  }
+}
+
+async function removerDashboardExterno(chave, personalizado) {
+  const mensagem = personalizado
+    ? "Remover este indicador por completo (nome e arquivo enviado, se houver)? Isso não pode ser desfeito."
+    : "Remover o dashboard enviado nesse slot? Isso não pode ser desfeito.";
+  if (!confirm(mensagem)) return;
+  dashboardsExternosAbertos.delete(chave);
+  try {
+    await apiFetch(`${API}/dashboards-externos/${chave}`, { method: "DELETE" });
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao remover: " + erro.message);
+  }
+}
+
+// ---------- Adicionar indicador (18/08/2026 - indicadores dinâmicos, além dos 5 slots
+// fixos): a pessoa só dá um nome; o arquivo .html é enviado depois pelo mesmo botão
+// "Enviar .html" que os slots fixos já usam. Entra automaticamente como slide na seção
+// "Outros" do MBR (extração genérica - ver dashboards_externos_extrator.extrair_generico).
+async function adicionarIndicadorExterno() {
+  const nome = prompt("Nome do novo indicador (ex.: \"Controle de Devoluções\"):");
+  if (!nome || !nome.trim()) return;
+  try {
+    const res = await apiFetch(`${API}/dashboards-externos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nome_exibicao: nome.trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Erro ao criar indicador: ${data.detail || "falha desconhecida."}`);
+      return;
+    }
+    carregarDashboardsExternos();
+  } catch (erro) {
+    alert("Falha ao criar indicador: " + erro.message);
+  }
+}
+
+document.getElementById("btn-adicionar-indicador")?.addEventListener("click", adicionarIndicadorExterno);
 
 // ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
 function badgeStatusBaixa(statusFluxo) {
@@ -5065,7 +5337,28 @@ document.getElementById("btn-ver-todos-inventario").addEventListener("click", ()
   abrirModalFluxoInventarioItens(params, "Todos os Ajustes de Inventário do período");
 });
 
+// IA GENERATIVA (LLM externo, opcional - ver app/ia_generativa.py no backend) -
+// classificação/resumo automático de baixas, pedido explícito do Maurício
+// (25/08/2026). `renderCelulaIA` mostra o botão "Analisar" pra item ainda sem
+// leitura, ou um badge com prioridade+categoria sugeridas (tooltip com o
+// resumo) pra item já analisado - nunca decide nada por conta própria, é
+// sempre uma sugestão revisável.
+function renderCelulaIA(i) {
+  if (i.ia_gen_analisado_em) {
+    const classeBadge =
+      i.ia_gen_prioridade === "Alta" ? "badge-aberta" : i.ia_gen_prioridade === "Média" ? "badge-em_investigacao" : i.ia_gen_prioridade === "Baixa" ? "badge-resolvida" : "badge-nao";
+    const resumo = (i.ia_gen_resumo || "Sem resumo.").replace(/"/g, "&quot;");
+    return `<span class="badge ${classeBadge}" title="${resumo}">${i.ia_gen_prioridade || "—"} · ${rotulo(i.ia_gen_categoria)}</span>`;
+  }
+  return `<button class="btn-secundario btn-analisar-ia-item" data-id="${i.id}" style="font-size:11px; padding:4px 10px">✨ Analisar</button>`;
+}
+
+let _filtrosAtuaisModalPassivos = null;
+let _tituloAtualModalPassivos = null;
+
 async function abrirModalPassivosItens(filtros, titulo) {
+  _filtrosAtuaisModalPassivos = filtros;
+  _tituloAtualModalPassivos = titulo;
   const params = new URLSearchParams(filtros);
   const dados = await apiFetch(`${API}/baixas-operacionais/dashboard/itens?${params.toString()}`).then((r) => r.json());
 
@@ -5095,9 +5388,10 @@ async function abrirModalPassivosItens(filtros, titulo) {
           <td>${i.divergencia_vinculada_id ? `<button class="btn-secundario btn-ver-divergencia-passivo" data-id="${i.divergencia_vinculada_id}">Ver</button>` : ""}</td>
           <td>${i.tem_justificativa ? '<span class="badge badge-sim">Sim</span>' : '<span class="badge badge-nao">Não</span>'}</td>
           <td><button class="btn-secundario btn-justificar-passivo-item" data-id="${i.id}">Justificar</button></td>
+          <td>${renderCelulaIA(i)}</td>
         </tr>`
       )
-      .join("") || `<tr><td colspan="12" style="color:var(--muted)">Nenhuma baixa encontrada com esse filtro.</td></tr>`;
+      .join("") || `<tr><td colspan="13" style="color:var(--muted)">Nenhuma baixa encontrada com esse filtro.</td></tr>`;
 
     const abrirJustificativaDoItemPassivo = (id) => {
       const item = itens.find((i) => i.id === id);
@@ -5118,6 +5412,25 @@ async function abrirModalPassivosItens(filtros, titulo) {
         document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
         mostrarView("lista");
         abrirDetalhe(parseInt(btn.dataset.id));
+      })
+    );
+    document.querySelectorAll(".btn-analisar-ia-item").forEach((btn) =>
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const id = parseInt(btn.dataset.id);
+        btn.disabled = true;
+        btn.textContent = "Analisando...";
+        const res = await apiFetch(`${API}/baixas-operacionais/${id}/analisar-ia`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Não foi possível analisar esta baixa com IA.");
+          btn.disabled = false;
+          btn.textContent = "✨ Analisar";
+          return;
+        }
+        const item = dados.itens.find((x) => x.id === id);
+        if (item) Object.assign(item, data);
+        aplicarFiltroPassivos();
       })
     );
   };
@@ -5151,6 +5464,27 @@ document.getElementById("btn-fechar-modal-passivos-itens").addEventListener("cli
 });
 document.getElementById("modal-passivos-itens-overlay").addEventListener("click", (ev) => {
   if (ev.target.id === "modal-passivos-itens-overlay") document.getElementById("modal-passivos-itens-overlay").classList.add("hidden");
+});
+document.getElementById("btn-analisar-ia-lote-passivos").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-analisar-ia-lote-passivos");
+  btn.disabled = true;
+  btn.textContent = "Analisando com IA...";
+  const res = await apiFetch(`${API}/baixas-operacionais/analisar-ia-lote?limite=15`, { method: "POST" });
+  const data = await res.json();
+  btn.disabled = false;
+  btn.textContent = "✨ Analisar pendentes com IA";
+  if (!res.ok) {
+    alert(data.detail || "Não foi possível analisar em lote com IA.");
+    return;
+  }
+  const partes = [`Analisadas: ${data.analisadas}`];
+  if (data.erros && data.erros.length) {
+    partes.push(`${data.erros.length} erro(s) - ver console`);
+    console.warn("Erros ao analisar baixas com IA:", data.erros);
+  }
+  if (data.restantes) partes.push(`ainda restam ${data.restantes} pendente(s) - clique de novo pra continuar`);
+  alert(partes.join(" · "));
+  if (_filtrosAtuaisModalPassivos) abrirModalPassivosItens(_filtrosAtuaisModalPassivos, _tituloAtualModalPassivos);
 });
 
 async function abrirModalFluxoInventarioItens(filtros, titulo) {
@@ -5879,6 +6213,9 @@ document.getElementById("btn-criar-lote-shelf-life").addEventListener("click", a
   carregarShelfLife();
 });
 
+// Importador de "Lote de Validade (Shelf Life)" - vive na tela "Importar", dentro da
+// tabela "Dados de contexto" (foi movido de dentro da tela Shelf Life a pedido do
+// usuário em 14/08/2026, pra concentrar todos os imports de planilha num único lugar).
 document.getElementById("btn-importar-shelf-life").addEventListener("click", async () => {
   const input = document.getElementById("sl-input-arquivo");
   const resultado = document.getElementById("sl-resultado-importacao");
@@ -5894,13 +6231,59 @@ document.getElementById("btn-importar-shelf-life").addEventListener("click", asy
     const res = await apiFetch(`${API}/shelf-life/importar-planilha`, { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) {
-      resultado.textContent = `Erro (${res.status}): ${data.detail || JSON.stringify(data)}`;
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
       return;
     }
-    resultado.textContent = JSON.stringify(data, null, 2);
-    carregarShelfLife();
+    resultado.textContent = `${data.criados} novo(s) · ${data.atualizados} atualizado(s)${
+      data.desativados ? " · " + data.desativados + " desativado(s) (não aparecem mais na planilha)" : ""
+    }${data.ignorados_sem_sku ? " · " + data.ignorados_sem_sku + " sem SKU" : ""}${
+      data.almoxarifados_nao_mapeados && data.almoxarifados_nao_mapeados.length ? " · não mapeados: " + data.almoxarifados_nao_mapeados.join(", ") : ""}`;
+    // se a tela Shelf Life já foi carregada nesta sessão, atualiza os dados dela também
+    if (typeof carregarShelfLife === "function" && document.getElementById("tabela-shelf-life")) {
+      carregarShelfLife();
+    }
   } catch (erro) {
     resultado.textContent = "Falha ao importar: " + erro.message;
+  }
+});
+
+// ---------- Movimentação por Lote (FEFO nativo, 20/08/2026) ----------
+// Alimenta o motor de checagem de FEFO por lote (ver app/fefo.py,
+// recalcular_quebra_fefo_nativa) - a movimentação diária normal não guarda
+// qual lote saiu, então essa é a única fonte que dá pra comparar de fato
+// "o lote que saiu" contra "o lote que deveria ter saído primeiro".
+document.getElementById("btn-importar-mvlote").addEventListener("click", async () => {
+  const input = document.getElementById("mvlote-input-arquivos");
+  const resultado = document.getElementById("mvlote-resultado-importacao");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione ao menos um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  Array.from(input.files).forEach((f) => form.append("arquivos", f));
+  const btn = document.getElementById("btn-importar-mvlote");
+  btn.disabled = true;
+  resultado.textContent = `Importando ${input.files.length} arquivo(s)...`;
+  try {
+    const res = await apiFetch(`${API}/fefo/movimentacao/importar`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const erros = (data.detalhe || []).filter((d) => d.erro);
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) em ${data.arquivos_processados - data.arquivos_com_erro} arquivo(s) · ${data.quebras_detectadas} quebra(s) detectada(s)${
+      data.arquivos_com_erro ? ` · ${data.arquivos_com_erro} arquivo(s) com erro: ${erros.map((e) => `${e.arquivo} (${e.erro})`).join("; ")}` : ""
+    }`;
+    input.value = "";
+    // se a tela FEFO já foi carregada nesta sessão, atualiza os dados dela também
+    if (typeof carregarFefo === "function" && document.getElementById("fefo-kpi-row")) {
+      carregarFefo();
+    }
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
   }
 });
 
@@ -6090,13 +6473,15 @@ const ATLAS_APRESENTACAO_MODULOS = {
   "relatorio-baixa": { frase: "Baixas rastreadas com precisão. Nenhum descarte passa sem registro.", resumo: "Baixas operacionais importadas do Lovable e seu cruzamento com divergências." },
 };
 
-function _atlasModulosJaApresentados() {
-  try {
-    return new Set(JSON.parse(sessionStorage.getItem("atlas_modulos_apresentados") || "[]"));
-  } catch (e) {
-    return new Set();
-  }
-}
+// (19/08/2026) Antes a apresentação de módulo disparava sozinha, uma vez por
+// sessão, toda vez que uma tela nova abria (_atlasModulosJaApresentados
+// controlava isso via sessionStorage). Removida a pedido do Maurício: além
+// de interromper o fluxo em toda tela, a fala automática entrava pelo
+// próprio microfone que fica sempre ouvindo o comando de voz, atrapalhando
+// o reconhecimento (ver window.__atlasFalando em falarResumoModulo, logo
+// abaixo). Agora a apresentação só toca quando alguém pede - clicando no
+// botão de áudio no topo da rail (#btn-narrar-modulo-atual) ou dizendo
+// "Atlas, [módulo]" de novo - nunca sozinha.
 
 // escolhe, entre as vozes disponíveis no navegador, uma em português - a
 // lista de vozes carrega de forma assíncrona em alguns navegadores, então
@@ -6367,19 +6752,47 @@ function tocarEfeitoEco() {
   osc.stop(agora + 0.45);
 }
 
+// (19/08/2026) Flag global consultada pelo comando de voz contínuo
+// (configurarComandoDeVoz, mais abaixo) pra IGNORAR qualquer coisa
+// reconhecida pelo microfone enquanto o Atlas está com a voz ativa - o
+// alto-falante e o microfone costumam ficar no mesmo computador, então sem
+// essa trava a própria fala do Atlas era captada pelo reconhecimento
+// contínuo (que nunca é pausado) e virava um "comando" novo, atrapalhando
+// o funcionamento do comando de voz de verdade. `__atlasFalaGeracao` existe
+// só pra uma fala mais antiga (cancelada por uma nova, ver
+// speechSynthesis.cancel() abaixo) não zerar a flag por engano depois que
+// a fala MAIS RECENTE já assumiu.
+window.__atlasFalando = false;
+let __atlasFalaGeracao = 0;
+const MARGEM_POS_FALA_MS = 700; // folga extra depois do fim da fala - o reconhecimento de voz tem uma latência própria
+
 function falarResumoModulo(texto) {
   if (!("speechSynthesis" in window)) return;
+  const minhaGeracao = ++__atlasFalaGeracao;
+  window.__atlasFalando = true;
+
+  function _liberarMicrofone() {
+    if (minhaGeracao !== __atlasFalaGeracao) return; // uma fala mais nova já assumiu - não mexe na flag dela
+    setTimeout(() => {
+      if (minhaGeracao === __atlasFalaGeracao) window.__atlasFalando = false;
+    }, MARGEM_POS_FALA_MS);
+  }
+
   try {
     window.speechSynthesis.cancel(); // corta qualquer fala anterior em andamento
     tocarEfeitoPensamento();
     const voz = _atlasEscolherVoz();
     const pedacos = _dividirEmPedacosParaFala(prepararTextoParaNarracao(texto));
-    if (!pedacos.length) return;
+    if (!pedacos.length) {
+      _liberarMicrofone();
+      return;
+    }
 
     let indice = 0;
     function falarProximoPedaco() {
       if (indice >= pedacos.length) {
         tocarEfeitoEco(); // eco de encerramento, só depois do ÚLTIMO pedaço
+        _liberarMicrofone();
         return;
       }
       const fala = new SpeechSynthesisUtterance(pedacos[indice]);
@@ -6408,26 +6821,86 @@ function falarResumoModulo(texto) {
     setTimeout(falarProximoPedaco, 420); // dá tempo do efeito de "pensando" tocar antes da voz começar
   } catch (e) {
     console.warn("Atlas: não consegui falar o resumo do módulo.", e);
+    _liberarMicrofone();
   }
 }
 
-function apresentarModuloSeNecessario(view) {
+// (19/08/2026) Antes chamava-se apresentarModuloSeNecessario() e disparava
+// SOZINHA, uma vez por sessão, toda vez que uma tela nova abria - ver
+// comentário em _atlasModulosJaApresentados (removida) sobre o porquê disso
+// ter sido trocado por um botão. Agora só toca quando pedida explicitamente:
+// pelo botão de áudio no topo da rail (#btn-narrar-modulo-atual) ou pelo
+// comando de voz "Atlas, [módulo]" repetido numa tela que já está aberta.
+// Pode ser chamada quantas vezes quiser - não tem mais o controle de "só
+// uma vez por sessão".
+function apresentarModuloAgora(view) {
+  if (view === "hub") {
+    falarSaudacaoPersonalizada();
+    return;
+  }
   const info = ATLAS_APRESENTACAO_MODULOS[view];
-  if (!info) return;
-  const apresentados = _atlasModulosJaApresentados();
-  if (apresentados.has(view)) return; // já apresentado nesta sessão - não repete
-  apresentados.add(view);
-  sessionStorage.setItem("atlas_modulos_apresentados", JSON.stringify([...apresentados]));
+  if (!info) return; // módulo sem apresentação cadastrada - nada pra narrar
 
   const secao = document.getElementById("view-" + view);
-  if (!secao) return;
-  const banner = document.createElement("div");
-  banner.className = "atlas-apresentacao";
-  banner.innerHTML = `<strong>ATLAS:</strong> "${info.frase}" <span class="atlas-apresentacao-resumo">${info.resumo}</span>`;
-  secao.prepend(banner);
-  setTimeout(() => banner.remove(), 9000);
+  if (secao) {
+    document.querySelectorAll(".atlas-apresentacao").forEach((el) => el.remove());
+    const banner = document.createElement("div");
+    banner.className = "atlas-apresentacao";
+    banner.innerHTML = `<strong>ATLAS:</strong> "${info.frase}" <span class="atlas-apresentacao-resumo">${info.resumo}</span>`;
+    secao.prepend(banner);
+    setTimeout(() => banner.remove(), 9000);
+  }
 
   falarResumoModulo(`${info.frase} ${info.resumo}`);
+}
+
+// ---------- saudação personalizada (19/08/2026 - pedido do Maurício) ----------
+// "Olá, Senhor [Nome], seja bem-vindo... Hoje é [data], a cotação do dólar é
+// X e o cacau está por volta de Y." Toca as cotações reais de app/cotacoes.py
+// (dólar comercial + futuros de cacau) - se alguma delas estiver
+// indisponível no momento (fonte externa fora do ar), a frase simplesmente
+// pula aquele trecho em vez de travar ou mostrar erro.
+async function montarTextoSaudacaoPersonalizada() {
+  const nome = usuarioAtual?.nome_exibicao || usuarioAtual?.username || "";
+  const dataPorExtenso = new Date().toLocaleDateString("pt-BR", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+
+  let trechoCotacoes = "";
+  try {
+    const res = await apiFetch(`${API}/cotacoes/atuais`);
+    if (res.ok) {
+      const dados = await res.json();
+      const partes = [];
+      if (dados.dolar?.disponivel) {
+        partes.push(`a cotação do dólar está em ${dados.dolar.valor.toFixed(2).replace(".", ",")} reais`);
+      }
+      if (dados.cacau?.disponivel) {
+        partes.push(`o cacau está por volta de ${Math.round(dados.cacau.valor)} dólares por tonelada`);
+      }
+      if (partes.length) trechoCotacoes = ` ${partes.join(", e ")}.`;
+    }
+  } catch (e) {
+    console.warn("Atlas: não consegui buscar as cotações pra saudação.", e);
+  }
+
+  const saudacaoNome = nome ? `Olá, senhor ${nome}` : "Olá";
+  return `${saudacaoNome}, seja bem-vindo ao Atlas, o modelo de gestão de controle de estoque da Magio Chocolates. `
+    + `Hoje é ${dataPorExtenso}.${trechoCotacoes} O que deseja?`;
+}
+
+// Renderiza o texto da saudação no hub (sempre, visível independente do
+// navegador suportar/permitir fala) e tenta falar em voz alta - chamada tanto
+// automaticamente uma vez por login (ver mostrarApp) quanto sob demanda pelo
+// botão de áudio no topo da rail, quando a view atual é o hub.
+async function falarSaudacaoPersonalizada() {
+  const texto = await montarTextoSaudacaoPersonalizada();
+  const alvo = document.getElementById("atlas-saudacao-hub");
+  if (alvo) {
+    alvo.innerHTML = `<strong>ATLAS:</strong> <span class="atlas-apresentacao-resumo">${texto}</span>`;
+    alvo.classList.remove("hidden");
+  }
+  falarResumoModulo(texto);
 }
 
 // ---------- resumo executivo narrado (dashboards de análise) ----------
@@ -6582,6 +7055,76 @@ function _removerPalavraDeAtivacao(alvoNormalizado) {
   return alvoNormalizado.replace(/^(e[ai]?\s+)?atlas[,\s]*/, "").trim();
 }
 
+// mesma regex de _removerPalavraDeAtivacao, mas aplicada direto no texto ORIGINAL
+// (sem normalizar) - usada só quando o texto vai ser mandado pro assistente de IA
+// generativa (25/08/2026), pra preservar acentos/maiúsculas da pergunta de verdade.
+function _removerPalavraDeAtivacaoTextoOriginal(transcricao) {
+  return transcricao.replace(/^\s*(e[ai]?\s+)?atlas[,\s]*/i, "").trim();
+}
+
+// "Atlas, Assistente" (19/08/2026) - gatilho de voz direto pro painel do
+// Assistente Atlas, sem precisar dizer o nome de um módulo. Verificado
+// ANTES de _acharViewPorVoz, senão a palavra "assistente" cairia no caminho
+// de "pergunta pro assistente de IA generativa" (que também funcionaria,
+// mas de um jeito mais lento/indireto que o pedido).
+const GATILHOS_ASSISTENTE_VOZ = [
+  "assistente", "assistente atlas", "assistente do atlas", "abrir assistente",
+  "abrir o assistente", "abra o assistente", "falar com assistente", "falar com o assistente",
+];
+
+function _ehGatilhoAssistente(textoSemAtivacaoNormalizado) {
+  return GATILHOS_ASSISTENTE_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
+}
+
+// "Atlas, Mensagens" (23/08/2026) - substitui o antigo gatilho de "duas
+// palmas" (ver histórico: configurarDetectorDePalmas foi removido porque a
+// fala do próprio Atlas ao ler o resumo das pendências voltava pelo
+// microfone e era interpretada como uma nova palma, causando loop infinito
+// de disparo). Reaproveita o reconhecimento de fala normal, que já ignora
+// tudo enquanto window.__atlasFalando é true - por isso não sofre do mesmo
+// problema.
+const GATILHOS_MENSAGENS_VOZ = [
+  "mensagens", "minhas mensagens", "ver mensagens",
+  "pendencias", "pendências", "ver pendencias", "ver pendências",
+  "e-mails", "emails", "ver e-mails", "ver emails",
+];
+
+function _ehGatilhoMensagens(textoSemAtivacaoNormalizado) {
+  return GATILHOS_MENSAGENS_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
+}
+
+// (09/08/2026 - pedido do Maurício) Segunda forma de acionar o assistente por
+// voz, além de dizer "Atlas, [a pergunta toda]" numa frase só: dizer só
+// "Atlas, Assistente", esperar o convite ("Pois não. Pode perguntar.") e
+// então falar a pergunta separadamente, SEM precisar repetir "Atlas" antes
+// dela. Funciona com uma janela de tempo: quando o gatilho "Atlas,
+// Assistente" é reconhecido, guardamos até quando (Date.now() + janela) a
+// PRÓXIMA fala reconhecida deve ser tratada como a pergunta em si, não como
+// um novo comando de navegação. Zerada assim que consumida (uma pergunta por
+// acionamento) ou quando a janela expira sem nada ser dito.
+window.__atlasAguardandoPerguntaAssistenteAte = 0;
+const JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS = 10000; // 10s dá tempo do convite falado terminar (bloqueado por __atlasFalando) + a pessoa pensar e falar
+
+// Abre o hub (se não estiver nele) e rola/foca o painel do Assistente Atlas -
+// usado tanto pelo gatilho de voz "Atlas, Assistente" quanto por qualquer
+// botão equivalente. Fala um convite curto (respeitando window.__atlasFalando,
+// ver falarResumoModulo) só quando vem por voz, pra não soar redundante com
+// um clique manual no painel.
+function abrirPainelAssistenteAtlas(falarConvite = true) {
+  const jaEstavaNoHub = window.__atlasViewAtual === "hub";
+  if (!jaEstavaNoHub) mostrarView("hub");
+  setTimeout(() => {
+    const painel = document.getElementById("painel-assistente-atlas");
+    if (painel) {
+      painel.scrollIntoView({ behavior: "smooth", block: "start" });
+      painel.classList.add("atlas-destaque-temporario");
+      setTimeout(() => painel.classList.remove("atlas-destaque-temporario"), 1600);
+    }
+    document.getElementById("assistente-atlas-input")?.focus();
+    if (falarConvite) falarResumoModulo("Pois não. Pode perguntar.");
+  }, jaEstavaNoHub ? 0 : 250);
+}
+
 function _acharViewPorVoz(transcricao) {
   const alvo = _removerPalavraDeAtivacao(_normalizarTextoVoz(transcricao));
   let melhorView = null;
@@ -6659,19 +7202,75 @@ function configurarComandoDeVoz() {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const resultado = ev.results[i];
         if (!resultado.isFinal) continue;
+
+        // (19/08/2026) Ignora qualquer coisa captada enquanto o próprio Atlas
+        // está falando - sem isso, a fala do Atlas (módulo, assistente,
+        // saudação) sai pelo alto-falante, entra de volta pelo microfone
+        // (que nunca para de ouvir) e vira um "comando" novo por engano. Ver
+        // window.__atlasFalando em falarResumoModulo, acima.
+        if (window.__atlasFalando) continue;
+
         const transcricao = resultado[0].transcript;
+
+        // (09/08/2026) Janela de "pergunta direta" aberta por um "Atlas,
+        // Assistente" anterior - a fala de AGORA é a pergunta em si, mesmo
+        // sem repetir "Atlas" antes. Verificado ANTES do requisito de palavra
+        // de ativação abaixo, exatamente pra dispensar esse requisito aqui.
+        // Consome a janela (só vale pra uma fala) e some se ela já expirou.
+        if (window.__atlasAguardandoPerguntaAssistenteAte > Date.now()) {
+          window.__atlasAguardandoPerguntaAssistenteAte = 0;
+          const perguntaDireta = (_removerPalavraDeAtivacaoTextoOriginal(transcricao) || transcricao).trim();
+          if (perguntaDireta) {
+            status.textContent = `🤔 Perguntando ao assistente: "${perguntaDireta}"...`;
+            perguntarAoAssistenteAtlas(perguntaDireta, { falarResposta: true, origemVoz: true });
+            _registrarComandoDeVozNoBanco(transcricao, null);
+          }
+          continue;
+        }
+
         const alvoNormalizado = _normalizarTextoVoz(transcricao);
         const ouviuPalavraDeAtivacao = _removerPalavraDeAtivacao(alvoNormalizado) !== alvoNormalizado;
         if (!ouviuPalavraDeAtivacao) continue; // ambiente/conversa normal, sem "Atlas" - ignora
+
+        const semAtivacao = _removerPalavraDeAtivacao(alvoNormalizado);
+        if (_ehGatilhoAssistente(semAtivacao)) {
+          // "Atlas, Assistente" (19/08/2026) - atalho direto pro painel do
+          // Assistente Atlas, sem precisar navegar manualmente até o hub. Abre
+          // uma janela de "pergunta direta" (09/08/2026, ver
+          // window.__atlasAguardandoPerguntaAssistenteAte acima): a PRÓXIMA
+          // fala reconhecida, dita sem precisar repetir "Atlas", já é tratada
+          // como a pergunta em si.
+          status.textContent = `✅ "${transcricao}" → abrindo o Assistente Atlas. Pode perguntar.`;
+          setTimeout(() => abrirPainelAssistenteAtlas(), 400);
+          _registrarComandoDeVozNoBanco(transcricao, "hub");
+          window.__atlasAguardandoPerguntaAssistenteAte = Date.now() + JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS;
+          continue;
+        }
+
+        if (_ehGatilhoMensagens(semAtivacao)) {
+          // "Atlas, Mensagens" (23/08/2026) - busca e fala as pendências de
+          // Gmail/Slack, substituindo o antigo gatilho de "duas palmas".
+          status.textContent = `✅ "${transcricao}" → buscando pendências de e-mail e Slack.`;
+          verPendenciasExternas();
+          _registrarComandoDeVozNoBanco(transcricao, null);
+          continue;
+        }
 
         const view = _acharViewPorVoz(transcricao);
         if (view) {
           status.textContent = `✅ "${transcricao}" → abrindo ${document.querySelector(`.rail-item[data-view="${view}"] .rail-label`)?.textContent || view}`;
           setTimeout(() => mostrarView(view), 400);
+          _registrarComandoDeVozNoBanco(transcricao, view);
         } else {
-          status.textContent = `❓ Ouvi "Atlas", mas não reconheci "${transcricao}" como um módulo.`;
+          // Não bateu com nenhum módulo conhecido - em vez de só dizer "não
+          // reconheci", trata como uma PERGUNTA pro assistente de IA generativa
+          // (25/08/2026, ver app/assistente_ia.py). Cobre "Atlas, resumo do dia",
+          // "Atlas, quais os motivos mais recorrentes de divergência" etc.
+          const pergunta = _removerPalavraDeAtivacaoTextoOriginal(transcricao) || transcricao;
+          status.textContent = `🤔 Ouvi "Atlas" - perguntando ao assistente: "${pergunta}"...`;
+          perguntarAoAssistenteAtlas(pergunta, { falarResposta: true, origemVoz: true });
+          _registrarComandoDeVozNoBanco(transcricao, null);
         }
-        _registrarComandoDeVozNoBanco(transcricao, view);
       }
     });
 
@@ -6744,6 +7343,646 @@ function configurarComandoDeVoz() {
 }
 
 configurarComandoDeVoz();
+
+// ---------- Assistente Atlas por voz/texto (25/08/2026 - ver app/assistente_ia.py) ----------
+// Chamado tanto pelo comando de voz contínuo do hub (ver "result" acima, quando
+// "Atlas, [algo]" não bate com nenhum módulo conhecido) quanto pelos botões/campo
+// de texto do painel "Assistente Atlas" na tela Início. Sempre passa pela mesma
+// rota (POST /assistente/perguntar), que devolve texto pronto pra mostrar E pra
+// falar (reaproveita falarResumoModulo, o mesmo motor de fala usado no resto do
+// Atlas - efeito sonoro de "pensando", voz grave etc.).
+async function perguntarAoAssistenteAtlas(pergunta, opcoes = {}) {
+  const { falarResposta = false, origemVoz = false } = opcoes;
+  const areaResposta = document.getElementById("assistente-atlas-resposta");
+  const statusVoz = document.getElementById("hub-voice-status");
+
+  if (areaResposta) {
+    areaResposta.classList.remove("hidden");
+    areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p class="hint">Pensando...</p>`;
+  }
+
+  try {
+    const res = await apiFetch(`${API}/assistente/perguntar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pergunta }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      const erro = data.detail || "Não foi possível obter uma resposta do assistente agora.";
+      if (areaResposta) {
+        areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p style="color:var(--critico)">⚠️ ${erro}</p>`;
+      }
+      if (origemVoz && statusVoz) statusVoz.textContent = `⚠️ ${erro}`;
+      return;
+    }
+
+    if (areaResposta) {
+      areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p>${data.resposta}</p>`;
+    }
+    if (origemVoz && statusVoz) statusVoz.textContent = `✅ Assistente respondeu a "${pergunta}".`;
+    if (falarResposta) falarResumoModulo(data.resposta);
+  } catch (e) {
+    console.warn("Atlas: falha ao perguntar ao assistente.", e);
+    if (areaResposta) {
+      areaResposta.innerHTML = `<p><strong>Você perguntou:</strong> "${pergunta}"</p><p style="color:var(--critico)">⚠️ Não foi possível contactar o assistente agora.</p>`;
+    }
+    if (origemVoz && statusVoz) statusVoz.textContent = "⚠️ Não foi possível contactar o assistente agora.";
+  }
+}
+
+// Botões de pergunta rápida (19/08/2026 - módulo de perguntas padrão, ver
+// app/assistente_perguntas_padrao.py): buscados do backend em vez de fixos
+// no HTML, pra ter uma única fonte de verdade entre o catálogo que o
+// backend usa pra pré-validação e os botões que aparecem aqui. Chamado de
+// dentro de mostrarApp() (depois do login) - se a chamada falhar (ex: IA
+// não configurada, backend antigo sem essa rota ainda), o painel some os
+// botões em silêncio e o campo de texto livre continua funcionando normal.
+let _atlasPerguntasPadraoCache = [];
+
+async function carregarPerguntasPadraoAssistente() {
+  const lista = document.getElementById("assistente-perguntas-padrao-lista");
+  if (!lista) return;
+  try {
+    const res = await apiFetch(`${API}/assistente/perguntas-padrao`);
+    if (!res.ok) return;
+    const perguntas = await res.json();
+    _atlasPerguntasPadraoCache = perguntas;
+    lista.innerHTML = "";
+    perguntas.forEach((p) => {
+      const btn = document.createElement("button");
+      btn.className = "btn-secundario btn-pergunta-rapida-assistente";
+      btn.dataset.pergunta = p.pergunta;
+      btn.textContent = p.rotulo;
+      btn.addEventListener("click", () => perguntarAoAssistenteAtlas(p.pergunta, { falarResposta: true }));
+      lista.appendChild(btn);
+    });
+    _renderizarListaConfigPerguntasPadrao();
+  } catch (e) {
+    console.warn("Atlas: não consegui carregar as perguntas padrão do assistente.", e);
+  }
+}
+
+// ---------- Configuração de perguntas padrão (09/08/2026 - pedido do Maurício) ----------
+// Módulo pra criar/editar/excluir perguntas padrão do assistente PELO PRÓPRIO
+// APP, sem depender de uma alteração de código (ver
+// app/assistente_perguntas_padrao.py e as rotas POST/PUT/DELETE
+// /assistente/perguntas-padrao no backend). Restrito a admin - o botão que
+// abre este painel só aparece pra esse papel (ver aplicarPermissoesNaUI()).
+// As perguntas do catálogo FIXO (personalizada:false) aparecem aqui só como
+// referência (não editáveis por esta tela); as personalizadas
+// (personalizada:true) têm editar/excluir.
+function _renderizarListaConfigPerguntasPadrao() {
+  const alvo = document.getElementById("lista-config-perguntas-padrao");
+  if (!alvo) return;
+  if (!_atlasPerguntasPadraoCache.length) {
+    alvo.innerHTML = "<p class=\"hint\">Nenhuma pergunta padrão carregada ainda.</p>";
+    return;
+  }
+  alvo.innerHTML = _atlasPerguntasPadraoCache
+    .map((p) => {
+      const selo = p.personalizada
+        ? '<span class="hint" style="margin:0">personalizada</span>'
+        : '<span class="hint" style="margin:0">padrão do sistema</span>';
+      const acoes = p.personalizada
+        ? `<button class="btn-secundario" data-editar-pergunta="${p.chave}">Editar</button>
+           <button class="btn-secundario" data-excluir-pergunta="${p.chave}">Excluir</button>`
+        : "";
+      return `<div class="atlas-pendencia-item" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <strong style="flex:1; min-width:200px">${p.rotulo}</strong>
+        ${selo}
+        ${acoes}
+      </div>`;
+    })
+    .join("");
+
+  alvo.querySelectorAll("[data-excluir-pergunta]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const chave = btn.dataset.excluirPergunta;
+      if (!confirm("Excluir esta pergunta padrão? Ela deixa de aparecer como atalho e não será mais reconhecida por voz/texto.")) return;
+      try {
+        const res = await apiFetch(`${API}/assistente/perguntas-padrao/${encodeURIComponent(chave)}`, { method: "DELETE" });
+        if (!res.ok) {
+          const erro = await res.json().catch(() => ({}));
+          alert(erro.detail || "Não foi possível excluir.");
+          return;
+        }
+        await carregarPerguntasPadraoAssistente();
+      } catch (e) {
+        console.warn("Atlas: falha ao excluir pergunta padrão.", e);
+        alert("Não foi possível excluir agora.");
+      }
+    });
+  });
+
+  alvo.querySelectorAll("[data-editar-pergunta]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const chave = btn.dataset.editarPergunta;
+      const entrada = _atlasPerguntasPadraoCache.find((p) => p.chave === chave);
+      if (!entrada) return;
+      // o GET não devolve gatilhos/instrucao_extra (só chave/rotulo/pergunta) -
+      // por simplicidade, o formulário de edição parte só do rótulo/pergunta
+      // já carregados, deixando gatilhos/instrução em branco pra serem
+      // preenchidos de novo (evita mais uma chamada de rede só pra isso).
+      document.getElementById("config-pergunta-chave-em-edicao").value = entrada.chave;
+      document.getElementById("config-pergunta-rotulo").value = entrada.rotulo;
+      document.getElementById("config-pergunta-texto").value = entrada.pergunta;
+      document.getElementById("config-pergunta-gatilhos").value = "";
+      document.getElementById("config-pergunta-gatilhos").placeholder = "Repita as frases-gatilho (o formulário de edição não pré-carrega as atuais)";
+      document.getElementById("config-pergunta-instrucao").value = "";
+      document.getElementById("btn-salvar-pergunta-padrao").textContent = "Salvar edição";
+      document.getElementById("btn-cancelar-edicao-pergunta-padrao").classList.remove("hidden");
+      document.getElementById("config-pergunta-rotulo").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
+}
+
+function _cancelarEdicaoPerguntaPadrao() {
+  document.getElementById("form-nova-pergunta-padrao").reset();
+  document.getElementById("config-pergunta-chave-em-edicao").value = "";
+  document.getElementById("config-pergunta-gatilhos").placeholder = 'Frases-gatilho (separadas por vírgula), ex: "estoque parado, itens parados"';
+  document.getElementById("btn-salvar-pergunta-padrao").textContent = "Adicionar pergunta padrão";
+  document.getElementById("btn-cancelar-edicao-pergunta-padrao").classList.add("hidden");
+}
+
+document.getElementById("btn-config-perguntas-padrao")?.addEventListener("click", () => {
+  document.getElementById("painel-config-perguntas-padrao").classList.remove("hidden");
+  _renderizarListaConfigPerguntasPadrao();
+});
+document.getElementById("btn-fechar-config-perguntas-padrao")?.addEventListener("click", () => {
+  document.getElementById("painel-config-perguntas-padrao").classList.add("hidden");
+  _cancelarEdicaoPerguntaPadrao();
+});
+document.getElementById("btn-cancelar-edicao-pergunta-padrao")?.addEventListener("click", _cancelarEdicaoPerguntaPadrao);
+
+document.getElementById("form-nova-pergunta-padrao")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const chaveEmEdicao = document.getElementById("config-pergunta-chave-em-edicao").value;
+  const rotulo = document.getElementById("config-pergunta-rotulo").value.trim();
+  const pergunta = document.getElementById("config-pergunta-texto").value.trim();
+  const gatilhos = document.getElementById("config-pergunta-gatilhos").value.split(",").map((g) => g.trim()).filter(Boolean);
+  const instrucao_extra = document.getElementById("config-pergunta-instrucao").value.trim() || null;
+
+  if (!rotulo || !pergunta || !gatilhos.length) {
+    alert("Preencha o rótulo, a pergunta e ao menos uma frase-gatilho.");
+    return;
+  }
+
+  const corpo = { rotulo, pergunta, gatilhos, instrucao_extra };
+  const url = chaveEmEdicao
+    ? `${API}/assistente/perguntas-padrao/${encodeURIComponent(chaveEmEdicao)}`
+    : `${API}/assistente/perguntas-padrao`;
+  const metodo = chaveEmEdicao ? "PUT" : "POST";
+
+  try {
+    const res = await apiFetch(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+    if (!res.ok) {
+      const erro = await res.json().catch(() => ({}));
+      alert(erro.detail || "Não foi possível salvar essa pergunta padrão.");
+      return;
+    }
+    _cancelarEdicaoPerguntaPadrao();
+    await carregarPerguntasPadraoAssistente();
+  } catch (e) {
+    console.warn("Atlas: falha ao salvar pergunta padrão.", e);
+    alert("Não foi possível salvar agora.");
+  }
+});
+
+document.getElementById("btn-perguntar-assistente").addEventListener("click", () => {
+  const input = document.getElementById("assistente-atlas-input");
+  const pergunta = input.value.trim();
+  if (!pergunta) return;
+  perguntarAoAssistenteAtlas(pergunta, { falarResposta: true });
+});
+document.getElementById("assistente-atlas-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") document.getElementById("btn-perguntar-assistente").click();
+});
+
+// ---------- Pendências Gmail/Slack (19/08/2026 - ver app/integracoes_pessoais.py) ----------
+// Simplificado em 09/08/2026 (pedido do Maurício: "se for só pra mim, é mais
+// simples?") - credenciais FIXAS no servidor (uma conta pessoal), sem mais
+// fluxo de "Conectar"/"Desconectar" por usuário. Por isso só visível pra
+// Admin (ver aplicarPermissoesNaUI()) - sem essa restrição, qualquer pessoa
+// logada no Atlas veria a caixa de entrada/Slack pessoal de quem configurou.
+// Acionado pelo botão "👏 Ver pendências agora" OU pelo comando de voz
+// "Atlas, Mensagens" (ver GATILHOS_MENSAGENS_VOZ acima). Até 23/08/2026
+// existia também um gatilho por "duas palmas" (configurarDetectorDePalmas),
+// removido por causar loop infinito: a fala do próprio Atlas ao ler o
+// resumo das pendências voltava pelo microfone e era interpretada como uma
+// nova palma, disparando a busca de novo, que falava de novo, indefinidamente.
+async function carregarStatusIntegracoesPessoais() {
+  const painel = document.getElementById("painel-pendencias-externas");
+  if (!painel || painel.classList.contains("hidden")) return; // não-admin: nem consulta
+  try {
+    const res = await apiFetch(`${API}/integracoes-pessoais/status`);
+    if (!res.ok) return;
+    const status = await res.json();
+    const elGmail = document.getElementById("status-integracao-gmail");
+    const elSlack = document.getElementById("status-integracao-slack");
+    if (elGmail) elGmail.textContent = `Gmail: ${status.gmail.configurado ? "configurado." : "não configurado neste ambiente."}`;
+    if (elSlack) elSlack.textContent = `Slack: ${status.slack.configurado ? "configurado." : "não configurado neste ambiente."}`;
+  } catch (e) {
+    console.warn("Atlas: não consegui carregar o status das integrações pessoais.", e);
+  }
+}
+
+// Chamada tanto pelo botão manual quanto pelo comando de voz "Atlas,
+// Mensagens" - busca pendências de Gmail/Slack, mostra a lista com links
+// pra abrir cada item, e fala um resumo curto em voz alta.
+async function verPendenciasExternas() {
+  const area = document.getElementById("resultado-pendencias-externas");
+  if (area) {
+    area.classList.remove("hidden");
+    area.innerHTML = `<p class="hint">Buscando pendências...</p>`;
+  }
+  let dados;
+  try {
+    const res = await apiFetch(`${API}/integracoes-pessoais/pendencias`);
+    dados = await res.json();
+    if (!res.ok) {
+      if (area) area.innerHTML = `<p style="color:var(--critico)">⚠️ ${dados.detail || "Não foi possível buscar as pendências agora."}</p>`;
+      return;
+    }
+  } catch (e) {
+    if (area) area.innerHTML = `<p style="color:var(--critico)">⚠️ Não consegui contactar o Atlas pra buscar as pendências.</p>`;
+    return;
+  }
+
+  const totalEmails = dados.gmail?.configurado ? (dados.gmail.total_nao_lidos || 0) : 0;
+  const emails = dados.gmail?.configurado ? (dados.gmail.itens || []) : [];
+  const dms = dados.slack?.configurado ? (dados.slack.mensagens_diretas_nao_lidas || []) : [];
+  const mencoes = dados.slack?.configurado ? (dados.slack.mencoes_recentes || []) : [];
+  const dmsValidas = Array.isArray(dms) ? dms : [];
+  const mencoesValidas = Array.isArray(mencoes) ? mencoes : [];
+
+  if (area) {
+    let html = "";
+    if (dados.gmail?.configurado) {
+      html += `<h3 style="font-size:14px; margin:12px 0 6px">📧 E-mails não lidos (${totalEmails})</h3>`;
+      html += emails.length
+        ? emails.map((e) => `<div class="atlas-pendencia-item">${e.assunto}<span class="hint"> - ${e.remetente}</span></div>`).join("")
+        : `<p class="hint">Nenhum e-mail não lido na caixa de entrada. 🎉</p>`;
+      if (dados.gmail.indisponivel) html += `<p class="hint" style="color:var(--critico)">⚠️ Gmail: ${dados.gmail.indisponivel}</p>`;
+    }
+    if (dados.slack?.configurado) {
+      html += `<h3 style="font-size:14px; margin:12px 0 6px">💬 Slack - mensagens diretas não lidas (${dmsValidas.length})</h3>`;
+      html += dmsValidas.length
+        ? dmsValidas.map((m) => `<div class="atlas-pendencia-item"><a href="${m.link}" target="_blank" rel="noopener">${m.previa || "(sem prévia)"}</a><span class="hint"> - ${m.nao_lidas} não lida(s)</span></div>`).join("")
+        : `<p class="hint">Nenhuma mensagem direta não lida.</p>`;
+      html += `<h3 style="font-size:14px; margin:12px 0 6px">💬 Slack - menções recentes (${mencoesValidas.length})</h3>`;
+      html += mencoesValidas.length
+        ? mencoesValidas.map((m) => `<div class="atlas-pendencia-item"><a href="${m.link || "#"}" target="_blank" rel="noopener">${m.texto || "(sem texto)"}</a><span class="hint"> - #${m.canal}</span></div>`).join("")
+        : `<p class="hint">Nenhuma menção recente encontrada.</p>`;
+      if (dados.slack.indisponivel) html += `<p class="hint" style="color:var(--critico)">⚠️ Slack: ${dados.slack.indisponivel}</p>`;
+    }
+    if (!dados.gmail?.configurado && !dados.slack?.configurado) {
+      html = `<p class="hint">Configure ATLAS_GMAIL_*/ATLAS_SLACK_USER_TOKEN no servidor pra ver pendências aqui (ver LEIA-ME).</p>`;
+    }
+    area.innerHTML = html;
+  }
+
+  const totalPendencias = totalEmails + dmsValidas.length;
+  const resumoFalado = totalPendencias > 0
+    ? `Você tem ${totalEmails} e-mail${totalEmails === 1 ? "" : "s"} e ${dmsValidas.length} mensagem${dmsValidas.length === 1 ? "" : "s"} do Slack pendentes.`
+    : "Não encontrei pendências novas no e-mail ou no Slack agora.";
+  falarResumoModulo(resumoFalado);
+}
+
+document.getElementById("btn-ver-pendencias-externas")?.addEventListener("click", () => verPendenciasExternas());
+
+// ---------- Dashboard de Acompanhamento - Controle de Movimentados (19/08/2026) ----------
+// "Movimentação" aqui é Transferência entre almoxarifados (esclarecido pelo
+// usuário) - o dashboard cruza volume de transferências com o critério de
+// FEFO nas que saem da Fábrica, e guarda o histórico mensal permanentemente
+// (ver ResumoTransferenciasMensal no backend) pra sobreviver a reimportações
+// futuras da planilha de Transferências.
+let chartMovimentadosFefo;
+
+async function carregarMovimentados() {
+  const [resumo, fefoResumo, evolucao] = await Promise.all([
+    apiFetch(`${API}/movimentados/dashboard/transferencias-resumo`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/dashboard/resumo`).then((r) => r.json()),
+    apiFetch(`${API}/movimentados/dashboard/transferencias-evolucao-mensal`).then((r) => r.json()),
+  ]);
+
+  document.getElementById("mv-kpi-row").innerHTML = [
+    { label: "Total de transferências", value: resumo.total_transferencias },
+    { label: "Volume transferido", value: resumo.quantidade_total },
+    { label: "Saídas da Fábrica", value: resumo.transferencias_da_fabrica },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value">${c.value}</div></div>`)
+    .join("");
+
+  document.getElementById("mv-fefo-kpi-row").innerHTML = [
+    { label: "Avaliadas p/ FEFO", value: fefoResumo.total_quebras_fefo + fefoResumo.total_dentro_do_criterio },
+    { label: "Quebras de FEFO", value: fefoResumo.total_quebras_fefo, cor: "var(--critico)" },
+    { label: "Taxa de quebra", value: fefoResumo.taxa_quebra_pct != null ? fefoResumo.taxa_quebra_pct + "%" : "—", cor: fefoResumo.taxa_quebra_pct ? "var(--critico)" : "var(--sucesso, #2e7d32)" },
+    { label: "Dentro do critério", value: fefoResumo.total_dentro_do_criterio, cor: "var(--sucesso, #2e7d32)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  const ctx = document.getElementById("mv-chart-evolucao");
+  if (chartMovimentadosFefo) chartMovimentadosFefo.destroy();
+  chartMovimentadosFefo = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: evolucao.map((e) => e.mes),
+      datasets: [
+        {
+          label: "Taxa de quebra de FEFO (%)",
+          data: evolucao.map((e) => e.taxa_quebra_fefo_pct),
+          backgroundColor: evolucao.map((e) => (e.taxa_quebra_fefo_pct == null ? "#8ca0a3" : e.taxa_quebra_fefo_pct > 0 ? "#e5534b" : "#4caf50")),
+          borderRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const e = evolucao[c.dataIndex];
+              return e.taxa_quebra_fefo_pct == null
+                ? "Sem transferências da Fábrica avaliadas nesse mês"
+                : `${e.taxa_quebra_fefo_pct}% de quebra (${e.quebras_fefo}/${e.transferencias_fabrica_avaliadas} avaliadas) · ${e.total_transferencias} transferência(s) no total`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { color: "#2e3a40" }, title: { display: true, text: "% de quebra de FEFO", color: "#8ca0a3", font: { size: 10 } } },
+      },
+    },
+  });
+
+  document.querySelector("#tabela-movimentados-por-almox tbody").innerHTML = evolucao.length
+    ? evolucao
+        .map(
+          (e) => `<tr>
+            <td>${e.mes}</td><td>${e.total_transferencias}</td><td>${e.quantidade_total}</td>
+            <td style="color:${e.taxa_quebra_fefo_pct ? "var(--critico)" : "inherit"}">${e.taxa_quebra_fefo_pct != null ? e.taxa_quebra_fefo_pct + "%" : "—"} ${e.transferencias_fabrica_avaliadas ? `(${e.quebras_fefo}/${e.transferencias_fabrica_avaliadas})` : ""}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4" style="color:var(--muted)">Nenhuma transferência registrada ainda.</td></tr>`;
+}
+
+document.getElementById("btn-atualizar-historico-movimentados").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-atualizar-historico-movimentados");
+  btn.disabled = true;
+  btn.textContent = "Atualizando...";
+  try {
+    await apiFetch(`${API}/movimentados/snapshot-transferencias`, { method: "POST" });
+    await carregarMovimentados();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ Atualizar histórico";
+  }
+});
+
+document.getElementById("btn-ver-fefo-detalhe").addEventListener("click", () => mostrarView("fefo"));
+
+// ---------- FEFO (18/08/2026 - motor antigo por Transferencia; 20/08/2026:
+// substituído pelo motor nativo por lote movimentado, ver app/fefo.py e
+// claude/checagens-fefo-heuristica-quebrada.md) ----------
+async function carregarFefo() {
+  const apenasQuebras = document.getElementById("fefo-filtro-resultado").value === "quebras";
+  const qs = apenasQuebras ? "?" + new URLSearchParams({ apenas_quebras: "true" }).toString() : "";
+
+  const [dashboard, checagens] = await Promise.all([
+    apiFetch(`${API}/fefo/dashboard/resumo`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/checagens${qs}`).then((r) => r.json()),
+  ]);
+
+  document.getElementById("fefo-kpi-row").innerHTML = [
+    { label: "Movimentos avaliados", value: dashboard.total_transferencias_avaliadas },
+    { label: "Quebras de FEFO", value: dashboard.total_quebras_fefo, cor: "var(--critico)" },
+    { label: "Taxa de quebra", value: dashboard.taxa_quebra_pct != null ? dashboard.taxa_quebra_pct + "%" : "—", cor: "var(--critico)" },
+    { label: "Dentro do critério", value: dashboard.total_dentro_do_criterio, cor: "var(--sucesso, #2e7d32)" },
+    { label: "Sem dado suficiente", value: dashboard.total_sem_dado_suficiente, cor: "var(--muted)" },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  document.querySelector("#tabela-fefo-top-skus tbody").innerHTML = dashboard.top_skus_com_quebra.length
+    ? dashboard.top_skus_com_quebra.map((s) => `<tr><td>${s.sku}</td><td>${s.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  document.querySelector("#tabela-fefo-checagens tbody").innerHTML = checagens.length
+    ? checagens
+        .map(
+          (c) => `<tr>
+            <td>${c.sku || "—"}</td><td class="col-descricao">${c.descricao_produto || "—"}</td><td>${c.movimento || "—"}</td>
+            <td>${c.lote_movimentado || "—"}</td><td>${c.validade_lote_movimentado ? formatarDataCurta(c.validade_lote_movimentado) : "—"}</td>
+            <td>${c.lote_mais_antigo_disponivel || "—"}</td><td>${c.validade_mais_antiga_disponivel ? formatarDataCurta(c.validade_mais_antiga_disponivel) : "—"}</td>
+            <td style="color:${c.quebra_fefo ? "var(--critico)" : "inherit"}">${c.status || "—"}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="8" style="color:var(--muted)">Nenhuma checagem calculada ainda - importe a "Movimentação por Lote (FEFO)" na tela Importar e clique em "Recalcular".</td></tr>`;
+
+  carregarAuditoriaFefo();
+}
+
+document.getElementById("fefo-filtro-resultado").addEventListener("change", carregarFefo);
+document.getElementById("btn-recalcular-fefo").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-recalcular-fefo");
+  btn.disabled = true;
+  btn.textContent = "Recalculando...";
+  try {
+    const res = await apiFetch(`${API}/fefo/recalcular`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) { alert(data.detail || "Erro ao recalcular."); return; }
+    await carregarFefo();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ Recalcular";
+  }
+});
+
+// ---------- Auditoria FEFO importada (20/08/2026) ----------
+// Histórico real da auditoria que a equipe de Controle já roda por fora do
+// Atlas (planilha "Controle de lote" + exportação de "Movimentação",
+// comparadas dia a dia por um notebook Python do estagiário). O Atlas não
+// recalcula essa comparação - só consolida o resultado já apurado (ver
+// app/fefo.py, seção "Auditoria FEFO importada"). Pedido do usuário
+// (20/08/2026): "consolide o histórico e suba pro atlas [...] baseado nas
+// ferramentas de importação que já existem, consolide o relatório dentro
+// do Atlas".
+let chartAuditoriaFefoDia;
+
+async function carregarAuditoriaFefo() {
+  const dataInicio = document.getElementById("fefo-aud-filtro-data-inicio").value;
+  const dataFim = document.getElementById("fefo-aud-filtro-data-fim").value;
+  const produto = document.getElementById("fefo-aud-filtro-produto").value.trim();
+  const apenasQuebras = document.getElementById("fefo-aud-filtro-quebras").checked;
+
+  const qsResumo = new URLSearchParams();
+  if (dataInicio) qsResumo.set("data_inicio", dataInicio);
+  if (dataFim) qsResumo.set("data_fim", dataFim);
+
+  const qsRegistros = new URLSearchParams(qsResumo);
+  if (produto) qsRegistros.set("produto", produto);
+  if (apenasQuebras) qsRegistros.set("apenas_quebras", "true");
+
+  const [resumo, registros] = await Promise.all([
+    apiFetch(`${API}/fefo/auditoria/resumo?${qsResumo}`).then((r) => r.json()),
+    apiFetch(`${API}/fefo/auditoria/registros?${qsRegistros}`).then((r) => r.json()),
+  ]);
+
+  document.getElementById("fefo-aud-kpi-row").innerHTML = [
+    { label: "Movimentos auditados", value: resumo.total_auditaveis },
+    { label: "Quebras de FEFO", value: resumo.total_quebras, cor: "var(--critico)" },
+    {
+      label: "Taxa de quebra",
+      value: resumo.taxa_quebra_pct != null ? resumo.taxa_quebra_pct + "%" : "—",
+      cor: resumo.taxa_quebra_pct ? "var(--critico)" : "var(--sucesso, #2e7d32)",
+    },
+    { label: "Sem correspondência", value: resumo.total_sem_correspondencia, cor: "var(--muted)" },
+    { label: "Dias com dado", value: resumo.dias_com_dado },
+  ]
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
+    .join("");
+
+  document.getElementById("fefo-aud-periodo").textContent = resumo.periodo_coberto
+    ? `Período coberto: ${formatarDataCurta(resumo.periodo_coberto[0])} a ${formatarDataCurta(resumo.periodo_coberto[1])} · fonte(s): ${
+        resumo.fontes_no_periodo.map((f) => (f === "auditoria_diaria" ? "auditoria diária" : "consolidado")).join(", ") || "—"
+      }`
+    : "Nenhum dado importado ainda — suba um Excel de auditoria no painel acima.";
+
+  const ctx = document.getElementById("fefo-aud-chart-dia");
+  if (chartAuditoriaFefoDia) chartAuditoriaFefoDia.destroy();
+  chartAuditoriaFefoDia = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: resumo.por_dia.map((d) => formatarDataCurta(d.data)),
+      datasets: [
+        {
+          label: "Total auditado",
+          data: resumo.por_dia.map((d) => d.total),
+          backgroundColor: "rgba(91,117,172,0.22)",
+          borderColor: "#5b75ac",
+          borderWidth: 1,
+          borderRadius: 3,
+          order: 2,
+        },
+        { label: "Quebras de FEFO", data: resumo.por_dia.map((d) => d.quebras), backgroundColor: "#e5534b", borderRadius: 3, order: 1 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: true, labels: { color: "#8ca0a3", font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: "#8ca0a3", font: { size: 10 }, maxRotation: 45 }, grid: { color: "#2e3a40" } },
+        y: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { color: "#2e3a40" }, min: 0 },
+      },
+    },
+  });
+
+  document.querySelector("#fefo-aud-tabela-produtos tbody").innerHTML = resumo.top_produtos_com_quebra.length
+    ? resumo.top_produtos_com_quebra.map((p) => `<tr><td class="col-descricao">${p.produto}</td><td>${p.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  document.querySelector("#fefo-aud-tabela-destinos tbody").innerHTML = resumo.top_destinos_com_quebra.length
+    ? resumo.top_destinos_com_quebra.map((d) => `<tr><td>${d.destino}</td><td>${d.quebras}</td></tr>`).join("")
+    : `<tr><td colspan="2" style="color:var(--muted)">Nenhuma quebra registrada.</td></tr>`;
+
+  document.querySelector("#fefo-aud-tabela-registros tbody").innerHTML = registros.length
+    ? registros
+        .map(
+          (r) => `<tr>
+            <td>${formatarDataCurta(r.data)}</td><td>${r.sku || "—"}</td><td class="col-descricao">${r.descricao_produto || "—"}</td>
+            <td>${r.movimento || "—"}</td><td>${r.lote_movimentado || "—"}</td><td>${r.qtd_lote_movimentado ?? "—"}</td>
+            <td>${r.lote_mais_antigo_disponivel || "—"}</td>
+            <td style="color:${r.quebra_fefo ? "var(--critico)" : "inherit"}">${r.status || "—"}</td>
+            <td>${r.fonte === "auditoria_diaria" ? "Diária" : "Consolidado"}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="9" style="color:var(--muted)">Nenhum movimento importado ainda — suba um Excel de auditoria no painel acima.</td></tr>`;
+}
+
+["fefo-aud-filtro-data-inicio", "fefo-aud-filtro-data-fim", "fefo-aud-filtro-quebras"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", carregarAuditoriaFefo)
+);
+document.getElementById("fefo-aud-filtro-produto").addEventListener("input", () => {
+  clearTimeout(window.__fefoAudBusca);
+  window.__fefoAudBusca = setTimeout(carregarAuditoriaFefo, 350);
+});
+
+document.getElementById("fefo-aud-btn-importar").addEventListener("click", async () => {
+  const input = document.getElementById("fefo-aud-input-arquivos");
+  const resultado = document.getElementById("fefo-aud-resultado-importacao");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione ao menos um arquivo primeiro.";
+    return;
+  }
+  const form = new FormData();
+  Array.from(input.files).forEach((f) => form.append("arquivos", f));
+  const btn = document.getElementById("fefo-aud-btn-importar");
+  btn.disabled = true;
+  resultado.textContent = `Importando ${input.files.length} arquivo(s)...`;
+  try {
+    const res = await apiFetch(`${API}/fefo/auditoria/importar`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    const erros = (data.detalhe || []).filter((d) => d.erro);
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) em ${data.arquivos_processados - data.arquivos_com_erro} arquivo(s) · ${data.quebras_importadas} quebra(s)${
+      data.arquivos_com_erro ? ` · ${data.arquivos_com_erro} arquivo(s) com erro: ${erros.map((e) => `${e.arquivo} (${e.erro})`).join("; ")}` : ""
+    }`;
+    input.value = "";
+    await carregarAuditoriaFefo();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("fefo-aud-btn-importar-html").addEventListener("click", async () => {
+  const input = document.getElementById("fefo-aud-input-html");
+  const resultado = document.getElementById("fefo-aud-resultado-html");
+  if (!input.files.length) {
+    resultado.textContent = "Selecione o arquivo HTML primeiro.";
+    return;
+  }
+  const form = new FormData();
+  form.append("arquivo", input.files[0]);
+  const btn = document.getElementById("fefo-aud-btn-importar-html");
+  btn.disabled = true;
+  resultado.textContent = "Importando...";
+  try {
+    const res = await apiFetch(`${API}/fefo/auditoria/importar-consolidado`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) {
+      resultado.textContent = `Erro: ${data.detail || JSON.stringify(data)}`;
+      return;
+    }
+    resultado.textContent = `${data.linhas_importadas} linha(s) importada(s) (${data.dias_importados} dia(s)${
+      data.periodo_importado ? ", " + data.periodo_importado[0] + " a " + data.periodo_importado[1] : ""
+    })${
+      data.dias_pulados_ja_cobertos_por_auditoria_diaria.length
+        ? ` · ${data.dias_pulados_ja_cobertos_por_auditoria_diaria.length} dia(s) já cobertos pela auditoria diária, ignorados`
+        : ""
+    }`;
+    input.value = "";
+    await carregarAuditoriaFefo();
+  } catch (erro) {
+    resultado.textContent = "Falha ao importar: " + erro.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---------- PWA: registro do service worker (13/08/2026) ----------
 // Só isso já é o suficiente pra Chrome/Android considerar o Atlas
