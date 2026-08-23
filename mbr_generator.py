@@ -307,7 +307,11 @@ def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
 
 def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCIONAL, contexto=None, cor_contexto=None):
     _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=CINZA_CLARO, raio=0.14)
-    pad = 0.18
+    # Cartão compacto (22/08/2026, pedido do usuário: "diminua títulos e cards
+    # pra os gráficos terem mais destaque") - pad e posições verticais
+    # recalculados a partir das medidas reais do PPTX Padrão aprovado (cartão
+    # de 0,85" de altura, era 1,25"/1,30"/1,35"), não só a altura externa.
+    pad = 0.16
     largura_texto = w - 2 * pad
     # Os valores numéricos "de sempre" (R$, %, contagens) sempre couberam numa
     # linha só em 28pt, mas os dashboards externos passaram a alimentar este
@@ -323,12 +327,22 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
         max_chars = max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57)))
         if len(valor_texto) > max_chars:
             texto_valor = valor_texto[:max(1, max_chars - 1)].rstrip() + "…"
-    _texto(slide, x + pad, y + 0.16, w - 2 * pad, 0.55, texto_valor, tamanho=tamanho_valor,
+    _texto(slide, x + pad, y + 0.08, w - 2 * pad, 0.40, texto_valor, tamanho=tamanho_valor,
            negrito=True, cor=cor_valor, fonte=FONTE_TITULO)
-    y_rotulo = y + h - (0.58 if contexto else 0.34)
-    _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.26, rotulo.upper(), tamanho=10.5, negrito=True, cor=CINZA_TEXTO)
+    # Com o card compacto (0,85"), só sobra espaço vertical pra 1 linha de
+    # rótulo - com ou sem contexto embaixo, um rótulo que quebra em 2 linhas
+    # estoura a borda do card (sem contexto) ou invade a linha de contexto
+    # (com contexto). Trunca sempre numa linha só, mesma técnica de
+    # reticências já usada acima pro valor (22/08/2026).
+    rotulo_exibido = rotulo.upper()
+    largura_rotulo = w - 2 * pad
+    max_chars_rotulo = max(1, int(largura_rotulo / ((10.5 / 72.0) * 0.60)))
+    if len(rotulo_exibido) > max_chars_rotulo:
+        rotulo_exibido = rotulo_exibido[:max(1, max_chars_rotulo - 1)].rstrip() + "…"
+    y_rotulo = y + h - (0.32 if contexto else 0.18)
+    _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.20, rotulo_exibido, tamanho=10.5, negrito=True, cor=CINZA_TEXTO)
     if contexto:
-        _texto(slide, x + pad, y + h - 0.30, w - 2 * pad, 0.26, contexto, tamanho=10, cor=cor_contexto or CINZA_TEXTO)
+        _texto(slide, x + pad, y + h - 0.16, w - 2 * pad, 0.20, contexto, tamanho=10, cor=cor_contexto or CINZA_TEXTO)
 
 
 def _linha_kpis(slide, y, kpis, altura=1.35):
@@ -1623,7 +1637,7 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
     # à parte, em sua própria seção/scorecard, com o valor de `passivos`).
     if baixas_pacote.get("prejuizo_total") is not None:
         kpi_baixas = {
-            "valor": _fmt_moeda(baixas_pacote["prejuizo_total"]), "rotulo": "Baixas por Pacote (Baixas Operacionais)",
+            "valor": _fmt_moeda(baixas_pacote["prejuizo_total"]), "rotulo": "Baixas por Pacote",
             "cor": COR_ERRO, "contexto": f"{_fmt_pct(baixas_pacote.get('pct_concentrado'))} em {baixas_pacote.get('motivo_concentrado', '—')}",
         }
     else:
@@ -1643,7 +1657,7 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
         qtd_farol = farol_shelf.get("qtd_lotes") or {}
         total_lotes_farol = sum(v for v in qtd_farol.values() if isinstance(v, int))
         kpi_risco_validade = {
-            "valor": _fmt_moeda(farol_shelf["perda_potencial_total"]), "rotulo": "Valor em Risco de Validade (Farol de Shelf)",
+            "valor": _fmt_moeda(farol_shelf["perda_potencial_total"]), "rotulo": "Valor em Risco de Validade",
             "cor": COR_ATENCAO, "contexto": f"{_fmt_num(total_lotes_farol)} lotes · {_fmt_num(qtd_farol.get('vencidos'))} já vencidos",
         }
     else:
@@ -1658,7 +1672,7 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
         kpi_baixas,
         kpi_risco_validade,
         {"valor": _fmt_pct(movimentados.get("pct_acuracia")), "rotulo": "Controle de Movimentados", "cor": AZUL_INSTITUCIONAL, "contexto": label_mov, "cor_contexto": cor_mov},
-    ], altura=1.30)
+    ], altura=0.85)
 
     analise = _analise_geral(d)
 
@@ -2467,7 +2481,7 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
         {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
         {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
         {"valor": _fmt_num(fefo.get("total_sem_correspondencia")), "rotulo": "Sem Correspondência no Mês"},
-    ], altura=1.25)
+    ], altura=0.85)
 
     top = fefo.get("top_produtos_com_quebra") or []
     if top:
@@ -2533,25 +2547,22 @@ def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d:
         {"valor": _fmt_moeda(dado["gasto_total"]), "rotulo": "Gasto Total no Mês", "cor": COR_ATENCAO},
         {"valor": _fmt_num(dado["ops"]), "rotulo": "OPs Testadas"},
         {"valor": _fmt_moeda(dado["custo_medio_op"]), "rotulo": "Custo Médio por OP"},
-    ], altura=1.25)
+    ], altura=0.85)
 
+    # Gráfico ocupa o espaço até o rodapé (era 3.0", terminava na legenda de
+    # fonte) - a legenda de fonte foi removida do rodapé pra dar mais
+    # destaque ao gráfico, igual ao Padrão aprovado (22/08/2026).
     top = dado.get("top_materias_primas") or []
     if top:
         categorias = [t["nome"][:26] for t in reversed(top)]
         valores = [t["custo"] for t in reversed(top)]
         _texto(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 0.26, "MATÉRIAS-PRIMAS COM MAIOR CUSTO NO MÊS (R$)",
                tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.0, categorias, "Custo", valores,
+        _grafico_categoria(slide, MARGEM_IN, 3.35, LARGURA_IN - 2 * MARGEM_IN, 3.57, categorias, "Custo", valores,
                             tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ATENCAO, formato_numero='#,##0')
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.0, "Matérias-primas",
+        _caixa_leitura(slide, MARGEM_IN, 3.05, LARGURA_IN - 2 * MARGEM_IN, 3.57, "Matérias-primas",
                         "Nenhuma matéria-prima consumida neste mês.")
-
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.4,
-        f"Fonte: dashboard de Controle de Testes Industriais (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'}.",
-        tamanho=10, cor=CINZA_TEXTO,
-    )
     return slide
 
 
@@ -2592,7 +2603,7 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
          "cor": COR_ERRO if (dado["impacto_liquido"] or 0) > 0 else COR_SUCESSO},
         {"valor": _fmt_num(dado["ops_criticas"]), "rotulo": "OPs Críticas",
          "cor": COR_ERRO if dado["ops_criticas"] else COR_SUCESSO},
-    ], altura=1.25)
+    ], altura=0.85)
 
     # Tendência Financeira mês a mês (22/08/2026, pedido do usuário: "adicione
     # rótulo de dados no indicador de Dispersão de Ficha Técnica") - Perda,
@@ -2617,8 +2628,11 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
     else:
         y_secao_seguinte = 3.05
 
+    # Seção de materiais estendida até perto do rodapé (era 6.35", legenda de
+    # fonte ocupava o resto) - a legenda foi removida do rodapé pra dar mais
+    # destaque ao gráfico/tabela, igual ao Padrão aprovado (22/08/2026).
     top_perda = dado.get("top_materiais_perda") or []
-    altura_secao = 6.35 - y_secao_seguinte
+    altura_secao = 6.85 - y_secao_seguinte
     if top_perda:
         amostra = top_perda[:6]
         categorias = [t["descricao"][:26] for t in reversed(amostra)]
@@ -2641,14 +2655,6 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
     else:
         _caixa_leitura(slide, x_direita, y_secao_seguinte + 0.28, largura_direita, altura_secao - 0.28, "Economia",
                         "Sem economia líquida registrada neste mês.")
-
-    _texto(
-        slide, MARGEM_IN, 6.45, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        f"Fonte: dashboard Dispersão de Ficha Técnica (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'} — "
-        f"Materiais crônicos (≥ {dado.get('limiar_freq_ops', 5)} OPs): {_fmt_num(dado.get('materiais_cronicos'))} · "
-        f"Concentração Top 20: {_fmt_pct(dado.get('concentracao_top20_pct'))} do impacto absoluto.",
-        tamanho=10, cor=CINZA_TEXTO,
-    )
     return slide
 
 
@@ -3012,7 +3018,7 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
          "rotulo": "Ganho de Acurácia (Movimentados)",
          "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
         {"valor": _fmt_moeda(valor_visibilidade), "rotulo": "Valor sob Visibilidade Ativa", "cor": AZUL_INSTITUCIONAL},
-    ], altura=1.25)
+    ], altura=0.85)
 
     largura_esquerda = 6.3
     _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "COBERTURA DE PROCESSOS HOJE", tamanho=11,
@@ -3087,7 +3093,7 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
          "cor": COR_SUCESSO},
         {"valor": _fmt_num(len(lapsos)), "rotulo": "Lapsos em Dias Úteis",
          "cor": COR_ATENCAO if lapsos else COR_SUCESSO},
-    ], altura=1.25)
+    ], altura=0.85)
 
     largura_esquerda = 7.1
     semanas = dado.get("semanas") or []
