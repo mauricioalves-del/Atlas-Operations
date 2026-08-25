@@ -292,13 +292,18 @@ def _texto(slide, x, y, w, h, texto, tamanho=16, negrito=False, cor=CINZA_TEXTO,
     return caixa
 
 
-def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
+def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None, compacto=False):
     _texto(slide, MARGEM_IN, 0.32, 9.5, 0.22, "RELATÓRIO EXECUTIVO · MÁGIO CHOCOLATES",
            tamanho=10, negrito=True, cor=VERDE_AMAZONIA)
-    _texto(slide, MARGEM_IN, 0.58, 9.7, 0.55, titulo, tamanho=27, negrito=True,
+    # Cabeçalho compacto (24/08/2026, pedido do usuário: consolidar Farol de
+    # Shelf-Life num slide só) - título/subtítulo mais baixos, liberando
+    # ~0,20" pros gráficos, medido a partir do PPTX Padrão aprovado.
+    titulo_h = 0.40 if compacto else 0.55
+    _texto(slide, MARGEM_IN, 0.58, 9.7, titulo_h, titulo, tamanho=27, negrito=True,
            cor=AZUL_INSTITUCIONAL, fonte=FONTE_TITULO)
     if subtitulo:
-        _texto(slide, MARGEM_IN, 1.10, 9.7, 0.35, subtitulo, tamanho=13, cor=CINZA_TEXTO)
+        subtitulo_y = 0.95 if compacto else 1.10
+        _texto(slide, MARGEM_IN, subtitulo_y, 9.7, 0.35, subtitulo, tamanho=13, cor=CINZA_TEXTO)
     _texto(slide, LARGURA_IN - 2.9, 0.32, 2.4, 0.3, mes_label.upper(), tamanho=11,
            negrito=True, cor=VERDE_AMAZONIA, alinhamento=PP_ALIGN.RIGHT)
     _texto(slide, LARGURA_IN - 2.9, ALTURA_IN - 0.42, 2.4, 0.3, f"{pagina:02d}", tamanho=10,
@@ -336,7 +341,7 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
     # reticências já usada acima pro valor (22/08/2026).
     rotulo_exibido = rotulo.upper()
     largura_rotulo = w - 2 * pad
-    max_chars_rotulo = max(1, int(largura_rotulo / ((10.5 / 72.0) * 0.60)))
+    max_chars_rotulo = max(1, int(largura_rotulo / ((10.5 / 72.0) * 0.70)))
     if len(rotulo_exibido) > max_chars_rotulo:
         rotulo_exibido = rotulo_exibido[:max(1, max_chars_rotulo - 1)].rstrip() + "…"
     y_rotulo = y + h - (0.32 if contexto else 0.18)
@@ -2671,30 +2676,33 @@ def _bucket_farol(buckets: list, *rotulos: str):
 
 
 def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Farol de Shelf-Life (20/08/2026, reestruturado em 22/08/2026 - pedido
-    do usuário: "mudar a estrutura pra caber tudo no indicador... cards com
-    a quantidade de lotes em aberto e uma representação do farol em grana:
-    0-30 dias e valor total em aberto, 31-60 e valor total, 61-90") - dashboard
-    é uma FOTO do estoque no momento da exportação (sem dimensão de mês:
-    lotes com saldo agora e validade em até 90 dias), não um recorte do mês
-    deste relatório - entra como retrato datado, rotulado com a data real da
-    exportação (decisão do usuário), não filtrado pelo mês (ver
-    dashboards_externos_extrator.extrair_farol_shelf).
+    """Farol de Shelf-Life (20/08/2026, reestruturado em 22/08/2026 e
+    consolidado em 24/08/2026 - pedido do usuário: "esses slides estão
+    sendo distribuídos em dois cada [...] quero resumir tudo em um cada,
+    conforme ajustado no powerpoint manualmente usando dados nativos do
+    próprio arquivo gerado"). Antes este indicador ocupava 2 slides (este +
+    o "Shelf Life" nativo, _slide_shelf_life) - agora é um só: os cards e as
+    3 tabelas Top 10 continuam vindo do dashboard externo (retrato datado,
+    ver docstring de extrair_farol_shelf), e os 2 gráficos que o Padrão
+    aprovado mostra (lado a lado, valor exposto por faixa de validade e
+    quantidade de lotes por faixa) vêm do cálculo NATIVO do Atlas
+    (d["resumo_shelf_life"], o mesmo que alimentava o extinto slide "Shelf
+    Life") - não do HTML do dashboard, cujo gráfico por almoxarifado/grupo é
+    só SVG sem tabela/JSON por trás (não confiável pra produção, ver nota
+    abaixo). _slide_shelf_life não é mais chamado em montar_pptx_mbr, mas a
+    função continua definida caso volte a ser útil isoladamente.
 
-    NOTA (22/08/2026): o pedido original também incluía duas visões lado a
-    lado ("Risco de Perda por Almoxarifado" e "Custo Total por Grupo e
+    NOTA (22/08/2026, mantida): o pedido original também incluía duas visões
+    lado a lado ("Risco de Perda por Almoxarifado" e "Custo Total por Grupo e
     Status") vistas na simulação HTML. Essas duas são gráficos SVG puros no
-    export (sem tabela nem JSON embutido por trás, ao contrário da Dispersão
-    de Ficha Técnica) - extrair_farol_shelf descarta todo <svg> antes de ler
-    (_soup_sem_svg), então os números exatos por almoxarifado/grupo não
-    chegam até aqui hoje. Não foram adicionadas nesta rodada pra não inventar
-    valor a partir de geometria de gráfico em código de produção - ficam
-    pendentes de um extrator dedicado (ou de um export com os dados também
-    em tabela/JSON, como o de Dispersão de Ficha Técnica)."""
+    export (sem tabela nem JSON embutido por trás) - extrair_farol_shelf
+    descarta todo <svg> antes de ler (_soup_sem_svg), então os números exatos
+    por almoxarifado/grupo não chegam até aqui hoje. Ficam pendentes de um
+    extrator dedicado (ou de um export com os dados também em tabela/JSON)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Farol de Shelf-Life", mes_label, pagina,
-               "Retrato do estoque em risco de validade — dados reais do dashboard de Farol de Shelf-Life")
+               "Retrato do estoque em risco de validade — dados reais do dashboard de Farol de Shelf-Life", compacto=True)
 
     dado = d["farol_shelf_externo"]
     if _slide_externo_indisponivel(slide, dado, "Farol de Shelf-Life"):
@@ -2709,7 +2717,7 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     def _valor_bucket(bucket):
         return bucket["total"]["custo"] if bucket and bucket.get("total") else None
 
-    _linha_kpis(slide, 1.55, [
+    _linha_kpis(slide, 1.272, [
         {"valor": _fmt_num(qtd.get("vencidos")), "rotulo": "Lotes Já Vencidos",
          "cor": COR_FAROL_VENCIDO, "contexto": _fmt_moeda(dado.get("perda_ja_vencida")), "cor_contexto": COR_FAROL_VENCIDO},
         {"valor": _fmt_num(qtd.get("0_30")), "rotulo": "0-30 Dias (Urgente)",
@@ -2718,12 +2726,28 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
          "cor": COR_FAROL_PERIGO, "contexto": _fmt_moeda(_valor_bucket(bucket_perigo)), "cor_contexto": COR_FAROL_PERIGO},
         {"valor": _fmt_num(qtd.get("61_90")), "rotulo": "61-90 Dias (Atenção)",
          "cor": COR_FAROL_ATENCAO, "contexto": _fmt_moeda(_valor_bucket(bucket_atencao)), "cor_contexto": COR_FAROL_ATENCAO},
-    ], altura=1.25)
+    ], altura=0.85)
 
-    # As 3 listas Top 10 (uma por faixa), lado a lado - "abaixo as tabelas
-    # como estão" (pedido do usuário) - só encolhidas de 8 pra 5 linhas cada
-    # pra caberem as 3 juntas na largura da página, dado que os cards acima
-    # tomaram o espaço que antes ia pra uma tabela única de 8 linhas.
+    # 2 gráficos lado a lado com dado 100% nativo do Atlas (resumo_shelf_life),
+    # ocupando o lugar dos 2 gráficos SVG-only do dashboard externo (24/08/2026).
+    shelf_nativo = d["resumo_shelf_life"]["resumo"]
+    ordem_farol = [("vencido", "Vencido", COR_FAROL_VENCIDO), ("30", "0-30 dias", COR_FAROL_URGENTE),
+                   ("60", "31-60 dias", COR_FAROL_PERIGO), ("90", "61-90 dias", COR_FAROL_ATENCAO),
+                   ("sem_validade", "Sem validade", COR_SEM_DADO)]
+    categorias_farol = [rotulo for _, rotulo, _ in ordem_farol]
+    cores_pontos = [cor for _, _, cor in ordem_farol]
+    valores_r = [shelf_nativo.get(chave, {}).get("valor", 0) for chave, _, _ in ordem_farol]
+    valores_qtd = [shelf_nativo.get(chave, {}).get("quantidade", 0) for chave, _, _ in ordem_farol]
+
+    largura_grafico = (LARGURA_IN - 2 * MARGEM_IN - 0.4) / 2
+    x2 = MARGEM_IN + largura_grafico + 0.4
+    _grafico_categoria(slide, MARGEM_IN, 2.232, largura_grafico, 2.67, categorias_farol, "Valor (R$)", valores_r,
+                        cor_serie=COR_ATENCAO, cores_pontos=cores_pontos, formato_numero='#,##0')
+    _grafico_categoria(slide, x2, 2.232, largura_grafico, 2.67, categorias_farol, "Lotes", valores_qtd,
+                        cor_serie=AZUL_INSTITUCIONAL, cores_pontos=cores_pontos, formato_numero='#,##0')
+
+    # As 3 listas Top 10 (uma por faixa), lado a lado, reposicionadas abaixo
+    # dos 2 gráficos (eram a única coisa no meio do slide antes de 24/08/2026).
     colunas = [
         ("0-30 DIAS — URGENTE", bucket_urgente, COR_FAROL_URGENTE),
         ("31-60 DIAS — PERIGO", bucket_perigo, COR_FAROL_PERIGO),
@@ -2731,7 +2755,7 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     ]
     gap = 0.3
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 2 * gap) / 3
-    y_titulo, y_tabela, altura_tabela = 3.05, 3.35, 2.85
+    y_titulo, y_tabela, altura_tabela = 4.902, 5.142, 1.891
     algum_bucket_com_itens = False
     for i, (titulo, bucket, cor) in enumerate(colunas):
         x = MARGEM_IN + i * (largura_col + gap)
@@ -2750,15 +2774,6 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     if not algum_bucket_com_itens:
         _caixa_leitura(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela, "Lotes em risco",
                         "Nenhum lote em risco de validade neste retrato.")
-
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.75, LARGURA_IN - 2 * MARGEM_IN, 0.45,
-        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}. "
-        "Risco de Perda por Almoxarifado e Custo Total por Grupo e Status pendentes de extração dedicada "
-        "(hoje só existem como gráfico no export, sem tabela/JSON por trás).",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
     return slide
 
 
@@ -2821,68 +2836,79 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
 
 
 def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Dashboard Baixas Operacionais externo (20/08/2026) - controle paralelo
-    que a equipe já mantém (categorização de motivo diferente da do módulo
-    nativo de Baixas Operacionais do Atlas, que já aparece nos slides de
-    Mapeamento de Passivos). Cobre uma janela móvel (ex.: últimos ~60 dias no
-    arquivo de exemplo), não um mês calendário isolado - entra como retrato
-    datado (decisão do usuário), sem substituir os slides nativos
-    (ver dashboards_externos_extrator.extrair_baixas_operacionais_externo).
+    """Dashboard Baixas Operacionais (20/08/2026, consolidado em 24/08/2026 -
+    pedido do usuário: "esses slides estão sendo distribuídos em dois cada
+    [...] quero resumir tudo em um cada [...] usando dados nativos do
+    próprio arquivo gerado"). Passou a ser a fonte OFICIAL de Baixas/Passivos
+    no MBR (era rotulado "Controle Paralelo" - o Scorecard do Mês já usa este
+    mesmo indicador desde 22/08/2026, ver _montar_scorecard). Cobre uma
+    janela móvel (ex.: últimos ~60 dias no arquivo de exemplo), não um mês
+    calendário isolado - entra como retrato datado (ver
+    dashboards_externos_extrator.extrair_baixas_operacionais_externo).
 
-    NOTA (22/08/2026): a simulação HTML aprovada tinha um gráfico "Total de
-    Baixas por Mês" com rótulo de valor total e de % de evolução/involução
-    MoM. Esse gráfico NÃO foi trazido pra este slide - o export HTML deste
-    dashboard não tem tabela nem JSON embutido por trás dele (só o SVG do
-    Recharts, que extrair_baixas_operacionais_externo descarta de propósito
-    via _soup_sem_svg antes de ler), então os valores mês a mês só existiam
-    na simulação por reconstrução geométrica do SVG (aproximada, sem garantia
-    de exatidão) - não confiável pra entrar em código de produção. A MESMA
-    curva de Baixas, com dado 100% exato porque vem direto do banco (não de
-    HTML raspado), já existe no slide "Passivos — Evolução e Concentração"
-    (_slide_passivos_evolucao, usa d["evolucao_passivos_fluxo"]) e já mostra
-    rótulo de valor (todo gráfico de _grafico_categoria_multi tem
-    has_data_labels=True por padrão)."""
+    NOTA (22/08/2026, mantida): a simulação HTML aprovada tinha um gráfico
+    "Total de Baixas por Mês" com quebra por motivo mês a mês. O export HTML
+    deste dashboard não tem tabela nem JSON embutido por trás desse gráfico
+    específico (só o SVG do Recharts, descartado de propósito por
+    _soup_sem_svg antes de ler) - os valores mês a mês por motivo não chegam
+    até aqui hoje de forma confiável. Em 24/08/2026 este slide passou a
+    mostrar, no lugar, a curva de evolução mensal NATIVA do Atlas (Passivo
+    Aprovado vs. Resultado de Fechamento de Inventário, d["evolucao_passivos_
+    fluxo"]) - dado 100% exato (vem direto do banco, não de HTML raspado).
+    Não é a mesma quebra por motivo do dashboard externo; se a equipe
+    confirmar que o export tem uma tabela por trás desse gráfico (não só
+    SVG), dá pra extrair o motivo-por-mês real e trocar por ela."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "Baixas Operacionais (Controle Paralelo)", mes_label, pagina,
-               "Retrato do período — dashboard externo mantido em paralelo ao módulo nativo do Atlas")
+    _cabecalho(slide, "Dashboard Baixas Operacionais", mes_label, pagina,
+               "Retrato do período — fonte oficial de Baixas/Passivos no MBR")
 
     dado = d["baixas_operacionais_externo"]
     if _slide_externo_indisponivel(slide, dado, "Dashboard Baixas Operacionais"):
         return slide
 
     resumo = dado.get("resumo") or {}
-    _linha_kpis(slide, 1.55, [
+    _linha_kpis(slide, 1.365, [
         {"valor": _fmt_moeda(resumo.get("prejuizo_total")), "rotulo": "Prejuízo Total no Período", "cor": COR_ERRO},
         {"valor": _fmt_pct(resumo.get("pct_concentrado")), "rotulo": f"Concentrado em {resumo.get('motivo_concentrado', '—')}"},
         {"valor": resumo.get("setor_maior_impacto") or "—", "rotulo": "Setor de Maior Impacto"},
         {"valor": resumo.get("grupo_maior_impacto") or "—", "rotulo": "Grupo de Maior Impacto"},
-    ], altura=1.25)
+    ], altura=0.67)
+
+    # Evolução mensal nativa (Passivo Aprovado x Resultado de Fechamento de
+    # Inventário) ocupando o lugar do gráfico "Total de Baixas por Mês" do
+    # dashboard externo, que não tem dado confiável por trás (24/08/2026).
+    evolucao = d["evolucao_passivos_fluxo"][-7:]
+    if evolucao:
+        categorias = [_nome_mes(item["mes"])[:3] for item in evolucao]
+        valores_passivos = [item["valor"] for item in evolucao]
+        valores_resultado_inv = [item["resultado_inventario_mes"] for item in evolucao]
+        _grafico_categoria_multi(
+            slide, MARGEM_IN, 2.115, LARGURA_IN - 2 * MARGEM_IN, 2.35, categorias,
+            [("Passivo aprovado (baixa real)", valores_passivos, COR_ERRO),
+             ("Resultado do fechamento de inventário", valores_resultado_inv, VERDE_AMAZONIA)],
+            formato_numero='#,##0',
+        )
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 2.115, LARGURA_IN - 2 * MARGEM_IN, 2.35, "Evolução mensal",
+                       "Sem histórico mensal suficiente de passivos/fechamento de inventário ainda.")
 
     tabelas = dado.get("tabelas") or {}
     tabela_motivo = tabelas.get("Baixas por Motivo")
     tabela_sku = tabelas.get("Ranking de SKU — Top 10 Baixas")
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
     x2 = MARGEM_IN + largura_col + 0.35
+    y_titulo, y_tabela, altura_tabela = 4.57, 4.858, 2.062
     if tabela_sku:
-        _texto(slide, MARGEM_IN, 3.05, largura_col, 0.26, "TOP BAIXAS POR SKU", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _texto(slide, MARGEM_IN, y_titulo, largura_col, 0.26, "TOP BAIXAS POR SKU", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
         linhas = [[c[:24] if isinstance(c, str) else c for c in linha] for linha in tabela_sku["linhas"][:6]]
-        _tabela(slide, MARGEM_IN, 3.35, largura_col, 3.0, tabela_sku["cabecalho"], linhas,
+        _tabela(slide, MARGEM_IN, y_tabela, largura_col, altura_tabela, tabela_sku["cabecalho"], linhas,
                 larguras_relativas=[0.6, 2.4, 1.2, 1.2], tamanho_fonte=9.5)
     if tabela_motivo:
-        _texto(slide, x2, 3.05, largura_col, 0.26, "BAIXAS POR MOTIVO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _texto(slide, x2, y_titulo, largura_col, 0.26, "BAIXAS POR MOTIVO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
         linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela_motivo["linhas"][:6]]
-        _tabela(slide, x2, 3.35, largura_col, 3.0, tabela_motivo["cabecalho"], linhas,
+        _tabela(slide, x2, y_tabela, largura_col, altura_tabela, tabela_motivo["cabecalho"], linhas,
                 larguras_relativas=[1.8, 1.2, 0.7, 1.2], tamanho_fonte=9.5)
-
-    periodo = (dado.get("filtros") or {}).get("Período", "—")
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        f"Controle paralelo ao módulo nativo de Baixas Operacionais do Atlas (categorização de motivo própria). "
-        f"Retrato datado do período {periodo} — exportado em {exportado}.",
-        tamanho=10, cor=CINZA_TEXTO, italico=True,
-    )
     return slide
 
 
@@ -3352,14 +3378,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # no Scorecard de Mapeamento de Riscos abaixo; as duas capas de seção
     # ("slides de apresentação") foram removidas e os dois slides de
     # indicador viraram detalhe desta seção, na sequência do Scorecard.
+    # "Shelf Life" nativo saiu desta seção em 24/08/2026 (pedido do usuário:
+    # consolidar Farol de Shelf-Life num slide só) - o mesmo dado
+    # (resumo_shelf_life) passou a ser usado direto em _slide_farol_shelf_
+    # externo, na seção "Outros", junto com os cards/tabelas do dashboard.
     _secao(3, "Mapeamento de Riscos e Passivos",
-           "Passivos aprovados, validade de lotes, risco de obsolescência, FEFO e Testes Industriais.",
-           ["Mapeamento de Passivos", "Passivos — Evolução e Concentração", "Shelf Life",
+           "Passivos aprovados, risco de obsolescência, FEFO e Testes Industriais.",
+           ["Mapeamento de Passivos", "Passivos — Evolução e Concentração",
             "Mapeamento de Risco — Obsolescência", "Scorecard de Mapeamento de Riscos",
             "FEFO", "Testes Industriais"])
     _slide_mapeamento_passivos(prs, mes_label, _pag(), dados)
     _slide_passivos_evolucao(prs, mes_label, _pag(), dados)
-    _slide_shelf_life(prs, mes_label, _pag(), dados)
     _slide_mapeamento_risco_obsolescencia(prs, mes_label, _pag(), dados)
     _slide_scorecard_mapeamento_riscos(prs, mes_label, _pag(), dados)
     _slide_fefo(prs, mes_label, _pag(), dados)

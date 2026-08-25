@@ -425,7 +425,8 @@ def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
            cor=CINZA_TEXTO, alinhamento=PP_ALIGN.RIGHT)
 
 
-def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCIONAL, contexto=None, cor_contexto=None):
+def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCIONAL, contexto=None,
+                 cor_contexto=None, deslocamento_rotulo=None, tamanho_valor_base=27):
     _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=CINZA_CLARO, raio=0.14)
     pad = 0.16
     largura_texto = w - 2 * pad
@@ -465,7 +466,16 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
     # o próximo elemento, não a altura declarada da caixa. Em 32pt/0,85in de
     # cartão o valor invadia visualmente o rótulo por baixo (visto na
     # renderização) - 27pt reabre a folga necessária.
-    tamanho_valor = 27
+    #
+    # 21/08/2026, Fase 3 - cartões compactos sem contexto (ver
+    # `deslocamento_rotulo`, Recuperação de Shelf): com o rótulo colado logo
+    # abaixo do valor (sem a folga de ~0,25in que um cartão alto tem), 27pt
+    # volta a invadir - medido no PRÓPRIO arquivo de referência da usuária
+    # (MBR_Atlas_202607_15.pptx), o valor desses cartões específicos está em
+    # 20pt, não 27pt. `tamanho_valor_base` deixa o teto de encolhimento
+    # configurável por chamada em vez de mexer no valor-padrão dos outros 12
+    # lugares que já usam 27pt sem problema.
+    tamanho_valor = tamanho_valor_base
     texto_valor = valor_texto
     if isinstance(valor_texto, str) and valor_texto:
         while tamanho_valor > 14 and len(valor_texto) > max(1, int(largura_texto / ((tamanho_valor / 72.0) * 0.57))):
@@ -494,13 +504,25 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
             max_chars = max(1, int(largura_texto / ((tamanho_rotulo / 72.0) * 0.72)))
         if len(texto_rotulo) > max_chars:
             texto_rotulo = texto_rotulo[:max(1, max_chars - 1)].rstrip() + "…"
-    y_rotulo = y + h - (0.32 if contexto else 0.18)
+    # `deslocamento_rotulo` (21/08/2026, Fase 3 - cartões sem contexto do
+    # slide "Recuperação de Shelf") é um deslocamento FIXO a partir do topo
+    # do cartão, não relativo a h - a usuária desenhou esses cartões mais
+    # baixos que os demais (cartão sem 3ª linha de contexto não precisa da
+    # mesma altura), então o rótulo cola direto embaixo do valor em vez de
+    # ficar ancorado no rodapé de um cartão alto. Não usar essa opção não
+    # muda em nada o comportamento dos outros 12 lugares que chamam este
+    # cartão (todos continuam com y_rotulo relativo a h, já validado na
+    # Parte 1).
+    if deslocamento_rotulo is not None and not contexto:
+        y_rotulo = y + deslocamento_rotulo
+    else:
+        y_rotulo = y + h - (0.32 if contexto else 0.18)
     _texto(slide, x + pad, y_rotulo, w - 2 * pad, 0.16, texto_rotulo, tamanho=tamanho_rotulo, negrito=True, cor=CINZA_TEXTO)
     if contexto:
         _texto(slide, x + pad, y + h - 0.16, w - 2 * pad, 0.16, contexto, tamanho=9.5, cor=cor_contexto or CINZA_TEXTO)
 
 
-def _linha_kpis(slide, y, kpis, altura=0.85):
+def _linha_kpis(slide, y, kpis, altura=0.85, deslocamento_rotulo=None, tamanho_valor_base=27):
     n = len(kpis)
     largura_total = LARGURA_IN - 2 * MARGEM_IN
     gap = 0.22
@@ -508,7 +530,8 @@ def _linha_kpis(slide, y, kpis, altura=0.85):
     x = MARGEM_IN
     for k in kpis:
         _cartao_kpi(slide, x, y, largura_card, altura, k["valor"], k["rotulo"],
-                    k.get("cor", AZUL_INSTITUCIONAL), k.get("contexto"), k.get("cor_contexto"))
+                    k.get("cor", AZUL_INSTITUCIONAL), k.get("contexto"), k.get("cor_contexto"),
+                    deslocamento_rotulo, tamanho_valor_base)
         x += largura_card + gap
 
 
@@ -3380,6 +3403,19 @@ def _bucket_farol(buckets: list, *rotulos: str):
     return None
 
 
+# Ordem/cor fixa dos status do Farol de Shelf-Life (usada nos dois gráficos
+# de detalhamento por almoxarifado/grupo, Fase 2 22/08/2026) - a MESMA ordem
+# de severidade dos cartões deste mesmo slide, pra quem olhar os cartões e os
+# gráficos reconhecer a cor sem precisar reler a legenda.
+_CORES_STATUS_FAROL = {
+    "Vencido": COR_FAROL_VENCIDO,
+    "Urgente": COR_FAROL_URGENTE,
+    "Perigo": COR_FAROL_PERIGO,
+    "Atenção": COR_FAROL_ATENCAO,
+}
+_ORDEM_STATUS_FAROL = ["Vencido", "Urgente", "Perigo", "Atenção"]
+
+
 def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
     """Farol de Shelf-Life (20/08/2026, reestruturado em 22/08/2026 - pedido
     do usuário: "mudar a estrutura pra caber tudo no indicador... cards com
@@ -3391,13 +3427,19 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     exportação (decisão do usuário), não filtrado pelo mês (ver
     dashboards_externos_extrator.extrair_farol_shelf).
 
-    NOTA (22/08/2026, Fase 2): o pedido original também incluía duas visões
-    lado a lado ("Risco de Perda por Almoxarifado" e "Custo Total por Grupo
-    e Status") vistas na simulação HTML - agora extraídas de verdade (ver
-    dashboards_externos_extrator._extrair_barras_recharts e
-    _extrair_custo_por_grupo_status) e exibidas no slide companheiro
-    _slide_farol_shelf_risco_almoxarifado, não neste (não cabiam junto com
-    os cards + 3 tabelas Top 10 já existentes aqui)."""
+    NOTA (21/08/2026, Fase 3 - pedido da usuária com o arquivo
+    "MBR_Atlas_202607_15.pptx" em anexo, "deixe os slides ... exatamente
+    assim conforme anexo. Exclua o slide com indicador individual anexado"):
+    as duas visões "Risco por Almoxarifado" e "Custo por Grupo e Status", que
+    na Fase 2 tinham ido pro slide companheiro _slide_farol_shelf_risco_
+    almoxarifado (por não caberem aqui junto com os cards + 3 tabelas),
+    voltaram pra ESTE slide, medidas e posicionadas por geometria exata do
+    arquivo que a usuária anexou - o slide companheiro foi removido. O
+    gráfico "Custo por Grupo e Status" também passou de barra empilhada em
+    R$ (COLUMN_STACKED) pra barra empilhada em 100% (BAR_STACKED_100),
+    exatamente como no anexo - lê-se como proporção de cada status dentro do
+    grupo, não como custo absoluto (esse já está nos cartões e nas 3
+    tabelas)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Farol de Shelf-Life", mes_label, pagina,
@@ -3427,10 +3469,61 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
          "cor": COR_FAROL_ATENCAO, "contexto": _fmt_moeda(_valor_bucket(bucket_atencao)), "cor_contexto": COR_FAROL_ATENCAO},
     ], altura=0.85)
 
+    # Risco por Almoxarifado (barra empilhada em R$) e Custo por Grupo e
+    # Status (barra empilhada em 100%), lado a lado - geometria (posição e
+    # tamanho) baseada no arquivo "MBR_Atlas_202607_15.pptx" que a usuária
+    # anexou como referência (21/08/2026, Fase 3). Sem título de texto acima
+    # de cada gráfico - o anexo não tem, a legenda + eixo já identificam
+    # cada um.
+    #
+    # O anexo tem os cartões de KPI mais alto na página (y=1,27in) que este
+    # gerador (y=1,55in, ver _linha_kpis abaixo - posição já usada por todo
+    # o resto do relatório, não é algo que esta rodada pediu pra mudar) -
+    # y_grafico e altura_grafico foram ajustados (não copiados 1:1 do anexo)
+    # pra abrir espaço sem sobrepor os cartões, mas mantendo o rodapé do
+    # gráfico exatamente onde o anexo tem (y=4,90in, colado no título da
+    # 1ª linha de tabelas Top 10 abaixo).
+    largura_grafico = (LARGURA_IN - 2 * MARGEM_IN - 0.4) / 2
+    x2_grafico = MARGEM_IN + largura_grafico + 0.4
+    y_grafico, altura_grafico = 2.50, 2.40
+
+    risco_almox = dado.get("risco_por_almoxarifado")
+    custo_grupo = dado.get("custo_por_grupo_status")
+
+    if risco_almox:
+        categorias = sorted(risco_almox["totais"], key=lambda c: -risco_almox["totais"][c])
+        series = []
+        for status in _ORDEM_STATUS_FAROL:
+            valores_status = risco_almox["series"].get(status)
+            if not valores_status:
+                continue
+            series.append((status, [valores_status.get(c, 0.0) for c in categorias],
+                           _CORES_STATUS_FAROL.get(status, COR_SEM_DADO)))
+        _grafico_categoria_multi(slide, MARGEM_IN, y_grafico, largura_grafico, altura_grafico, categorias, series,
+                                  tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False)
+    else:
+        _caixa_leitura(slide, MARGEM_IN, y_grafico, largura_grafico, altura_grafico, "Sem dados",
+                       "Risco por Almoxarifado não disponível neste retrato.", tamanho_texto=11)
+
+    if custo_grupo:
+        grupos_ordenados = sorted(custo_grupo, key=lambda g: -g["total"])
+        categorias_grupo = [g["grupo"] for g in grupos_ordenados]
+        series_grupo = []
+        for status in _ORDEM_STATUS_FAROL:
+            valores_status = [g["por_status"].get(status, {}).get("valor", 0.0) for g in grupos_ordenados]
+            if not any(valores_status):
+                continue
+            series_grupo.append((status, valores_status, _CORES_STATUS_FAROL.get(status, COR_SEM_DADO)))
+        _grafico_categoria_multi(slide, x2_grafico, y_grafico, largura_grafico, altura_grafico, categorias_grupo,
+                                  series_grupo, tipo=XL_CHART_TYPE.BAR_STACKED_100, mostrar_rotulos=False)
+    else:
+        _caixa_leitura(slide, x2_grafico, y_grafico, largura_grafico, altura_grafico, "Sem dados",
+                       "Custo por Grupo e Status não disponível neste retrato.", tamanho_texto=11)
+
     # As 3 listas Top 10 (uma por faixa), lado a lado - "abaixo as tabelas
-    # como estão" (pedido do usuário) - só encolhidas de 8 pra 5 linhas cada
-    # pra caberem as 3 juntas na largura da página, dado que os cards acima
-    # tomaram o espaço que antes ia pra uma tabela única de 8 linhas.
+    # como estão" (pedido do usuário) - encolhidas de 8 pra 5 linhas cada pra
+    # caber tudo (cards + 2 gráficos + 3 tabelas) numa página só, com
+    # posição/altura também medidas do anexo (21/08/2026, Fase 3).
     colunas = [
         ("0-30 DIAS — URGENTE", bucket_urgente, COR_FAROL_URGENTE),
         ("31-60 DIAS — PERIGO", bucket_perigo, COR_FAROL_PERIGO),
@@ -3438,7 +3531,7 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     ]
     gap = 0.3
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 2 * gap) / 3
-    y_titulo, y_tabela, altura_tabela = 3.05, 3.35, 2.85
+    y_titulo, y_tabela, altura_tabela = 4.902, 5.142, 1.891
     algum_bucket_com_itens = False
     for i, (titulo, bucket, cor) in enumerate(colunas):
         x = MARGEM_IN + i * (largura_col + gap)
@@ -3457,111 +3550,18 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     if not algum_bucket_com_itens:
         _caixa_leitura(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela, "Lotes em risco",
                         "Nenhum lote em risco de validade neste retrato.")
-
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.75, LARGURA_IN - 2 * MARGEM_IN, 0.45,
-        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}. "
-        "Risco por Almoxarifado e Custo por Grupo e Status no slide a seguir.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
     return slide
 
 
-# Ordem/cor fixa dos status do Farol de Shelf-Life (usada nos dois gráficos
-# do slide de detalhamento por almoxarifado/grupo, Fase 2 22/08/2026) - a
-# MESMA ordem de severidade dos cartões do slide principal, pra quem olhar
-# os dois slides em sequência reconhecer a cor sem precisar reler a legenda.
-_CORES_STATUS_FAROL = {
-    "Vencido": COR_FAROL_VENCIDO,
-    "Urgente": COR_FAROL_URGENTE,
-    "Perigo": COR_FAROL_PERIGO,
-    "Atenção": COR_FAROL_ATENCAO,
+# Ordem/cor fixa das 3 séries do gráfico de evolução mensal da Recuperação
+# de Shelf (Fase 2, 22/08/2026) - mesma paleta de sucesso/erro já usada nos
+# cartões de KPI deste mesmo slide (Perda Real em vermelho, Receita
+# Recuperada e Saving Recuperado em verde).
+_CORES_SERIE_RECUPERACAO = {
+    "Perda": COR_ERRO,
+    "Receita Recuperada": COR_SUCESSO,
+    "Saving Recuperado": VERDE_AMAZONIA,
 }
-_ORDEM_STATUS_FAROL = ["Vencido", "Urgente", "Perigo", "Atenção"]
-
-
-def _slide_farol_shelf_risco_almoxarifado(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Companheiro do Farol de Shelf-Life (22/08/2026, Fase 2 - pedido do
-    usuário: "Use os HTML anexados no atlas para alimentar o MBR igual foi
-    feito aqui... siga com as alterações aprovadas") - as 2 visões que
-    ficaram pendentes na Fase 1 ("Risco de Perda por Almoxarifado" e "Custo
-    Total por Grupo e Status"), agora com número real reconstruído do SVG do
-    export (ver dashboards_externos_extrator._extrair_barras_recharts) e do
-    atributo `title` dos segmentos da barra de status (ver
-    _extrair_custo_por_grupo_status) - não é estimativa: os dois métodos
-    foram validados batendo a soma reconstruída contra o KPI "Perda
-    potencial de R$ ..." em texto puro do mesmo arquivo, em 3 exports reais
-    diferentes (ver LEIA-ME do pacote desta fase)."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Farol de Shelf-Life — Risco por Almoxarifado", mes_label, pagina,
-               "Onde o valor em risco de validade está concentrado — por almoxarifado e por grupo de produto")
-
-    dado = d["farol_shelf_externo"]
-    if _slide_externo_indisponivel(slide, dado, "Farol de Shelf-Life"):
-        return slide
-
-    risco_almox = dado.get("risco_por_almoxarifado")
-    custo_grupo = dado.get("custo_por_grupo_status")
-    if not risco_almox and not custo_grupo:
-        _caixa_leitura(
-            slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 2.0,
-            "Detalhamento não disponível neste retrato",
-            "Não foi possível reconstruir os números destes 2 gráficos a partir do arquivo exportado "
-            "desta vez (o valor recalculado não bateu com o total de referência do próprio arquivo, ou o "
-            "layout do export mudou) — os cartões e tabelas do slide anterior continuam confiáveis.",
-            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
-        )
-        return slide
-
-    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.4) / 2
-    x2 = MARGEM_IN + largura_col + 0.4
-    y_titulo, y_grafico, altura_grafico = 1.65, 1.95, 4.55
-
-    _texto(slide, MARGEM_IN, y_titulo, largura_col, 0.24, "RISCO POR ALMOXARIFADO",
-           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    if risco_almox:
-        categorias = sorted(risco_almox["totais"], key=lambda c: -risco_almox["totais"][c])
-        series = []
-        for status in _ORDEM_STATUS_FAROL:
-            valores_status = risco_almox["series"].get(status)
-            if not valores_status:
-                continue
-            series.append((status, [valores_status.get(c, 0.0) for c in categorias],
-                           _CORES_STATUS_FAROL.get(status, COR_SEM_DADO)))
-        _grafico_categoria_multi(slide, MARGEM_IN, y_grafico, largura_col, altura_grafico, categorias, series,
-                                  tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False)
-    else:
-        _caixa_leitura(slide, MARGEM_IN, y_grafico, largura_col, altura_grafico, "Sem dados",
-                       "Não foi possível reconstruir este gráfico neste retrato.", tamanho_texto=11)
-
-    _texto(slide, x2, y_titulo, largura_col, 0.24, "CUSTO POR GRUPO E STATUS",
-           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    if custo_grupo:
-        grupos_ordenados = sorted(custo_grupo, key=lambda g: -g["total"])
-        categorias_grupo = [g["grupo"] for g in grupos_ordenados]
-        series_grupo = []
-        for status in _ORDEM_STATUS_FAROL:
-            valores_status = [g["por_status"].get(status, {}).get("valor", 0.0) for g in grupos_ordenados]
-            if not any(valores_status):
-                continue
-            series_grupo.append((status, valores_status, _CORES_STATUS_FAROL.get(status, COR_SEM_DADO)))
-        _grafico_categoria_multi(slide, x2, y_grafico, largura_col, altura_grafico, categorias_grupo, series_grupo,
-                                  tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False)
-    else:
-        _caixa_leitura(slide, x2, y_grafico, largura_col, altura_grafico, "Sem dados",
-                       "Não foi possível reconstruir este gráfico neste retrato.", tamanho_texto=11)
-
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.75, LARGURA_IN - 2 * MARGEM_IN, 0.45,
-        f"Retrato datado (não é um recorte do mês deste relatório) — exportado em {exportado}. "
-        "Valores reconstruídos a partir do gráfico do export e validados contra o total de referência do "
-        "próprio arquivo.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
-    return slide
 
 
 def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
@@ -3571,13 +3571,22 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
     com os KPIs de metodologia de recuperação financeira e os 2 rankings Top 10
     reais (ver dashboards_externos_extrator.extrair_recuperacao_shelf).
 
-    NOTA (22/08/2026, Fase 2): o gráfico "Evolução Mensal" (Perda × Receita
-    Recuperada × Saving Recuperado, com destaque a partir de abril - mês em
-    que o controle passou a atuar sobre a recuperação efetiva) da simulação
-    aprovada agora é extraído de verdade (ver dashboards_externos_extrator.
-    _extrair_barras_recharts) e exibido no slide companheiro
-    _slide_recuperacao_shelf_evolucao, não neste (não cabia junto com os
-    KPIs + 2 tabelas já existentes aqui)."""
+    NOTA (21/08/2026, Fase 3 - mesmo pedido da usuária descrito em
+    _slide_farol_shelf_externo, com o arquivo "MBR_Atlas_202607_15.pptx" em
+    anexo): o gráfico "Evolução Mensal" (Perda × Receita Recuperada × Saving
+    Recuperado por mês), que na Fase 2 tinha ido pro slide companheiro
+    _slide_recuperacao_shelf_evolucao, voltou pra ESTE slide - largura
+    cheia, entre os cartões e as 2 tabelas, geometria medida do anexo. O
+    slide companheiro foi removido. Os cartões deste slide não têm uma 3ª
+    linha de "contexto" (só valor + rótulo), então usam uma altura mais
+    baixa que os demais KPIs do relatório (0,65in contra 0,85in) e o rótulo
+    cola direto embaixo do valor - ver `deslocamento_rotulo` em
+    _cartao_kpi/_linha_kpis, e a nota de decisão registrada ali. A nota
+    "ROI operacional" e o texto de retrato datado que existiam no rodapé
+    deste slide não estão no anexo (não há mais espaço com o gráfico
+    ocupando a largura toda) - removidos; o ROI continua calculado e
+    disponível em `kpis["roi_operacional_pct"]" para quem for reutilizar o
+    dado em outro lugar."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "Recuperação de Shelf", mes_label, pagina,
@@ -3593,93 +3602,43 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
         {"valor": _fmt_moeda(kpis.get("perda_evitada")), "rotulo": "Perda Evitada", "cor": COR_SUCESSO},
         {"valor": _fmt_moeda(kpis.get("perda_real")), "rotulo": "Perda Real", "cor": COR_ERRO},
         {"valor": _fmt_moeda(kpis.get("saving_recuperado")), "rotulo": "Saving Recuperado"},
-    ], altura=0.85)
+    ], altura=0.65, deslocamento_rotulo=0.383, tamanho_valor_base=20)
+
+    # Evolução Mensal (Perda × Receita Recuperada × Saving Recuperado),
+    # largura cheia, entre os cartões e as 2 tabelas - geometria medida do
+    # arquivo "MBR_Atlas_202607_15.pptx" (21/08/2026, Fase 3).
+    evolucao = dado.get("evolucao_mensal")
+    if evolucao:
+        categorias = evolucao["categorias"]
+        series = [
+            (nome, [evolucao["series"][nome].get(c, 0.0) for c in categorias], cor)
+            for nome, cor in _CORES_SERIE_RECUPERACAO.items()
+            if nome in evolucao["series"]
+        ]
+        _grafico_categoria_multi(slide, MARGEM_IN, 2.185, LARGURA_IN - 2 * MARGEM_IN, 2.231, categorias, series,
+                                  tipo=XL_CHART_TYPE.COLUMN_CLUSTERED, formato_numero='R$ #,##0')
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, 2.185, LARGURA_IN - 2 * MARGEM_IN, 2.231,
+            "Evolução mensal não disponível neste retrato",
+            "Não foi possível reconstruir o gráfico de evolução mensal a partir do arquivo exportado desta "
+            "vez (o valor recalculado da série \"Perda\" não bateu com o KPI \"Perda Real\" do próprio "
+            "arquivo, ou o layout do export mudou) — os KPIs e tabelas abaixo continuam confiáveis.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
 
     tabelas = dado.get("tabelas") or {}
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
     x2 = MARGEM_IN + largura_col + 0.35
-    y_tabelas = 3.05
+    y_tabelas = 4.403
     for i, (titulo, tabela) in enumerate(list(tabelas.items())[:2]):
         x = MARGEM_IN if i == 0 else x2
         _texto(slide, x, y_tabelas, largura_col, 0.26, titulo.upper(), tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
         linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela["linhas"][:6]]
         larguras = [1.6] + [1.0] * (len(tabela["cabecalho"]) - 1) if tabela["cabecalho"] else None
-        _tabela(slide, x, y_tabelas + 0.30, largura_col, 3.0, tabela["cabecalho"], linhas,
+        _tabela(slide, x, y_tabelas + 0.26, largura_col, 2.43, tabela["cabecalho"], linhas,
                 larguras_relativas=larguras, tamanho_fonte=9.5)
 
-    roi = kpis.get("roi_operacional_pct")
-    exportado = dado.get("exportado_em") or "—"
-    periodo = (dado.get("filtros") or {}).get("Período", "—")
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
-        f"ROI operacional (saving ÷ custo das ações): {_fmt_pct(roi) if roi is not None else '—'}. "
-        f"Retrato datado do período {periodo} (não é um recorte do mês deste relatório) — exportado em {exportado}. "
-        "Evolução mensal no slide a seguir.",
-        tamanho=10, cor=CINZA_TEXTO, italico=True,
-    )
-    return slide
-
-
-# Ordem/cor fixa das 3 séries do gráfico de evolução da Recuperação de Shelf
-# (Fase 2, 22/08/2026) - mesma paleta de sucesso/erro já usada nos cartões
-# de KPI do slide principal (Perda Real em vermelho, Receita Recuperada e
-# Saving Recuperado em verde).
-_CORES_SERIE_RECUPERACAO = {
-    "Perda": COR_ERRO,
-    "Receita Recuperada": COR_SUCESSO,
-    "Saving Recuperado": VERDE_AMAZONIA,
-}
-
-
-def _slide_recuperacao_shelf_evolucao(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Companheiro da Recuperação de Shelf (22/08/2026, Fase 2) - gráfico
-    "Evolução Mensal" (Perda × Receita Recuperada × Saving Recuperado por
-    mês) reconstruído a partir do SVG do export (ver
-    dashboards_externos_extrator._extrair_barras_recharts), validado contra
-    o KPI "Perda Real" em texto puro do mesmo arquivo. "Saving Recuperado"
-    pode aparecer só a partir de um mês do meio do período (o próprio
-    export só passa a lançar essa série quando o controle de recuperação
-    entra em ação) - isso é o dado real do arquivo, não uma falha da
-    extração."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Recuperação de Shelf — Evolução Mensal", mes_label, pagina,
-               "Perda × Receita Recuperada × Saving Recuperado, mês a mês, no período do export")
-
-    dado = d["recuperacao_shelf_externo"]
-    if _slide_externo_indisponivel(slide, dado, "Recuperação de Shelf"):
-        return slide
-
-    evolucao = dado.get("evolucao_mensal")
-    if not evolucao:
-        _caixa_leitura(
-            slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 2.0,
-            "Evolução mensal não disponível neste retrato",
-            "Não foi possível reconstruir o gráfico de evolução mensal a partir do arquivo exportado desta "
-            "vez (o valor recalculado da série \"Perda\" não bateu com o KPI \"Perda Real\" do próprio "
-            "arquivo, ou o layout do export mudou) — os KPIs e tabelas do slide anterior continuam confiáveis.",
-            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
-        )
-        return slide
-
-    categorias = evolucao["categorias"]
-    series = [
-        (nome, [evolucao["series"][nome].get(c, 0.0) for c in categorias], cor)
-        for nome, cor in _CORES_SERIE_RECUPERACAO.items()
-        if nome in evolucao["series"]
-    ]
-    _grafico_categoria_multi(slide, MARGEM_IN, 1.75, LARGURA_IN - 2 * MARGEM_IN, 4.5, categorias, series,
-                              tipo=XL_CHART_TYPE.COLUMN_CLUSTERED, formato_numero='R$ #,##0')
-
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
-        f"Retrato datado do período (não é um recorte do mês deste relatório) — exportado em {exportado}. "
-        "Valores reconstruídos a partir do gráfico do export e validados contra o KPI \"Perda Real\". "
-        "\"Saving Recuperado\" só aparece a partir do mês em que o controle passou a atuar sobre a "
-        "recuperação — não é lacuna de dado.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
     return slide
 
 
@@ -4346,12 +4305,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # todo indicador dinâmico enviado ainda gera seu slide completo abaixo)
     # pra não estourar a capa de seção se a equipe cadastrar muitos
     # indicadores.
+    #
+    # 21/08/2026, Fase 3 (pedido da usuária, ver nota de decisão em
+    # _slide_farol_shelf_externo e _slide_recuperacao_shelf_externo): os
+    # slides companheiros "Farol de Shelf-Life — Risco por Almoxarifado" e
+    # "Recuperação de Shelf — Evolução Mensal" foram removidos (conteúdo
+    # fundido de volta nos slides principais) - saíram também desta lista.
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Dashboard Baixas Operacionais — Evolução Mensal",
-        "Farol de Shelf-Life", "Farol de Shelf-Life — Risco por Almoxarifado",
-        "Recuperação de Shelf", "Recuperação de Shelf — Evolução Mensal",
+        "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Testes Industriais", "FEFO",
     ]
     if len(nomes_extras) > limite_itens_capa:
@@ -4366,9 +4330,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_baixas_operacionais_evolucao(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
-    _slide_farol_shelf_risco_almoxarifado(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
-    _slide_recuperacao_shelf_evolucao(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
     _slide_fefo(prs, mes_label, _pag(), dados)
