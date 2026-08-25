@@ -782,7 +782,7 @@ def _grafico_categoria_multi(slide, x, y, w, h, categorias, series, tipo=XL_CHAR
 # usuário, 22/08/2026 ("Essas premissas são inegociáveis"), rejeitando a
 # simplificação anterior (selo de texto no lugar da linha de tendência) e
 # pedindo a curva de Pareto/Distribuição por Magnitude iguais ao modelo
-# aprovado (combo dual-axis). Duas situações, duas funções:
+# aprovado (combo dual-axis). Três situações, três funções:
 #
 #   - _adicionar_linha_combo_eixo_unico: a 2ª série é a MESMA métrica/escala
 #     da barra (ex.: tendência de % de acurácia sobre barra de % de
@@ -796,8 +796,14 @@ def _grafico_categoria_multi(slide, x, y, w, h, categorias, series, tipo=XL_CHAR
 #     convenção da casa porque o próprio modelo aprovado pede exatamente
 #     isso nesses 2 gráficos (Concentração de Risco/Distribuição por
 #     Magnitude), não nos demais.
+#   - _adicionar_rotulo_total_empilhado (21/08/2026): variação da mesma
+#     técnica (2ª série, eixo único, sem representação visual própria) pra
+#     rótulo de TOTAL por coluna num gráfico de barras EMPILHADAS (ex.:
+#     "Total de Baixas por Mês" - soma dos motivos empilhados naquele mês) -
+#     não é tendência nem métrica diferente, é só onde pousar um número que
+#     o próprio c:barChart não sabe calcular por coluna.
 #
-# As duas funções operam sobre um gráfico de barras já criado por
+# As funções operam sobre um gráfico de barras já criado por
 # add_chart (via _grafico_categoria/_grafico_categoria_multi ou chamada
 # direta) — a nova série entra como <c:lineChart> logo depois do
 # <c:barChart> existente (schema exige todos os "chart type elements"
@@ -890,6 +896,103 @@ def _adicionar_linha_combo_eixo_unico(chart, categorias, valores_linha, cor_hex,
       <c:axId val="{val_ax_id}"/>
     </c:lineChart>'''
     bar_chart.addnext(parse_xml(line_xml))
+
+
+def _adicionar_rotulo_total_empilhado(chart, categorias, totais, cor_texto_hex="595959",
+                                       formato_numero='#,##0', tamanho_pt=9.5, nome_serie="Total"):
+    """Rótulo do valor TOTAL por coluna, num gráfico de barras/colunas
+    EMPILHADAS (21/08/2026, pedido da usuária pro gráfico "Total de Baixas
+    por Mês": "adicione o rótulo do valor total por gráfico, não por
+    motivo... mas sim da somatório dos eventos por mês"). O rótulo comum
+    de segmento (`plot.has_data_labels`) não serve aqui - com até 9 motivos
+    empilhados numa coluna só, um rótulo por segmento fica ilegível/
+    sobreposto (é exatamente por isso que esse gráfico desliga o rótulo por
+    segmento - ver `mostrar_rotulos=not empilhado` em
+    _slide_baixas_operacionais_externo). A técnica-padrão pra rótulo de
+    TOTAL numa pilha (a mesma que Excel/PowerPoint usam quando alguém pede
+    isso manualmente) é uma 2ª série de LINHA, sem linha visível e sem
+    marcador, com o valor de cada ponto igual à SOMA da coluna naquela
+    categoria - só o rótulo de dado dessa série aparece, ancorado acima do
+    ponto (`dLblPos="t"`), pousando exatamente no topo da pilha. Como essa
+    série não tem nenhuma representação visual própria, também é removida
+    da legenda (`c:legendEntry`/`delete`) - senão apareceria como um item
+    de legenda "Total" sem swatch nenhum pra explicar, mais confuso que
+    ajuda."""
+    chart_space = chart._chartSpace
+    plot_area = chart_space.find(qn("c:chart")).find(qn("c:plotArea"))
+    bar_chart = plot_area.find(qn("c:barChart"))
+    if bar_chart is None:
+        return
+    ax_ids = [e.get("val") for e in bar_chart.findall(qn("c:axId"))]
+    if len(ax_ids) < 2:
+        return
+    cat_ax_id, val_ax_id = ax_ids[0], ax_ids[1]
+    idx = len(bar_chart.findall(qn("c:ser")))
+
+    n = len(categorias)
+    pts_cat = "".join(f'<c:pt idx="{i}"><c:v>{_esc_xml(c)}</c:v></c:pt>' for i, c in enumerate(categorias))
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(totais) if v is not None
+    )
+    line_xml = f'''<c:lineChart {nsdecls("c")}>
+      <c:grouping val="standard"/>
+      <c:varyColors val="0"/>
+      <c:ser>
+        <c:idx val="{idx}"/>
+        <c:order val="{idx}"/>
+        <c:tx><c:v>{_esc_xml(nome_serie)}</c:v></c:tx>
+        <c:spPr>
+          <a:ln xmlns:a="{_A_NS}"><a:noFill/></a:ln>
+        </c:spPr>
+        <c:marker><c:symbol val="none"/></c:marker>
+        <c:dLbls>
+          <c:numFmt formatCode="{formato_numero}" sourceLinked="0"/>
+          <c:spPr xmlns:a="{_A_NS}"><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:txPr xmlns:a="{_A_NS}">
+            <a:bodyPr/>
+            <a:lstStyle/>
+            <a:p><a:pPr><a:defRPr sz="{int(round(tamanho_pt * 100))}" b="1"><a:solidFill><a:srgbClr val="{cor_texto_hex}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="pt-BR"/></a:p>
+          </c:txPr>
+          <c:dLblPos val="t"/>
+          <c:showLegendKey val="0"/>
+          <c:showVal val="1"/>
+          <c:showCatName val="0"/>
+          <c:showSerName val="0"/>
+          <c:showPercent val="0"/>
+          <c:showBubbleSize val="0"/>
+        </c:dLbls>
+        <c:cat>
+          <c:strRef>
+            <c:f>Sheet1!$A$2:$A${1 + n}</c:f>
+            <c:strCache><c:ptCount val="{n}"/>{pts_cat}</c:strCache>
+          </c:strRef>
+        </c:cat>
+        <c:val>
+          <c:numRef>
+            <c:f>Sheet1!$Z$2:$Z${1 + n}</c:f>
+            <c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="{n}"/>{pts_val}</c:numCache>
+          </c:numRef>
+        </c:val>
+        <c:smooth val="0"/>
+      </c:ser>
+      <c:marker val="0"/>
+      <c:axId val="{cat_ax_id}"/>
+      <c:axId val="{val_ax_id}"/>
+    </c:lineChart>'''
+    bar_chart.addnext(parse_xml(line_xml))
+
+    try:
+        legend = chart_space.find(qn("c:chart")).find(qn("c:legend"))
+        if legend is not None:
+            entry_xml = f'<c:legendEntry {nsdecls("c")}><c:idx val="{idx}"/><c:delete val="1"/></c:legendEntry>'
+            entry_el = parse_xml(entry_xml)
+            legend_pos = legend.find(qn("c:legendPos"))
+            if legend_pos is not None:
+                legend_pos.addnext(entry_el)
+            else:
+                legend.insert(0, entry_el)
+    except Exception:
+        pass
 
 
 def _adicionar_linha_combo_eixo_duplo(chart, categorias, valores_linha, cor_hex,
@@ -3655,16 +3758,22 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     isolado - entra como retrato datado (decisão do usuário)
     (ver dashboards_externos_extrator.extrair_baixas_operacionais_externo).
 
-    NOTA (22/08/2026, Fase 2): o gráfico "Total de Baixas por Mês" da
-    simulação aprovada agora é extraído de verdade (ver
-    dashboards_externos_extrator._extrair_barras_recharts) e exibido no
-    slide companheiro _slide_baixas_operacionais_evolucao, não neste (não
-    cabia junto com os KPIs + 2 tabelas já existentes aqui). Cobre o
-    histórico mensal completo do export (ex.: janeiro-agosto) - uma janela
-    BEM mais longa que o "Prejuízo Total no Período" acima (janela móvel
-    curta, ex. últimos ~60 dias); os dois números não batem entre si por
-    desenho (janelas diferentes), não é inconsistência - ver nota no slide
-    companheiro."""
+    NOTA (21/08/2026, Fase 3 - pedido da usuária: "só faltou unificar uma
+    análise. O pacote de baixas operacionais, por gentileza, replique a
+    mesma lógica para o KPI. Slide 14 e 15"): o gráfico "Total de Baixas
+    por Mês", que na Fase 2 tinha ido pro slide companheiro
+    _slide_baixas_operacionais_evolucao (não cabia junto com os KPIs + 2
+    tabelas já existentes aqui), voltou pra ESTE slide - mesma fusão já
+    feita com Farol de Shelf-Life e Recuperação de Shelf. O slide
+    companheiro foi removido. Os cartões de KPI (que já não tinham 3ª
+    linha de contexto) ganharam a mesma "lógica compacta" da Recuperação de
+    Shelf (altura 0,65in, número em 20pt - ver `deslocamento_rotulo`/
+    `tamanho_valor_base` em _cartao_kpi) - "replique a mesma lógica para o
+    KPI", nas palavras da usuária. Cobre o histórico mensal completo do
+    export (ex.: janeiro-agosto) - uma janela BEM mais longa que o
+    "Prejuízo Total no Período" dos cartões (janela móvel curta, ex.
+    últimos ~60 dias); os dois números não batem entre si por desenho
+    (janelas diferentes), não é inconsistência - nota no rodapé abaixo."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     # Título/subtítulo atualizados em 22/08/2026 - "(Controle Paralelo)" e
@@ -3683,101 +3792,79 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
         {"valor": _fmt_pct(resumo.get("pct_concentrado")), "rotulo": f"Concentrado em {resumo.get('motivo_concentrado', '—')}"},
         {"valor": resumo.get("setor_maior_impacto") or "—", "rotulo": "Setor de Maior Impacto"},
         {"valor": resumo.get("grupo_maior_impacto") or "—", "rotulo": "Grupo de Maior Impacto"},
-    ], altura=0.85)
+    ], altura=0.65, deslocamento_rotulo=0.383, tamanho_valor_base=20)
+
+    # Total de Baixas por Mês, largura cheia, entre os cartões e as 2
+    # tabelas (21/08/2026, Fase 3).
+    evolucao = dado.get("evolucao_mensal")
+    y_grafico, altura_grafico = 2.32, 1.95
+    if evolucao:
+        categorias = evolucao["categorias"]
+        nomes_series = list(evolucao["series"].keys())
+        empilhado = len(nomes_series) > 1
+        paleta = [COR_ERRO, COR_ATENCAO, AZUL_INSTITUCIONAL, VERDE_AMAZONIA, COR_INFO,
+                  COR_FAROL_URGENTE, COR_FAROL_PERIGO, AZUL_CLARO, COR_SEM_DADO]
+        series = [
+            (nome, [evolucao["series"][nome].get(c, 0.0) for c in categorias], paleta[i % len(paleta)])
+            for i, nome in enumerate(nomes_series)
+        ]
+        # Empilhado por motivo tem até 9 séries por coluna - rótulo por
+        # segmento fica ilegível/sobreposto (visto na QA visual da Fase 2),
+        # então continua desligado nesse caso. Em vez disso (21/08/2026,
+        # pedido explícito da usuária: "adicione o rótulo do valor total
+        # por gráfico, não por motivo... a somatório dos eventos por mês"),
+        # um rótulo de TOTAL por coluna - ver _adicionar_rotulo_total_
+        # empilhado. Com série única (coluna simples, quando o export não
+        # tem quebra por motivo) o rótulo por coluna já é o total, então
+        # continua pelo caminho normal (mostrar_rotulos=True).
+        chart = _grafico_categoria_multi(
+            slide, MARGEM_IN, y_grafico, LARGURA_IN - 2 * MARGEM_IN, altura_grafico, categorias, series,
+            tipo=XL_CHART_TYPE.COLUMN_STACKED if empilhado else XL_CHART_TYPE.COLUMN_CLUSTERED,
+            formato_numero='R$ #,##0', mostrar_rotulos=not empilhado)
+        if empilhado:
+            totais = [sum(evolucao["series"][nome].get(c, 0.0) for nome in nomes_series) for c in categorias]
+            _adicionar_rotulo_total_empilhado(chart, categorias, totais,
+                                               cor_texto_hex=_hex_cor(CINZA_TEXTO), formato_numero='R$ #,##0')
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, y_grafico, LARGURA_IN - 2 * MARGEM_IN, altura_grafico,
+            "Evolução mensal não disponível neste retrato",
+            "Não foi possível reconstruir o gráfico de evolução mensal a partir do arquivo exportado desta "
+            "vez (eixo do gráfico fora do padrão esperado, ou o layout do export mudou) — os KPIs e tabelas "
+            "abaixo continuam confiáveis.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
 
     tabelas = dado.get("tabelas") or {}
     tabela_motivo = tabelas.get("Baixas por Motivo")
     tabela_sku = tabelas.get("Ranking de SKU — Top 10 Baixas")
     largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
     x2 = MARGEM_IN + largura_col + 0.35
+    y_tabelas, altura_tabela = 4.37, 2.05
     if tabela_sku:
-        _texto(slide, MARGEM_IN, 3.05, largura_col, 0.26, "TOP BAIXAS POR SKU", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _texto(slide, MARGEM_IN, y_tabelas, largura_col, 0.24, "TOP BAIXAS POR SKU", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
         linhas = [[c[:24] if isinstance(c, str) else c for c in linha] for linha in tabela_sku["linhas"][:6]]
-        _tabela(slide, MARGEM_IN, 3.35, largura_col, 3.0, tabela_sku["cabecalho"], linhas,
-                larguras_relativas=[0.6, 2.4, 1.2, 1.2], tamanho_fonte=9.5)
+        # Coluna "Ranking" alargada de 0.6 pra 1.0 (21/08/2026, Fase 3):
+        # nesta altura de tabela mais compacta, o cabeçalho "Ranking" não
+        # cabia mais numa linha só (quebrava em "Rankin"/"g"), o que
+        # inflava a linha de cabeçalho e estourava a altura reservada pra
+        # tabela, invadindo o rodapé abaixo - visto na QA visual. Largura
+        # total das 4 colunas mantida igual (5.4), só redistribuída.
+        _tabela(slide, MARGEM_IN, y_tabelas + 0.24, largura_col, altura_tabela, tabela_sku["cabecalho"], linhas,
+                larguras_relativas=[1.0, 2.2, 1.1, 1.1], tamanho_fonte=9.5)
     if tabela_motivo:
-        _texto(slide, x2, 3.05, largura_col, 0.26, "BAIXAS POR MOTIVO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _texto(slide, x2, y_tabelas, largura_col, 0.24, "BAIXAS POR MOTIVO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
         linhas = [[c[:22] if isinstance(c, str) else c for c in linha] for linha in tabela_motivo["linhas"][:6]]
-        _tabela(slide, x2, 3.35, largura_col, 3.0, tabela_motivo["cabecalho"], linhas,
+        _tabela(slide, x2, y_tabelas + 0.24, largura_col, altura_tabela, tabela_motivo["cabecalho"], linhas,
                 larguras_relativas=[1.8, 1.2, 0.7, 1.2], tamanho_fonte=9.5)
 
     periodo = (dado.get("filtros") or {}).get("Período", "—")
     exportado = dado.get("exportado_em") or "—"
     _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        # Legenda atualizada em 22/08/2026: era "Controle paralelo ao módulo
-        # nativo de Baixas Operacionais do Atlas" - deixou de ser paralelo
-        # porque o nativo foi removido (este dashboard é a fonte oficial).
-        f"Fonte oficial de Baixas/Passivos neste relatório (categorização de motivo própria da equipe). "
-        f"Retrato datado do período {periodo} — exportado em {exportado}. Evolução mensal no slide a seguir.",
-        tamanho=10, cor=CINZA_TEXTO, italico=True,
-    )
-    return slide
-
-
-def _slide_baixas_operacionais_evolucao(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Companheiro do Dashboard Baixas Operacionais externo (22/08/2026,
-    Fase 2) - gráfico "Total de Baixas por Mês" reconstruído a partir do SVG
-    do export (ver dashboards_externos_extrator._extrair_barras_recharts).
-    Sem KPI de referência pra validar a soma total contra (o "Prejuízo Total
-    no Período" do slide anterior cobre uma janela mais curta - não é o
-    mesmo período que este gráfico mostra), mas usa a MESMA calibração
-    linear exata dos outros 2 gráficos desta fase, validada nesses. Quando o
-    export trouxer a quebra por motivo (nem todo export tem - alguns só
-    lançam "Total Baixas" como série única), o gráfico empilha por motivo;
-    senão mostra a coluna única."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    # Título encurtado (22/08/2026): a versão completa com "(Controle
-    # Paralelo)" passava de ~45 caracteres e quebrava em 2 linhas dentro da
-    # caixa de título do cabeçalho (27pt/9.7in), invadindo a caixa de
-    # subtítulo de posição fixa (mesmo defeito já corrigido no slide de
-    # Detalhamento por Faixa da Acurácia Ponderada). Subtítulo atualizado
-    # no mesmo dia: deixou de ser "controle paralelo" porque o nativo foi
-    # removido - este dashboard é a fonte oficial de Baixas/Passivos.
-    _cabecalho(slide, "Baixas Operacionais — Evolução Mensal", mes_label, pagina,
-               "Total de baixas por mês, no histórico completo do export (fonte oficial)")
-
-    dado = d["baixas_operacionais_externo"]
-    if _slide_externo_indisponivel(slide, dado, "Dashboard Baixas Operacionais"):
-        return slide
-
-    evolucao = dado.get("evolucao_mensal")
-    if not evolucao:
-        _caixa_leitura(
-            slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 2.0,
-            "Evolução mensal não disponível neste retrato",
-            "Não foi possível reconstruir o gráfico de evolução mensal a partir do arquivo exportado desta "
-            "vez (eixo do gráfico fora do padrão esperado, ou o layout do export mudou) — os KPIs e tabelas "
-            "do slide anterior continuam confiáveis.",
-            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
-        )
-        return slide
-
-    categorias = evolucao["categorias"]
-    nomes_series = list(evolucao["series"].keys())
-    empilhado = len(nomes_series) > 1
-    paleta = [COR_ERRO, COR_ATENCAO, AZUL_INSTITUCIONAL, VERDE_AMAZONIA, COR_INFO,
-              COR_FAROL_URGENTE, COR_FAROL_PERIGO, AZUL_CLARO, COR_SEM_DADO]
-    series = [
-        (nome, [evolucao["series"][nome].get(c, 0.0) for c in categorias], paleta[i % len(paleta)])
-        for i, nome in enumerate(nomes_series)
-    ]
-    # Empilhado por motivo tem até 9 séries por coluna - rótulo por segmento
-    # fica ilegível/sobreposto (visto na QA visual), então desliga só nesse
-    # caso; com série única (coluna simples) o rótulo continua, igual ao
-    # padrão dos outros gráficos do MBR.
-    _grafico_categoria_multi(slide, MARGEM_IN, 1.75, LARGURA_IN - 2 * MARGEM_IN, 4.5, categorias, series,
-                              tipo=XL_CHART_TYPE.COLUMN_STACKED if empilhado else XL_CHART_TYPE.COLUMN_CLUSTERED,
-                              formato_numero='R$ #,##0', mostrar_rotulos=not empilhado)
-
-    exportado = dado.get("exportado_em") or "—"
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.6,
-        f"Histórico mensal completo do export — exportado em {exportado}. Cobre uma janela diferente do "
-        "\"Prejuízo Total no Período\" do slide anterior (janela móvel curta, ex. últimos ~60 dias) - os "
-        "dois números não baterem entre si é esperado, não é inconsistência.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
+        slide, MARGEM_IN, 6.70, LARGURA_IN - 2 * MARGEM_IN, 0.35,
+        f"Cartões: retrato do período {periodo}, exportado em {exportado}. Gráfico: histórico mensal completo "
+        "do export (janela mais longa) — os dois totais não baterem entre si é esperado, não é inconsistência.",
+        tamanho=9, cor=CINZA_TEXTO, italico=True,
     )
     return slide
 
@@ -4311,10 +4398,15 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # slides companheiros "Farol de Shelf-Life — Risco por Almoxarifado" e
     # "Recuperação de Shelf — Evolução Mensal" foram removidos (conteúdo
     # fundido de volta nos slides principais) - saíram também desta lista.
+    #
+    # 21/08/2026, mesma Fase 3, pedido seguinte da usuária ("replique a
+    # mesma lógica para o KPI. Slide 14 e 15" - Dashboard Baixas
+    # Operacionais): "Dashboard Baixas Operacionais — Evolução Mensal"
+    # também foi removido (mesma fusão) - saiu desta lista também.
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
     itens_riscos_passivos = [
-        "Dashboard Baixas Operacionais", "Dashboard Baixas Operacionais — Evolução Mensal",
+        "Dashboard Baixas Operacionais",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Testes Industriais", "FEFO",
     ]
@@ -4328,7 +4420,6 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
            "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
-    _slide_baixas_operacionais_evolucao(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
