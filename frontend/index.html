@@ -404,17 +404,30 @@
             <option value="Em_Investigacao">Em investigação</option>
             <option value="Resolvida">Resolvida</option>
           </select>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px" title="SKU já apareceu em mais de uma divergência detectada">
+            <input type="checkbox" id="lista-filtro-recorrentes"> Recorrentes
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px" title="Tem baixa operacional pendente no Lovable, ainda não aprovada nem reprovada, que explicaria esta divergência">
+            <input type="checkbox" id="lista-filtro-baixas-abertas"> Baixas operacionais em aberto
+          </label>
         </div>
       </header>
       <div class="lista-wrap">
         <table class="tabela" id="tabela-lista">
           <thead>
-            <tr><th>ID</th><th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th><th>Valor</th><th>Hipótese (IA)</th><th>Confiança</th><th>Status</th><th></th></tr>
+            <tr>
+              <th class="th-ordenavel" data-campo="id">ID <span class="icone-ordenacao"></span></th>
+              <th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th>
+              <th class="th-ordenavel" data-campo="valor">Valor <span class="icone-ordenacao"></span></th>
+              <th>Hipótese (IA)</th>
+              <th class="th-ordenavel" data-campo="confianca">Confiança <span class="icone-ordenacao"></span></th>
+              <th>Status</th><th></th>
+            </tr>
           </thead>
           <tbody></tbody>
         </table>
-        <div id="paginacao-lista" class="paginacao"></div>
       </div>
+      <div id="paginacao-lista" class="paginacao"></div>
     </section>
 
     <section id="view-detalhe" class="view hidden">

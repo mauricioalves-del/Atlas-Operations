@@ -729,6 +729,37 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
 
 .lista-wrap{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:8px 20px}
 
+/* ---- Divergências: cabeçalho fixo + ordenação por coluna (26/08/2026, pedido
+   da usuária: "Fixar cabeçalho no topo" + "classificação de valores para as
+   colunas de números"). Escopado a #tabela-lista só - as outras ~25 tabelas do
+   sistema (".tabela") não pediram isso, e cabeçalho fixo sem necessidade
+   atrapalha mais do que ajuda numa tabela curta.
+
+   `position:sticky` sozinho no <th> não bastava: `.shell` (o layout raiz, rail
+   + conteúdo) tem `overflow:hidden` pra recortar as animações de fundo, e
+   qualquer ancestral com overflow != visible vira o "container de rolagem"
+   pra fins de sticky - mesmo sem ele mesmo rolar de verdade (quem rola é a
+   página/body). Resultado: o cabeçalho "grudava" num container que nunca
+   rola, e por isso nunca ficava fixo na tela. Corrigido dando à própria
+   `.lista-wrap` desta tela uma altura limitada com rolagem própria - assim
+   ELA é o container de rolagem mais próximo, e o sticky funciona de verdade.
+   Não mudei `.shell` global (usado em toda a aplicação) pra não arriscar
+   efeito colateral nas animações de fundo em telas que não pediram isso. ---- */
+#view-lista .lista-wrap{
+  max-height:calc(100vh - 190px); min-height:320px; overflow-y:auto;
+}
+#tabela-lista thead th{
+  position:sticky; top:0; z-index:2; background:var(--panel);
+  box-shadow:0 1px 0 0 var(--border);
+}
+#tabela-lista .th-ordenavel{cursor:pointer; user-select:none; white-space:nowrap}
+#tabela-lista .th-ordenavel:hover{color:var(--text)}
+#tabela-lista .icone-ordenacao{display:inline-block; min-width:10px; opacity:0.5; font-size:9px}
+#tabela-lista .th-ordenavel.ordenado-asc,
+#tabela-lista .th-ordenavel.ordenado-desc{color:var(--accent)}
+#tabela-lista .th-ordenavel.ordenado-asc .icone-ordenacao,
+#tabela-lista .th-ordenavel.ordenado-desc .icone-ordenacao{opacity:1}
+
 /* ---- Outros Dashboards (20/08/2026) - upload de HTML autocontido, embutido via iframe ---- */
 .lista-dashboards-externos{display:flex; flex-direction:column; gap:10px}
 .dashboard-externo-item{border:1px solid var(--border); border-radius:var(--radius-input); background:var(--panel-2); overflow:hidden}
@@ -829,6 +860,15 @@ tr.linha-recorrente:hover{background:color-mix(in srgb, var(--accent) 16%, trans
      HTML de cada tela uma por uma. */
   .tabela{display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap}
   .tabela-scroll .tabela{display:table} /* nas 2 tabelas que já tinham wrapper próprio, evita rolagem duplicada (a do wrapper já basta) */
+
+  /* Cabeçalho fixo da lista de Divergências (ver comentário acima, perto de
+     "#view-lista .lista-wrap") desligado no celular: aqui ".tabela" já vira
+     "display:block" com rolagem horizontal própria, o que quebra a semântica
+     de tabela que o sticky em th/thead depende - melhor manter o
+     comportamento de sempre (página rola inteira) do que arriscar um
+     cabeçalho fixo bugado nessa combinação. */
+  #view-lista .lista-wrap{max-height:none; overflow-y:visible}
+  #tabela-lista thead th{position:static; box-shadow:none}
 }
 
 /* ---- barra inferior mobile (estilo app nativo) ---- */

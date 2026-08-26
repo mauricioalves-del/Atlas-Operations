@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import or_, asc, desc, func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -74,6 +74,17 @@ def recalcular_valores(usuario: models.Usuario = Depends(requer_papel("admin", "
     return {"divergencias_verificadas": len(abertas), "divergencias_atualizadas": atualizadas}
 
 
+# Colunas de números da tela de Divergências que aceitam ordenação
+# (26/08/2026, pedido da usuária: "classificação de valores para as colunas
+# de números, do maior para o menor") - mapeado por um nome curto pra não
+# expor nome de coluna do banco na URL da API.
+_COLUNAS_ORDENAVEIS_LISTA = {
+    "id": models.Divergencia.id,
+    "valor": models.Divergencia.valor_estimado,
+    "confianca": models.Divergencia.confianca_ia,
+}
+
+
 @router.get("")
 def listar(
     almoxarifado: Optional[str] = None,
@@ -81,6 +92,10 @@ def listar(
     hipotese: Optional[str] = None,
     busca: Optional[str] = None,
     incluir_fechamento_inventario: bool = False,
+    recorrentes: bool = False,
+    baixas_abertas: bool = False,
+    ordenar_por: Optional[str] = None,
+    ordenar_direcao: str = "desc",
     pagina: int = Query(1, ge=1),
     tamanho_pagina: int = Query(50, ge=1, le=500),
     usuario: models.Usuario = Depends(obter_usuario_atual),
@@ -107,13 +122,56 @@ def listar(
         if skus_por_descricao:
             condicoes_busca.append(models.Divergencia.sku.in_(skus_por_descricao))
         q = q.filter(or_(*condicoes_busca))
+    if recorrentes:
+        # "Recorrente" aqui é uma propriedade do SKU (aparece em mais de uma
+        # divergência já detectada, em qualquer almoxarifado/data/status -
+        # mesmo critério usado em "Top 10 Itens Mais Recorrentes em
+        # Divergência"), não só desta página filtrada - por isso a
+        # subquery roda sobre a tabela toda (respeitando
+        # incluir_fechamento_inventario), não sobre `q` já filtrada.
+        base_recorrencia = db.query(models.Divergencia.sku)
+        if not incluir_fechamento_inventario:
+            base_recorrencia = base_recorrencia.filter(models.Divergencia.origem != "fechamento_inventario")
+        skus_recorrentes = (
+            base_recorrencia.group_by(models.Divergencia.sku)
+            .having(func.count(models.Divergencia.id) > 1)
+            .subquery()
+        )
+        q = q.filter(models.Divergencia.sku.in_(db.query(skus_recorrentes.c.sku)))
 
-    total = q.count()
-    q = q.order_by(models.Divergencia.data_deteccao.desc())
-    divergencias = q.offset((pagina - 1) * tamanho_pagina).limit(tamanho_pagina).all()
-    _preencher_descricao_produto(db, divergencias)
-    _marcar_investigacao_pendente(db, divergencias)
-    buscar_avisos_baixa_pendente(db, divergencias)
+    coluna_ordenacao = _COLUNAS_ORDENAVEIS_LISTA.get(ordenar_por)
+    if coluna_ordenacao is not None:
+        direcao = asc if ordenar_direcao == "asc" else desc
+        # nulls_last: divergências sem confiança calculada (confianca_ia
+        # nula) não devem furar pro topo do "do maior pro menor".
+        q = q.order_by(direcao(coluna_ordenacao).nulls_last())
+    else:
+        q = q.order_by(models.Divergencia.data_deteccao.desc())
+
+    if baixas_abertas:
+        # "Baixas operacionais em aberto" = existe uma baixa (Lovable) ainda
+        # PENDENTE (não decidida) que se correlaciona com esta divergência -
+        # mesmo sinal que já gera o aviso 🕒 na lista (aviso_baixa_pendente,
+        # ver baixas_operacionais.buscar_avisos_baixa_pendente). Isso não é
+        # uma coluna do banco, então pra paginar certo com este filtro
+        # ligado é preciso calcular pra todo mundo que bate nos outros
+        # filtros primeiro, filtrar, e só depois paginar em memória - mais
+        # pesado que os outros filtros, mas a lista de divergências em
+        # aberto não costuma ser grande o bastante pra isso pesar de verdade.
+        candidatos = q.filter(models.Divergencia.status != "Resolvida").all()
+        _preencher_descricao_produto(db, candidatos)
+        _marcar_investigacao_pendente(db, candidatos)
+        buscar_avisos_baixa_pendente(db, candidatos)
+        candidatos = [d for d in candidatos if d.aviso_baixa_pendente]
+        total = len(candidatos)
+        inicio = (pagina - 1) * tamanho_pagina
+        divergencias = candidatos[inicio: inicio + tamanho_pagina]
+    else:
+        total = q.count()
+        divergencias = q.offset((pagina - 1) * tamanho_pagina).limit(tamanho_pagina).all()
+        _preencher_descricao_produto(db, divergencias)
+        _marcar_investigacao_pendente(db, divergencias)
+        buscar_avisos_baixa_pendente(db, divergencias)
 
     return {
         "itens": [schemas.DivergenciaOut.model_validate(d).model_dump() for d in divergencias],
