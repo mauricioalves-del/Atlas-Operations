@@ -850,7 +850,7 @@ document.getElementById("bottom-sheet-mais-overlay").addEventListener("click", (
 });
 
 // ---------- dashboard ----------
-let chartAcuraciaDia, chartCausas, chartTendencia, chartMom;
+let chartAcuraciaDia, chartCausas, chartTendencia, chartMom, chartAcuraciaAlmoxarifado;
 let ultimoAcuraciaDiaDados = [], ultimoAcuraciaMensalDados = [];
 
 async function carregarDashboard() {
@@ -861,15 +861,28 @@ async function carregarDashboard() {
   if (periodo) params.set("periodo", periodo);
   const qs = "?" + params.toString();
   const qsSemAlmox = "?" + new URLSearchParams(periodo ? { periodo } : {}).toString();
+  // MoM (Evolução Mensal de Acurácia) fica desvinculado do filtro de período
+  // (28/08/2026, pedido da usuária: "Na análise MoM desvincule o Filtro e
+  // deixe a visão geral") - é uma análise mês a mês por natureza, então
+  // restringi-la ao período escolhido (ex: só "mês atual") faria ela
+  // desaparecer ou virar 1 barra só, sem nenhuma variação MoM pra mostrar.
+  // Continua respeitando o filtro de almoxarifado, que não foi mencionado
+  // no pedido.
+  const qsMom = "?" + new URLSearchParams(almox ? { almoxarifado: almox } : {}).toString();
 
-  const [kpis, acuraciaDia, acuraciaMensal, causas, heatmap, rank, top] = await Promise.all([
+  const [kpis, acuraciaDia, acuraciaMensal, causas, heatmap, rank, top, acuraciaAlmox] = await Promise.all([
     apiFetch(`${API}/dashboard/kpis${qsSemAlmox}`).then((r) => r.json()),
     apiFetch(`${API}/dashboard/acuracia-por-dia${qs}`).then((r) => r.json()),
-    apiFetch(`${API}/dashboard/acuracia-mensal${qs}`).then((r) => r.json()),
+    apiFetch(`${API}/dashboard/acuracia-mensal${qsMom}`).then((r) => r.json()),
     apiFetch(`${API}/dashboard/distribuicao-causas${qsSemAlmox}`).then((r) => r.json()),
     apiFetch(`${API}/dashboard/heatmap-almoxarifado-hipotese${qsSemAlmox}`).then((r) => r.json()),
     apiFetch(`${API}/dashboard/top-reincidentes${qsSemAlmox}`).then((r) => r.json()),
     apiFetch(`${API}/dashboard/top-divergencias${qsSemAlmox}`).then((r) => r.json()),
+    // Gráfico de barras invertido no card "Almoxarifado × Hipótese" (28/08/2026,
+    // pedido do Maurício) - assim como os outros indicadores deste mesmo grupo,
+    // usa qsSemAlmox (só período): uma quebra POR almoxarifado não faz sentido
+    // se a tela já estiver filtrada pra um único almoxarifado.
+    apiFetch(`${API}/dashboard/acuracia-por-almoxarifado${qsSemAlmox}`).then((r) => r.json()),
   ]);
 
   renderKpis(kpis);
@@ -878,6 +891,7 @@ async function carregarDashboard() {
   tentarRenderizar(() => renderTendencia(acuraciaDia));
   tentarRenderizar(() => renderMom(acuraciaMensal));
   tentarRenderizar(() => renderHeatmap(heatmap));
+  tentarRenderizar(() => renderAcuraciaAlmoxarifado(acuraciaAlmox));
   tentarRenderizar(() => renderRanking(rank));
   tentarRenderizar(() => renderTop(top));
   tentarRenderizar(() => preencherFiltroAlmoxarifado(heatmap));
@@ -1204,6 +1218,51 @@ function mixColor(intensidade) {
   const g = Math.round(31 + intensidade * (121 - 31));
   const b = Math.round(22 + intensidade * (58 - 22));
   return `rgb(${r},${g},${b})`;
+}
+
+// ---------- gráfico de barras invertido: acurácia acumulada por almoxarifado (28/08/2026) ----------
+// Pedido do Maurício: "Estou com espaço vago nesse indicador da contagem de
+// movimentados. Quero adicionar um grafico de barras invertido trazendo a
+// acuracidade acumulada por Almoxarifado." - o espaço vago era embaixo do
+// heatmap "Almoxarifado × Hipótese" (evidência: os 2 prints mostrados
+// mostravam esse painel especificamente, com a área vazia marcada). Reaproveita
+// o mesmo padrão de barra horizontal já usado no Ranking Financeiro do
+// Fechamento (indexAxis:"y"), o farol de cores de corFarolAcuracia() e o
+// plugin global de rótulos (dataset.formatarRotulo, ver "rotulosDados" acima).
+function renderAcuraciaAlmoxarifado(dados) {
+  const ctx = document.getElementById("chart-acuracia-almoxarifado");
+  if (chartAcuraciaAlmoxarifado) chartAcuraciaAlmoxarifado.destroy();
+  chartAcuraciaAlmoxarifado = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: dados.map((d) => d.almoxarifado),
+      datasets: [
+        {
+          label: "Acurácia acumulada %",
+          data: dados.map((d) => d.acuracia_pct),
+          backgroundColor: dados.map((d) => corFarolAcuracia(d.acuracia_pct)),
+          borderRadius: 3,
+          formatarRotulo: (v) => v + "%",
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      plugins: { legend: { display: false } },
+      layout: { padding: { right: 50 } },
+      scales: {
+        x: { min: 0, max: 100, ticks: { color: "#8ca0a3" }, grid: { color: "#2e3a40" } },
+        y: { ticks: { color: "#8ca0a3", font: { size: 10 } }, grid: { display: false } },
+      },
+    },
+  });
+
+  ativarCliqueParaFiltrar(chartAcuraciaAlmoxarifado, ctx, dados, (d) => d.almoxarifado, "filtro-almoxarifado", (d) => ({
+    titulo: `Almoxarifado ${d.almoxarifado}`,
+    resumo: d.acuracia_pct != null
+      ? `O almoxarifado ${d.almoxarifado} tem acurácia acumulada de ${d.acuracia_pct}% neste recorte, com ${d.itens_inventariados} ${d.itens_inventariados === 1 ? "item inventariado" : "itens inventariados"}.`
+      : `Sem itens inventariados para o almoxarifado ${d.almoxarifado} neste recorte.`,
+  }));
 }
 
 function renderRanking(rank) {
@@ -7118,6 +7177,22 @@ function _ehGatilhoAssistente(textoSemAtivacaoNormalizado) {
   return GATILHOS_ASSISTENTE_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
 }
 
+// "Atlas, Mensagens" (28/08/2026) - gatilho de voz pro painel de Pendências
+// (Gmail + Slack), no lugar do gatilho de "duas palmas" (removido - ver o
+// comentário de remoção na seção de Pendências, mais abaixo, com a causa
+// do loop). Pedido do usuário: "Tenho uma ação, com comando de 'Palma' que
+// está em loop infinito por conta de um efeito sonoro da voz do
+// assistente. Quero retirar o comando por 'Palmas'. Use o gatilho, 'Atlas,
+// mensagens' para a verificação de emails e mensagens do slack".
+const GATILHOS_MENSAGENS_VOZ = [
+  "mensagens", "minhas mensagens", "ver mensagens", "checar mensagens",
+  "pendências", "minhas pendências", "ver pendências", "checar pendências",
+];
+
+function _ehGatilhoMensagens(textoSemAtivacaoNormalizado) {
+  return GATILHOS_MENSAGENS_VOZ.some((g) => textoSemAtivacaoNormalizado === _normalizarTextoVoz(g));
+}
+
 // (09/08/2026 - pedido do Maurício) Segunda forma de acionar o assistente por
 // voz, além de dizer "Atlas, [a pergunta toda]" numa frase só: dizer só
 // "Atlas, Assistente", esperar o convite ("Pois não. Pode perguntar.") e
@@ -7147,6 +7222,29 @@ function abrirPainelAssistenteAtlas(falarConvite = true) {
     }
     document.getElementById("assistente-atlas-input")?.focus();
     if (falarConvite) falarResumoModulo("Pois não. Pode perguntar.");
+  }, jaEstavaNoHub ? 0 : 250);
+}
+
+// Abre o hub (se necessário), rola/foca o painel de Pendências (Gmail +
+// Slack) e já dispara a verificação (verPendenciasExternas, definida mais
+// abaixo) - usado pelo gatilho de voz "Atlas, Mensagens". O painel só
+// existe pra Admin (credenciais são de UMA conta pessoal fixada no
+// servidor - ver aplicarPermissoesNaUI()); se quem estiver falando não for
+// Admin, o painel está com a classe "hidden" e avisamos por voz em vez de
+// tentar abrir/rolar até algo que não existe pra essa pessoa.
+function abrirPainelPendenciasPorVoz() {
+  const painel = document.getElementById("painel-pendencias-externas");
+  if (!painel || painel.classList.contains("hidden")) {
+    falarResumoModulo("O painel de pendências de e-mail e Slack só está disponível para o administrador.");
+    return;
+  }
+  const jaEstavaNoHub = window.__atlasViewAtual === "hub";
+  if (!jaEstavaNoHub) mostrarView("hub");
+  setTimeout(() => {
+    painel.scrollIntoView({ behavior: "smooth", block: "start" });
+    painel.classList.add("atlas-destaque-temporario");
+    setTimeout(() => painel.classList.remove("atlas-destaque-temporario"), 1600);
+    verPendenciasExternas();
   }, jaEstavaNoHub ? 0 : 250);
 }
 
@@ -7269,6 +7367,17 @@ function configurarComandoDeVoz() {
           setTimeout(() => abrirPainelAssistenteAtlas(), 400);
           _registrarComandoDeVozNoBanco(transcricao, "hub");
           window.__atlasAguardandoPerguntaAssistenteAte = Date.now() + JANELA_PERGUNTA_DIRETA_ASSISTENTE_MS;
+          continue;
+        }
+
+        if (_ehGatilhoMensagens(semAtivacao)) {
+          // "Atlas, Mensagens" (28/08/2026) - atalho direto pro painel de
+          // Pendências (Gmail + Slack), no lugar do gatilho de "duas
+          // palmas" removido (ver decisão na seção de Pendências, mais
+          // abaixo).
+          status.textContent = `✅ "${transcricao}" → verificando e-mails e mensagens do Slack.`;
+          setTimeout(() => abrirPainelPendenciasPorVoz(), 400);
+          _registrarComandoDeVozNoBanco(transcricao, "hub");
           continue;
         }
 
@@ -7582,8 +7691,9 @@ document.getElementById("assistente-atlas-input").addEventListener("keydown", (e
 // fluxo de "Conectar"/"Desconectar" por usuário. Por isso só visível pra
 // Admin (ver aplicarPermissoesNaUI()) - sem essa restrição, qualquer pessoa
 // logada no Atlas veria a caixa de entrada/Slack pessoal de quem configurou.
-// Acionado pelo botão "👏 Ver pendências agora" OU batendo duas palmas perto
-// do microfone (ver configurarDetectorDePalmas mais abaixo).
+// Acionado pelo botão "📬 Ver pendências agora" OU pelo gatilho de voz
+// "Atlas, Mensagens" (ver GATILHOS_MENSAGENS_VOZ/abrirPainelPendenciasPorVoz,
+// mais acima).
 async function carregarStatusIntegracoesPessoais() {
   const painel = document.getElementById("painel-pendencias-externas");
   if (!painel || painel.classList.contains("hidden")) return; // não-admin: nem consulta
@@ -7595,21 +7705,14 @@ async function carregarStatusIntegracoesPessoais() {
     const elSlack = document.getElementById("status-integracao-slack");
     if (elGmail) elGmail.textContent = `Gmail: ${status.gmail.configurado ? "configurado." : "não configurado neste ambiente."}`;
     if (elSlack) elSlack.textContent = `Slack: ${status.slack.configurado ? "configurado." : "não configurado neste ambiente."}`;
-
-    // Só ativa o detector de "duas palmas" se pelo menos 1 integração
-    // estiver configurada - senão não tem porquê pedir permissão de
-    // microfone extra pra essa finalidade.
-    if (status.gmail.configurado || status.slack.configurado) {
-      configurarDetectorDePalmas();
-    }
   } catch (e) {
     console.warn("Atlas: não consegui carregar o status das integrações pessoais.", e);
   }
 }
 
-// Chamada tanto pelo botão manual quanto pelo gatilho de duas palmas -
-// busca pendências de Gmail/Slack, mostra a lista com links pra abrir cada
-// item, e fala um resumo curto em voz alta.
+// Chamada tanto pelo botão manual quanto pelo gatilho de voz "Atlas,
+// Mensagens" - busca pendências de Gmail/Slack, mostra a lista com links
+// pra abrir cada item, e fala um resumo curto em voz alta.
 async function verPendenciasExternas() {
   const area = document.getElementById("resultado-pendencias-externas");
   if (area) {
@@ -7671,86 +7774,34 @@ async function verPendenciasExternas() {
 
 document.getElementById("btn-ver-pendencias-externas")?.addEventListener("click", () => verPendenciasExternas());
 
-// ---------- Detector de "duas palmas" (19/08/2026) ----------
-// Gatilho de áudio alternativo ao botão acima - detecta 2 estouros curtos e
-// próximos no microfone (uma palma dupla) via análise de amplitude, sem
-// depender do reconhecimento de fala (que só entende palavras, não palmas).
-// IMPORTANTE: isso é uma heurística simples baseada em volume - ambientes
-// barulhentos (chão de fábrica, conversas, ar-condicionado forte) podem
-// gerar falsos positivos ou negativos. O botão "👏 Ver pendências agora" é
-// sempre o caminho confiável; as palmas são um atalho a mais, não uma
-// substituição.
-let __atlasDetectorPalmasAtivo = false;
-
-function configurarDetectorDePalmas() {
-  if (__atlasDetectorPalmasAtivo) return; // já está rodando - não abre um 2º stream de áudio
-  if (!navigator.mediaDevices?.getUserMedia) return;
-  __atlasDetectorPalmasAtivo = true;
-
-  navigator.mediaDevices.getUserMedia({ audio: true })
-    .then((stream) => {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const fonte = ctx.createMediaStreamSource(stream);
-      const analisador = ctx.createAnalyser();
-      analisador.fftSize = 512;
-      fonte.connect(analisador);
-
-      const buffer = new Uint8Array(analisador.fftSize);
-      let pisoDeRuido = 0.02;
-      const picos = []; // timestamps (ms) dos últimos estouros de volume detectados
-      let bloqueadoAte = 0; // evita disparar de novo logo em seguida (debounce)
-
-      // Janela aceitável entre as 2 palmas - rápida o suficiente pra
-      // diferenciar de ruído contínuo, folgada o suficiente pra gente real
-      // bater palma sem precisão de robô.
-      const INTERVALO_MIN_MS = 120;
-      const INTERVALO_MAX_MS = 900;
-
-      function _rms() {
-        analisador.getByteTimeDomainData(buffer);
-        let soma = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          const v = (buffer[i] - 128) / 128;
-          soma += v * v;
-        }
-        return Math.sqrt(soma / buffer.length);
-      }
-
-      function _loop() {
-        if (!__atlasDetectorPalmasAtivo) return;
-        const nivel = _rms();
-        // piso de ruído se ajusta devagar ao ambiente (média móvel bem lenta)
-        pisoDeRuido = pisoDeRuido * 0.995 + nivel * 0.005;
-        const limite = Math.max(0.12, pisoDeRuido * 4.5);
-
-        const agora = performance.now();
-        if (nivel > limite && agora > bloqueadoAte) {
-          picos.push(agora);
-          bloqueadoAte = agora + 150; // ignora reverberação do mesmo estouro por 150ms
-          // mantém só os picos dos últimos ~1s
-          while (picos.length && agora - picos[0] > 1000) picos.shift();
-
-          if (picos.length >= 2) {
-            const intervalo = picos[picos.length - 1] - picos[picos.length - 2];
-            if (intervalo >= INTERVALO_MIN_MS && intervalo <= INTERVALO_MAX_MS && picos.length === 2) {
-              picos.length = 0;
-              bloqueadoAte = agora + 2000; // não deixa disparar de novo por 2s (evita repetir com o eco/aplauso continuando)
-              verPendenciasExternas();
-            } else if (picos.length > 2) {
-              picos.length = 0; // mais de 2 estouros seguidos = provavelmente ruído/aplauso de verdade, não o gatilho
-            }
-          }
-        }
-        requestAnimationFrame(_loop);
-      }
-      requestAnimationFrame(_loop);
-    })
-    .catch((e) => {
-      console.warn("Atlas: não consegui ativar o detector de palmas (permissão de microfone?).", e);
-      __atlasDetectorPalmasAtivo = false;
-    });
-}
+// ---------- Detector de "duas palmas" - REMOVIDO (28/08/2026) ----------
+// Existia aqui um gatilho de áudio alternativo ao botão acima
+// (`configurarDetectorDePalmas`, 19/08/2026): detectava 2 estouros curtos e
+// próximos no microfone via análise de amplitude (RMS), sem depender do
+// reconhecimento de fala. Removido a pedido do usuário: "Tenho uma ação,
+// com comando de 'Palma' que está em loop infinito por conta de um efeito
+// sonoro da voz do assistente. Quero retirar o comando por 'Palmas'."
+//
+// Causa do loop: o reconhecimento de VOZ já ignora tudo enquanto o Atlas
+// está falando (`window.__atlasFalando`, ver `falarResumoModulo` e o
+// listener "result" mais acima) - mas o detector de palmas, baseado só em
+// volume, nunca tinha essa mesma trava. Quando "duas palmas" disparava
+// `verPendenciasExternas()`, a função terminava falando o resumo em voz
+// alta (`falarResumoModulo`); essa fala saía pelo alto-falante, entrava de
+// volta pelo microfone (sempre ligado) e uma frase falada naturalmente tem
+// picos de volume suficientes pra parecer "duas palmas" de novo - disparando
+// `verPendenciasExternas()` outra vez, que falava de novo, indefinidamente.
+// Não dava pra corrigir só copiando a trava de `window.__atlasFalando`
+// pro detector, porque o problema é estrutural: qualquer som alto o
+// bastante (não só a voz do Atlas) podia disparar o gatilho por engano -
+// diferente do reconhecimento de fala, que exige a palavra "Atlas" antes.
+//
+// Substituído pelo gatilho de voz "Atlas, Mensagens" (ver
+// GATILHOS_MENSAGENS_VOZ/abrirPainelPendenciasPorVoz, mais acima, perto de
+// GATILHOS_ASSISTENTE_VOZ) - herda de graça a mesma trava que já protegia
+// o resto do reconhecimento de voz contra a própria fala do Atlas, então
+// não tem como reproduzir esse loop. O botão "📬 Ver pendências agora"
+// continua sendo o caminho manual de sempre.
 
 // ---------- Dashboard de Acompanhamento - Controle de Movimentados (19/08/2026) ----------
 // "Movimentação" aqui é Transferência entre almoxarifados (esclarecido pelo

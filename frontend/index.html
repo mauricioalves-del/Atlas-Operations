@@ -229,18 +229,19 @@
       <div class="panel hidden" id="painel-pendencias-externas" style="max-width:900px; margin:24px auto 0">
         <div class="panel-title-row">
           <h2>📋 Pendências (Gmail + Slack)</h2>
-          <span class="hint" style="margin:0">Bata duas palmas perto do microfone, ou clique no botão abaixo</span>
+          <span class="hint" style="margin:0">Diga "Atlas, mensagens", ou clique no botão abaixo</span>
         </div>
         <div class="grid-2" style="gap:16px; margin-bottom:12px">
           <p id="status-integracao-gmail" class="hint">Gmail: carregando...</p>
           <p id="status-integracao-slack" class="hint">Slack: carregando...</p>
         </div>
-        <button class="btn-primario" id="btn-ver-pendencias-externas">👏 Ver pendências agora</button>
+        <button class="btn-primario" id="btn-ver-pendencias-externas">📬 Ver pendências agora</button>
         <div id="resultado-pendencias-externas" class="hidden" style="margin-top:12px"></div>
         <p class="hint" style="margin-top:8px">
           Credenciais de uma conta pessoal configuradas no servidor (o Atlas nunca envia nem apaga nada, só lê) -
-          por isso este painel só aparece pra quem está logado como Admin. O gatilho de "duas palmas" é uma
-          heurística de volume no microfone - pode falhar em ambientes barulhentos; o botão acima sempre funciona.
+          por isso este painel só aparece pra quem está logado como Admin. O gatilho de voz é "Atlas, mensagens"
+          (funciona em qualquer tela, com a escuta contínua ligada); o botão acima sempre funciona, mesmo com o
+          microfone desligado.
         </p>
       </div>
 
@@ -270,7 +271,7 @@
         <div class="filtros">
           <select id="filtro-periodo" class="select-filtro">
             <option value="tudo">Tudo</option>
-            <option value="mes_atual">Mês atual</option>
+            <option value="mes_atual" selected>Mês atual</option>
             <option value="30d">Últimos 30 dias</option>
             <option value="60d">Últimos 60 dias</option>
             <option value="90d">Últimos 90 dias</option>
@@ -309,7 +310,10 @@
           <p class="panel-footer" id="tendencia-footer"></p>
         </div>
         <div class="panel">
-          <h2>Evolução Mensal de Acurácia (MoM)</h2>
+          <div class="panel-title-row">
+            <h2>Evolução Mensal de Acurácia (MoM)</h2>
+            <span class="hint" style="margin:0">Sempre mostra o histórico completo — não muda com o filtro de período acima</span>
+          </div>
           <p class="panel-sub">Variação em pontos percentuais (pp) de um mês para o outro</p>
           <canvas id="chart-mom"></canvas>
         </div>
@@ -319,6 +323,10 @@
         <div class="panel">
           <h2>Almoxarifado × Hipótese</h2>
           <div id="heatmap" class="heatmap"></div>
+          <div class="panel-title-row" style="margin-top:18px">
+            <h3 style="margin:0">Acurácia Acumulada por Almoxarifado</h3>
+          </div>
+          <canvas id="chart-acuracia-almoxarifado"></canvas>
         </div>
         <div class="panel">
           <h2>Reincidência</h2>

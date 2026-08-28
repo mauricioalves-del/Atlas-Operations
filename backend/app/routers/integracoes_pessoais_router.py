@@ -31,9 +31,7 @@ def status_integracoes(usuario: models.Usuario = Depends(requer_papel("admin")))
     pendências: texto de "não configurado" (faltam as variáveis de
     ambiente) ou "configurado" (pronto pra consultar) - não existe mais um
     estado "conectado/desconectado" por usuário, já que as credenciais são
-    fixas no servidor. Também informa se deve ativar o detector de "duas
-    palmas" (só ativa escuta de palmas se pelo menos 1 integração estiver
-    configurada)."""
+    fixas no servidor."""
     return {
         "gmail": {"configurado": integracoes_pessoais.gmail_configurado()},
         "slack": {"configurado": integracoes_pessoais.slack_configurado()},
@@ -42,8 +40,8 @@ def status_integracoes(usuario: models.Usuario = Depends(requer_papel("admin")))
 
 @router.get("/pendencias")
 def pendencias(usuario: models.Usuario = Depends(requer_papel("admin"))):
-    """Endpoint principal acionado pelo gatilho de "duas palmas" (ou pelo
-    botão equivalente, ver app.js) - junta Gmail (e-mails não lidos da
+    """Endpoint principal acionado pelo gatilho de voz "Atlas, Mensagens"
+    (ou pelo botão equivalente, ver app.js) - junta Gmail (e-mails não lidos da
     caixa de entrada) e Slack (DMs não lidas + menções recentes) da conta
     configurada no servidor. Cada serviço é isolado: se um falhar (IMAP
     fora do ar, token do Slack revogado), o outro continua aparecendo

@@ -146,6 +146,54 @@ def distribuicao_causas(periodo: str | None = None, usuario: models.Usuario = De
     return [{"hipotese": k, "quantidade": v} for k, v in sorted(contagem.items(), key=lambda x: -x[1])]
 
 
+@router.get("/acuracia-por-almoxarifado")
+def acuracia_por_almoxarifado(periodo: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Acurácia acumulada (todo o recorte, não dia a dia) agrupada por
+    almoxarifado - mesma lógica/critério de 'Sem_Divergencia_Real' já usado
+    em acuracia_por_dia acima, só que agregando por almoxarifado em vez de
+    por data. Alimenta o gráfico de barras invertido no card 'Almoxarifado
+    × Hipótese' do Painel de Divergências (28/08/2026, pedido do Maurício:
+    'Quero adicionar um grafico de barras invertido trazendo a acuracidade
+    acumulada por Almoxarifado').
+
+    Só respeita o filtro de PERÍODO, não o de almoxarifado - propositalmente
+    igual aos outros indicadores desse mesmo grupo de cards (kpis,
+    distribuicao-causas, heatmap-almoxarifado-hipotese, top-reincidentes,
+    top-divergencias, todos chamados com `qsSemAlmox` no app.js): uma
+    quebra POR almoxarifado não faz sentido nenhum se a tela já estiver
+    filtrada pra um único almoxarifado."""
+    corte = _data_corte(periodo)
+    por_almox = defaultdict(lambda: {"itens": 0, "sem_divergencia": 0})
+
+    q_hist = db.query(models.MovimentacaoHistorico).filter(models.MovimentacaoHistorico.origem != "fechamento_inventario")
+    if corte:
+        q_hist = q_hist.filter(models.MovimentacaoHistorico.data_movimento >= corte)
+    for m in q_hist.all():
+        por_almox[m.almoxarifado]["itens"] += 1
+        if (m.divergencia or 0) == 0 or m.hipotese_confirmada == "Sem_Divergencia_Real":
+            por_almox[m.almoxarifado]["sem_divergencia"] += 1
+
+    q_div = db.query(models.Divergencia).filter(models.Divergencia.origem != "fechamento_inventario")
+    if corte:
+        q_div = q_div.filter(models.Divergencia.data_deteccao >= corte)
+    for d in q_div.all():
+        por_almox[d.almoxarifado]["itens"] += 1
+        if d.hipotese_confirmada == "Sem_Divergencia_Real":
+            por_almox[d.almoxarifado]["sem_divergencia"] += 1
+
+    resultado = []
+    for almox, valores in por_almox.items():
+        itens = valores["itens"]
+        acuracia = round(valores["sem_divergencia"] / itens * 100, 2) if itens else None
+        resultado.append({"almoxarifado": almox, "acuracia_pct": acuracia, "itens_inventariados": itens})
+
+    # pior acurácia primeiro (fica no topo do gráfico invertido, chamando
+    # atenção pros almoxarifados problemáticos) - nulos (sem nenhum item no
+    # recorte) vão pro final, não fazem sentido no meio do ranking.
+    resultado.sort(key=lambda x: (x["acuracia_pct"] is None, x["acuracia_pct"]))
+    return resultado
+
+
 @router.get("/heatmap-almoxarifado-hipotese")
 def heatmap(periodo: str | None = None, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
     corte = _data_corte(periodo)

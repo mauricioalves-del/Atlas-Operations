@@ -1,152 +1,75 @@
-# atlas_fix_divergencias_ordenacao_filtros.zip (26/08/2026)
+# atlas_fix_grafico_acuracia_almoxarifado.zip (28/08/2026)
 
 ## Antes de aplicar
 
 Mesmo lembrete de sempre: o Atlas roda no Render, e só passa a usar código
-novo depois de zip + redeploy manual. Este pacote mexe em backend E
-frontend — suba os dois (`backend/app/routers/divergencias_router.py` e os
-3 arquivos de `frontend/`) e refaça o deploy antes de testar.
+novo depois de zip + redeploy manual.
 
 ## O que você pediu
 
-Na tela de Divergências (`Painel de Divergências` → aba "Divergências"),
-com as duas telas que você mandou:
+> "Estou com espaço vago nesse indicador da contagem de movimentados. Quero
+> adicionar um grafico de barras invertido trazendo a acuracidade acumulada
+> por Almoxarifado."
 
-> "Adicionar classificação de valores para as colunas de numeros, do maior
-> para o menor. Fixar cabeçalho no topo e adicionar filtro para
-> recorrentes e baixas operacionais em aberto."
+Junto vieram 2 prints do painel **"Almoxarifado × Hipótese"** (dentro do
+Painel de Divergências), com a área vazia embaixo do heatmap marcada em
+vermelho.
 
-Três coisas, as três implementadas:
+**Ponto de atenção (decisão que tomei, vale conferir)**: o texto da mensagem
+fala em "indicador da contagem de movimentados", mas os prints mostram
+claramente o card "Almoxarifado × Hipótese", não a tela "Controle de
+Movimentados" (que também existe no menu). Fui pelos prints — o espaço vago
+marcado é inequívoco — e adicionei o gráfico ali. Se a intenção era outra
+tela, me avisa que eu ajusto.
 
-## 1) Ordenação nas colunas de número (ID, Valor, Confiança)
+## O que foi feito
 
-Cliquei no cabeçalho de qualquer uma das 3 colunas numéricas da tabela
-(**ID**, **Valor**, **Confiança**) e ela ordena a lista inteira — não só a
-página carregada — do maior pro menor (como você pediu). Clicar de novo na
-mesma coluna inverte pra menor→maior; clicar numa coluna diferente sempre
-começa em maior→menor. Uma setinha (▼/▲) ao lado do nome da coluna mostra
-qual está ativa e em que direção.
+Adicionei um novo gráfico de barras invertido logo abaixo do heatmap
+"Almoxarifado × Hipótese", no mesmo card, ocupando o espaço vazio do print:
+**"Acurácia Acumulada por Almoxarifado"**.
 
-**Importante**: como a lista é paginada no servidor (50 por página), a
-ordenação teve que entrar na própria consulta ao banco (`ORDER BY`), não
-só reordenar o que já estava na tela — senão "do maior pro menor" só valeria
-dentro de cada página de 50, não da lista toda. Isso significa que a API
-`GET /divergencias` agora aceita `ordenar_por` (`id` | `valor` |
-`confianca`) e `ordenar_direcao` (`asc` | `desc`) — sem esses parâmetros, o
-comportamento é idêntico a antes (mais recente primeiro, por data). Não
-toquei em Data nem Descrição pra ordenação — Data continua sendo a ordem
-padrão sem clique nenhum, e as outras colunas não são "número".
+- Cada barra é um almoxarifado, com a acurácia acumulada de TODO o recorte
+  (não dia a dia — é a mesma conta usada no gráfico "Itens Inventariados e
+  Acurácia por Dia", só que somada por almoxarifado em vez de por data).
+- Cor da barra segue o mesmo farol usado no resto do Atlas: vermelho
+  (<50%), amarelo (50-75%) e verde (≥75%).
+- Ordenado do PIOR pro melhor (a barra do topo é sempre o almoxarifado com
+  menor acurácia) — o objetivo é chamar atenção pra quem precisa de atenção
+  primeiro, mesma lógica dos rankings de reincidência que já existem no
+  painel.
+- Clicar numa barra filtra o painel inteiro por aquele almoxarifado (mesmo
+  comportamento de "clique-para-filtrar" que o heatmap e os outros gráficos
+  já têm) e abre o resumo daquele ponto, com a acurácia e a quantidade de
+  itens inventariados.
+- Só respeita o filtro de **período** (Tudo / Mês atual / 30 / 60 / 90
+  dias), não o de almoxarifado — igual aos outros indicadores desse mesmo
+  grupo de cards (heatmap, causas, reincidência, top divergências): um
+  gráfico "por almoxarifado" não faz sentido se a tela já estiver filtrada
+  pra um único almoxarifado.
 
-Divergências sem confiança calculada (`Confiança = —`) sempre ficam no
-final da lista quando você ordena por essa coluna, tanto maior→menor
-quanto menor→maior — pra não "furar" pro topo do ranking.
+### Por trás dos panos
 
-## 2) Cabeçalho fixo no topo
-
-O cabeçalho da tabela (ID, SKU, Descrição, Almoxarifado, Data, Valor,
-Hipótese (IA), Confiança, Status) agora fica sempre visível enquanto você
-rola pelas divergências da página atual.
-
-Pra isso funcionar direito, precisei mudar como a lista rola: em vez da
-página inteira rolar (cabeçalho junto), a **tabela em si virou uma caixa
-com altura limitada e rolagem própria** (ocupa a altura da tela menos o
-espaço da barra de filtros) — é dentro dessa caixa que o cabeçalho fica
-fixo. Os filtros de busca/almoxarifado/status continuam sempre visíveis
-acima, e a paginação ("Anterior/Próxima") saiu de dentro da caixa e ficou
-fixa logo abaixo dela — assim você não precisa rolar até o fim da lista
-pra trocar de página.
-
-Achei o motivo de isso não funcionar só com `position: sticky` direto no
-cabeçalho (testei e não colava no topo antes de fazer essa mudança): o
-layout raiz da aplicação (`.shell`, usado em toda tela do Atlas) tem uma
-propriedade (`overflow: hidden`, usada só pra recortar a animação de fundo)
-que sem querer também vira o "recipiente de rolagem" pro cabeçalho fixo se
-grudar — só que ele nunca rola de verdade sozinho, então o cabeçalho nunca
-ficava fixo em lugar nenhum. Resolvido dando à própria caixa da tabela essa
-responsabilidade, sem tocar em `.shell` (que é global — não quis arriscar
-efeito colateral na animação de fundo de todas as outras telas por causa
-de um pedido específico desta tela).
-
-**Isso está limitado só à tela de Divergências** — as outras ~25 tabelas
-do sistema continuam exatamente como estavam, sem cabeçalho fixo.
-
-**No celular**, desliguei esse comportamento (cabeçalho fixo + caixa com
-altura limitada) e mantive o de sempre (página inteira rola). O motivo:
-nas telas estreitas o Atlas já tem um tratamento próprio pra tabela (ela
-vira uma caixa com rolagem horizontal, pra caber tabelas largas numa tela
-pequena) e as duas técnicas juntas não se combinam bem — testei e preferi
-manter o comportamento mobile de sempre a arriscar um cabeçalho fixo
-quebrado nesse caso.
-
-## 3) Dois filtros novos: Recorrentes e Baixas operacionais em aberto
-
-Dois checkboxes novos na barra de filtros, ao lado do filtro de Status —
-combinam livremente com busca/almoxarifado/status (e entre si).
-
-- **Recorrentes**: mostra só divergências cujo SKU já apareceu em **mais de
-  uma divergência detectada** (em qualquer almoxarifado, data ou status) —
-  mesmo critério que já existe hoje no "Top 10 Itens Mais Recorrentes em
-  Divergência" (tela de Fechamentos). Essa checagem é sobre o SKU no
-  histórico inteiro do sistema, não só nas linhas que batem com os outros
-  filtros da tela no momento — assim "recorrente" continua significando a
-  mesma coisa não importa que outro filtro esteja ligado.
-
-- **Baixas operacionais em aberto**: mostra só divergências que já têm uma
-  baixa operacional (Lovable) **pendente** (ainda não aprovada nem
-  reprovada) batendo com ela — o mesmo sinal que já gera aquele ícone 🕒 ao
-  lado do SKU na lista hoje (correlação SKU + Almoxarifado + quantidade,
-  ver `aviso_baixa_pendente`). Não inventei um conceito novo pra "em
-  aberto" — reaproveitei o que o Atlas já calculava, só virou filtro
-  também, não só um aviso visual.
-
-**Único ponto de atenção de desempenho**: diferente dos outros filtros
-(que viram `WHERE` direto no banco), "Baixas operacionais em aberto"
-precisa calcular a correlação de cada divergência aberta uma por uma antes
-de poder paginar direito — é mais pesado que os outros filtros, mas não
-deve pesar de verdade no volume de dados de hoje. Se algum dia a lista de
-divergências abertas ficar muito grande e esse filtro específico ficar
-lento, me avisa que otimizo isso separadamente.
-
-## Duas decisões que vale você confirmar
-
-Nenhuma das duas telas anexadas nem o texto do pedido definiam exatamente
-"recorrente" nem "em aberto" — decidi pelo critério que já existia em
-outro canto do sistema (pros dois casos), mas são interpretações minhas:
-
-1. "Recorrente" hoje considera o SKU sozinho (não SKU + Almoxarifado) —
-   ou seja, o mesmo SKU divergindo em dois almoxarifados diferentes já
-   conta como recorrente. Se você queria por SKU **dentro do mesmo**
-   almoxarifado, é uma mudança pequena, me avisa.
-2. "Baixas operacionais em aberto" está restrito a divergências **ainda
-   não resolvidas** (`Aberta`/`Em_Investigacao`) — uma divergência já
-   `Resolvida` nunca aparece nesse filtro, mesmo que tenha tido uma baixa
-   pendente no passado. Faz sentido pra mim (resolvida = não está mais
-   "em aberto"), mas é uma decisão, não um dado óbvio do seu pedido.
+- Endpoint novo no backend: `GET /api/dashboard/acuracia-por-almoxarifado`
+  — mesma lógica do endpoint que já existia pra acurácia por dia, só que
+  agrupando por almoxarifado.
+- O card cresceu um pouco de altura pra caber o gráfico novo — no celular
+  ele empilha normalmente, junto com o resto do painel (que já vira uma
+  coluna só em telas pequenas).
 
 ## Testado
 
-- `python3 -m py_compile` limpo no router.
-- Lógica de ordenação (`ORDER BY ... NULLS LAST`) e a subquery de
-  recorrência testadas rodando de verdade contra um banco SQLite de teste
-  (não só lidas/revisadas) — confirmei que os nulos de confiança vão pro
-  fim nos dois sentidos, e que a subquery de recorrência pega o SKU certo
-  cruzando almoxarifados diferentes.
-- `node --check` limpo no JavaScript.
-- Testei a tela de ponta a ponta num navegador de verdade (Chromium,
-  headless), com a API simulada: estado inicial, ordenação por Valor
-  (maior→menor e invertendo pra menor→maior), ordenação por Confiança,
-  os dois filtros novos ligados juntos, cabeçalho fixo rolando a lista
-  (conferido que o cabeçalho realmente fica parado no topo da caixa, não só
-  visualmente parecido), e o layout no celular (confirmei que volta pro
-  comportamento de sempre, sem cabeçalho fixo).
-- Revisão visual das capturas de tela geradas nesse teste — sem
-  sobreposição, paginação sempre visível, filtros sempre visíveis acima da
-  tabela.
+- `python3 -m py_compile` (backend) e `node --check` (frontend) limpos.
+- Testei a conta do endpoint novo de verdade, com um banco de teste em
+  memória: confirmei que a acurácia por almoxarifado bate (inclusive
+  casos de 0% e 100%), que registros de fechamento de inventário ficam de
+  fora (mesma regra dos outros indicadores) e que o filtro de período corta
+  corretamente os itens fora do mês atual.
+- Testei o gráfico no navegador (Playwright): renderiza com as cores do
+  farol certas, ordenado do pior pro melhor, sem estourar o card nem
+  sobrepor o heatmap acima; cliquei numa barra e confirmei que o filtro de
+  almoxarifado do painel muda e o resumo do ponto abre com o texto certo.
 
 ## Não incluído neste pacote
 
-Não toquei em nenhuma outra tela (Relatório de Baixa, Mapeamento de
-Passivos, Fechamentos, etc.) — só a tela de Divergências (`GET
-/divergencias` e a tabela correspondente). Se quiser cabeçalho fixo ou
-ordenação por coluna em alguma outra tabela do sistema, me avisa que
-replico.
+Não mexi em nenhum outro gráfico, endpoint ou filtro do Painel de
+Divergências — só adicionei o gráfico novo no espaço vazio indicado.
