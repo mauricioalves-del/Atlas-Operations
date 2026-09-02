@@ -38,19 +38,43 @@ if (-not $emailConfigurado) {
 Write-Host "Verificando o que mudou..." -ForegroundColor Yellow
 git add .
 $statusResumo = git status --short
-if (-not $statusResumo) {
+
+# 02/09/2026 - CORRECAO DE BUG: antes, quando $statusResumo vinha vazio (nada
+# pra commitar), o script dizia direto "o GitHub ja esta atualizado" e
+# fechava - mas "nada pra commitar" so quer dizer que a pasta local esta
+# limpa, NAO que o ultimo commit chegou a ser enviado. Se um envio anterior
+# tivesse commitado localmente e falhado so no "git push" (por exemplo, sem
+# internet/DNS naquele momento - ja aconteceu), toda vez que a pessoa rodasse
+# de novo o script via cair direto nessa mensagem tranquilizadora, sem NUNCA
+# tentar reenviar o commit que ficou preso so na maquina local. A correcao:
+# sempre confere se o HEAD local esta a frente do remoto (com um "git fetch"
+# antes, pra nao comparar com uma referencia desatualizada) antes de decidir
+# que nao ha nada a enviar - se estiver a frente, tenta o push de novo mesmo
+# sem nenhum arquivo novo pra commitar.
+git fetch origin 2>$null | Out-Null
+$branchAtual = git rev-parse --abbrev-ref HEAD
+$commitsNaoEnviados = git rev-list --count "origin/$branchAtual..HEAD" 2>$null
+
+if ((-not $statusResumo) -and ($commitsNaoEnviados -eq "0")) {
     Write-Host ""
     Write-Host "Nada mudou desde o ultimo envio - o GitHub ja esta atualizado." -ForegroundColor Green
     Read-Host "Pressione Enter para fechar"
     exit 0
 }
-Write-Host "Arquivos alterados:" -ForegroundColor Yellow
-git status --short
-Write-Host ""
-$dataHora = Get-Date -Format "dd/MM/yyyy HH:mm"
-$mensagem = "Atualizacao automatica - $dataHora"
-Write-Host "Salvando alteracoes..." -ForegroundColor Yellow
-git commit -m "$mensagem" | Out-Null
+
+if ($statusResumo) {
+    Write-Host "Arquivos alterados:" -ForegroundColor Yellow
+    git status --short
+    Write-Host ""
+    $dataHora = Get-Date -Format "dd/MM/yyyy HH:mm"
+    $mensagem = "Atualizacao automatica - $dataHora"
+    Write-Host "Salvando alteracoes..." -ForegroundColor Yellow
+    git commit -m "$mensagem" | Out-Null
+} else {
+    Write-Host ""
+    Write-Host "Ha $commitsNaoEnviados commit(s) salvos localmente que nunca chegaram a ser enviados ao GitHub (uma tentativa anterior deve ter falhado so no envio) - tentando enviar de novo..." -ForegroundColor Yellow
+}
+
 Write-Host "Enviando para o GitHub (isso aciona o deploy automatico no Render)..." -ForegroundColor Yellow
 git push
 if ($LASTEXITCODE -eq 0) {
