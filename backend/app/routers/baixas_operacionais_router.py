@@ -1247,6 +1247,117 @@ def resumo_executivo(
 
 
 # ---------------------------------------------------------------------------
+# "Pacotes de Baixas Operacionais" (02/09/2026, pedido do usuário: "acrescentar
+# no Mapeamento de Passivos o KPI... Pode nomeá-lo como 'Pacotes de Baixas
+# Operacionais'. dividir em duas operações PA - Pará e SP - São Paulo... Não
+# traga os mesmos indicadores de mapeamento de baixas operacionais. Preciso
+# quebrar esse indicador em uma visão estratégica, atribuindo peso as baixas
+# operacionais relacionadas de Inventários e no processo do dia a dia").
+#
+# Indicador NOVO, NATIVO do Atlas (não é o dashboard externo Stock Savvy
+# "Baixas Operacionais (Pacote)"/"Controle Paralelo", nem repete o Resumo
+# Executivo acima) - quebra os mesmos Passivos aprovados (BaixaOperacional)
+# em duas dimensões que nenhum dos dois já mostra:
+#
+# 1) OPERAÇÃO (PA x SP) - só existe 1 almoxarifado oficial de Pará no
+#    cadastro (Almox_PA_Para, ver hipoteses_config.ALMOXARIFADOS_PADRAO);
+#    todo o resto tem prefixo Almox_SP_* ou é Almox_Box/Almox_Box_2 (sem
+#    prefixo de região próprio). Decisão do usuário: Box/Box_2 contam como
+#    SP (não há outro cadastro de região no sistema pra eles); baixa sem
+#    almoxarifado registrado fica num bucket "Não informado" à parte, sem
+#    forçar pra nenhuma das duas operações (ver _operacao_por_almoxarifado).
+#
+# 2) PESO POR ORIGEM (Inventário x Processo do dia a dia) - reaproveita a
+#    MESMA categorização já usada no Resumo Executivo acima
+#    (_categoria_mapeamento/CATEGORIA_MAPEAMENTO_LABELS, baseada em
+#    Divergencia.origem) - não inventa uma classificação nova. "Peso" =
+#    composição percentual do valor aprovado no recorte (decisão do
+#    usuário: leitura direta, sem fórmula/multiplicador novo).
+#
+# A terceira parte do pedido do usuário ("visão das baixas com
+# justificativas, que não representam um prejuízo financeiro, mas sim um
+# ajuste e processos errados") já existe pronta em resumo_executivo() acima
+# - é exatamente `divergencias_resolvidas` (ajuste_processo x perda_real x
+# não_classificado, baseado em Divergencia.hipotese_confirmada x
+# HIPOTESES_AJUSTE_PROCESSO/HIPOTESES_PERDA_REAL) - não duplicada aqui, o
+# slide do MBR lê direto de d["resumo_passivos"]["divergencias_resolvidas"].
+# ---------------------------------------------------------------------------
+
+def _operacao_por_almoxarifado(almoxarifado: str | None) -> str:
+    """PA vs SP - ver bloco de decisão acima. Só Almox_PA_Para é PA; todo o
+    resto com almoxarifado preenchido (Almox_SP_*, Almox_Box, Almox_Box_2)
+    conta como SP; sem almoxarifado registrado vira "Não informado"."""
+    if not almoxarifado:
+        return "Não informado"
+    return "PA" if almoxarifado.startswith("Almox_PA_") else "SP"
+
+
+@router.get("/dashboard/pacotes-por-operacao")
+def dashboard_pacotes_por_operacao(
+    ano: int | None = None,
+    mes: int | None = Query(None, ge=1, le=12),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """"Pacotes de Baixas Operacionais" - ver bloco de decisão acima pro
+    contexto completo. Só considera baixas APROVADAS no recorte de ano/mês
+    (mesmo filtro de resumo_executivo, sem filtro de almoxarifado/motivo -
+    esse indicador É a quebra por operação). Devolve uma entrada por
+    operação (PA/SP/Não informado) mais uma entrada "Total" com a mesma
+    forma (soma das três) - cada uma com valor/quantidade agregados e a
+    quebra por categoria de origem (com % do valor daquela própria
+    operação, não do total geral)."""
+    aprovadas = [
+        b for b in db.query(models.BaixaOperacional).all()
+        if b.status_fluxo == "APROVADA" and _data_no_periodo(b.data_baixa, ano, mes, None, None)
+    ]
+    divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
+
+    brutos = {
+        operacao: {"valor": 0.0, "quantidade": 0, "por_categoria": defaultdict(lambda: {"quantidade": 0, "valor": 0.0})}
+        for operacao in ("PA", "SP", "Não informado")
+    }
+    for b in aprovadas:
+        operacao = _operacao_por_almoxarifado(b.almoxarifado)
+        categoria = _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais)
+        valor = b.valor_total or 0
+        bucket = brutos[operacao]
+        bucket["valor"] += valor
+        bucket["quantidade"] += 1
+        bucket["por_categoria"][categoria]["valor"] += valor
+        bucket["por_categoria"][categoria]["quantidade"] += 1
+
+    def _serializar(bruto: dict) -> dict:
+        total_valor = round(bruto["valor"], 2)
+        return {
+            "valor": total_valor,
+            "quantidade": bruto["quantidade"],
+            "por_categoria": {
+                chave: {
+                    "label": rotulo,
+                    "quantidade": bruto["por_categoria"][chave]["quantidade"],
+                    "valor": round(bruto["por_categoria"][chave]["valor"], 2),
+                    "pct_valor": round(bruto["por_categoria"][chave]["valor"] / total_valor * 100, 1) if total_valor else 0.0,
+                }
+                for chave, rotulo in CATEGORIA_MAPEAMENTO_LABELS.items()
+            },
+        }
+
+    resultado = {operacao: _serializar(bruto) for operacao, bruto in brutos.items()}
+
+    total_bruto = {"valor": 0.0, "quantidade": 0, "por_categoria": defaultdict(lambda: {"quantidade": 0, "valor": 0.0})}
+    for bruto in brutos.values():
+        total_bruto["valor"] += bruto["valor"]
+        total_bruto["quantidade"] += bruto["quantidade"]
+        for chave, valores in bruto["por_categoria"].items():
+            total_bruto["por_categoria"][chave]["valor"] += valores["valor"]
+            total_bruto["por_categoria"][chave]["quantidade"] += valores["quantidade"]
+    resultado["Total"] = _serializar(total_bruto)
+    return resultado
+
+
+# ---------------------------------------------------------------------------
 # Segundo indicador + exportação em Excel (13/08/2026) - pedido do Maurício:
 # (1) uma quebra por ALMOXARIFADO (em vez de por mês) do mesmo par
 #     Passivos x Resultado de Inventário do Resumo Executivo, pra achar onde
