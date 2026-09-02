@@ -72,6 +72,7 @@ Duas famílias de arquivo, por como cada um foi construído:
 """
 import re
 import json
+import calendar
 from datetime import datetime
 
 from bs4 import BeautifulSoup
@@ -451,35 +452,59 @@ def extrair_fefo(html_content: str, mes: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2. Controle de Testes Industriais - const DATA=[...], campo "mes" (YYYYMM)
+# 2. Controle de Testes Industriais - Custo de Inovação (02/09/2026: layout do
+#    export mudou - saiu do `const DATA=[...]` original e passou a usar o
+#    mesmo padrão de JSON embutido em <script id="dados" type="application/
+#    json"> de Dispersão de Ficha Técnica, com o campo de mês chamado
+#    "ano_mes" (já em "YYYY-MM", compara direto com o `mes` do MBR - sem
+#    conversão). Também trouxe dois campos novos por registro que o formato
+#    antigo não tinha: "grupo" (Matéria Prima / Produto em Processo /
+#    Embalagem / Sem grupo) e "sem_custo" ("OK" / "Sem custo").
+#
+#    Decisão do usuário (02/09/2026, respondendo pergunta de esclarecimento
+#    sobre a nova lógica de formação do indicador):
+#    - itens com sem_custo == "Sem custo" são EXCLUÍDOS do Gasto Total, do
+#      Custo Médio por OP e do ranking de matérias-primas (custo zerado/
+#      ausente distorceria esses números) - mas o extrator ainda conta
+#      quantos foram excluídos (`itens_sem_custo`) pra o slide avisar, em vez
+#      de simplesmente sumir com esses itens sem explicação.
+#    - Embalagem continua incluída no cálculo normalmente - só sem_custo é
+#      motivo de exclusão, nenhum grupo é filtrado.
 # ---------------------------------------------------------------------------
 def extrair_testes_industriais(html_content: str, mes: str) -> dict:
-    """mes: 'YYYY-MM'."""
-    m = re.search(r"const DATA\s*=\s*(\[.*?\]);", html_content, re.S)
+    """mes: 'YYYY-MM'. Ver decisão de formação do indicador no comentário
+    acima do módulo, seção 2."""
+    m = re.search(r'<script id="dados" type="application/json">(.*?)</script>', html_content, re.S)
     if not m:
         return None
-    dados = json.loads(m.group(1))
-    mes_chave = mes.replace("-", "")
+    try:
+        dados = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    linhas = dados.get("linhas") or []
 
-    do_mes = [d for d in dados if d.get("mes") == mes_chave]
+    do_mes = [r for r in linhas if r.get("ano_mes") == mes]
     if not do_mes:
         return {"tem_dados": False, "mes": mes}
 
-    gasto_total = sum(d.get("custo", 0) or 0 for d in do_mes)
-    ops = sorted(set(d.get("op") for d in do_mes if d.get("op")))
+    com_custo = [r for r in do_mes if r.get("sem_custo") != "Sem custo"]
+    itens_sem_custo = len(do_mes) - len(com_custo)
+
+    gasto_total = sum(r.get("custo", 0) or 0 for r in com_custo)
+    ops = sorted(set(r.get("numero_op") for r in com_custo if r.get("numero_op")))
 
     agg = {}
-    for d in do_mes:
-        k = d.get("descMat") or d.get("material") or "—"
-        agg.setdefault(k, {"custo": 0.0, "qtd": 0.0, "um": d.get("um")})
-        agg[k]["custo"] += d.get("custo", 0) or 0
-        agg[k]["qtd"] += d.get("qtd", 0) or 0
+    for r in com_custo:
+        k = r.get("desc_material") or r.get("material") or "—"
+        agg.setdefault(k, {"custo": 0.0, "qtd": 0.0, "um": r.get("um")})
+        agg[k]["custo"] += r.get("custo", 0) or 0
+        agg[k]["qtd"] += r.get("qtd", 0) or 0
     top = sorted(agg.items(), key=lambda x: -x[1]["custo"])[:8]
 
     return {
         "tem_dados": True,
         "mes": mes,
-        "total_itens": len(do_mes),
+        "total_itens": len(com_custo),
         "gasto_total": round(gasto_total, 2),
         "ops": len(ops),
         "custo_medio_op": round(gasto_total / len(ops), 2) if ops else 0,
@@ -487,7 +512,107 @@ def extrair_testes_industriais(html_content: str, mes: str) -> dict:
             {"nome": k, "custo": round(v["custo"], 2), "qtd": round(v["qtd"], 4), "um": v["um"]}
             for k, v in top
         ],
+        "itens_sem_custo": itens_sem_custo,
     }
+
+
+# ---------------------------------------------------------------------------
+# 8. Constância e Disciplina — Diário de Bordo (02/09/2026, pedido do
+#    usuário: "Agora o HTML do diario de bordo passa a alimentar o indicador
+#    de performance e cumprimento de rotina") - export estático do Dashboard
+#    de Performance da Rotina Master (rotinabusiness.lovable.app), pra
+#    substituir a coleta 100% manual que alimentava _DIARIO_BORDO_POR_MES em
+#    mbr_generator.py.
+#
+#    Igual ao item 2 do docstring do módulo (Farol/Recuperação/Baixas): é uma
+#    "foto" estática de um app React/Recharts, SEM script/JSON com o dataset
+#    cru embutido (confirmado: 0 <script> e 0 <iframe> no arquivo) - só dá
+#    pra extrair com segurança o que já está como TEXTO plano no HTML (os 4
+#    cartões de KPI no topo). O gráfico "% de atingimento diário das
+#    rotinas" É um SVG Recharts (barras por dia), mas diferente dos casos já
+#    resolvidos com `_extrair_barras_recharts` (Farol/Recuperação/Baixas),
+#    aqui só 16 dos 31 dias do mês têm rótulo no eixo X (Recharts pula tick
+#    alternado) - metade das barras cairia perto ou na fronteira de
+#    tolerância entre duas datas rotuladas, com risco real de atribuir um
+#    valor ao dia errado. Por isso este extrator NÃO tenta reconstruir
+#    sequência/lapsos por dia útil nem quebra semanal (campos
+#    maior_sequencia_dias_uteis_100/lapsos_dias_uteis/semanas simplesmente
+#    não aparecem no retorno) - só os KPIs de topo, que são texto exato, sem
+#    geometria envolvida. _slide_diario_bordo trata a ausência desses campos
+#    mostrando uma versão mais enxuta do slide (ver lá).
+#
+#    O período coberto pelo export vem do <meta name="description"> do HTML
+#    ("... (DD/MM/AA a DD/MM/AA).") - só usa o dado se esse período for
+#    exatamente um mês calendário completo (dia 1 ao último dia, mesmo
+#    mês/ano) E esse mês bater com o `mes` pedido; caso contrário devolve
+#    "tem_dados": False em vez de arriscar atribuir a um mês errado (mesmo
+#    critério de "nunca inventa" usado no resto do módulo).
+# ---------------------------------------------------------------------------
+def extrair_diario_bordo(html_content: str, mes: str) -> dict:
+    """mes: 'YYYY-MM'. Ver decisão de escopo (só KPIs de topo) no comentário
+    acima do módulo, seção 8."""
+    m_periodo = re.search(
+        r'<meta name="description" content="[^"]*\((\d{2})/(\d{2})/(\d{2}) a (\d{2})/(\d{2})/(\d{2})\)',
+        html_content,
+    )
+    if not m_periodo:
+        return None
+    d1, m1, a1, d2, m2, a2 = m_periodo.groups()
+    try:
+        inicio = datetime.strptime(f"{d1}/{m1}/{a1}", "%d/%m/%y")
+        fim = datetime.strptime(f"{d2}/{m2}/{a2}", "%d/%m/%y")
+    except ValueError:
+        return None
+
+    m_cumprimento = re.search(
+        r'Cumprimento geral</div></div>'
+        r'<div class="[^"]*">(\d+(?:[.,]\d+)?)%</div>'
+        r'<div class="[^"]*">(\d+)\s+de\s+(\d+)\s+rotinas</div>',
+        html_content,
+    )
+    m_conclusoes = re.search(
+        r'Conclusões no período</div></div>.*?'
+        r'font-bold text-success">(\d+(?:[.,]\d+)?)%</div>.*?'
+        r'font-bold text-destructive">(\d+(?:[.,]\d+)?)%</div>',
+        html_content, re.S,
+    )
+    m_colaboradores = re.search(
+        r'Colaboradores no recorte</div></div>'
+        r'<div class="[^"]*">(\d+)</div>',
+        html_content,
+    )
+    m_metas = re.search(
+        r'Atingimento médio de metas</div></div>'
+        r'<div class="[^"]*">(\d+(?:[.,]\d+)?)%</div>',
+        html_content,
+    )
+    if not m_cumprimento:
+        return None  # layout inesperado - não tem o KPI principal, não vale a pena tentar montar o resto
+
+    ultimo_dia_mes = calendar.monthrange(inicio.year, inicio.month)[1]
+    cobre_mes_calendario_completo = (
+        inicio.day == 1 and fim.day == ultimo_dia_mes and inicio.month == fim.month and inicio.year == fim.year
+    )
+    mes_periodo = f"{inicio.year:04d}-{inicio.month:02d}" if cobre_mes_calendario_completo else None
+    if mes_periodo != mes:
+        return {"tem_dados": False, "mes": mes}
+
+    resultado = {
+        "tem_dados": True,
+        "mes": mes,
+        "cumprimento_geral_pct": float(m_cumprimento.group(1).replace(",", ".")),
+        "rotinas_cumpridas": int(m_cumprimento.group(2)),
+        "rotinas_devidas": int(m_cumprimento.group(3)),
+        "periodo": f"{d1}/{m1}/{a1} a {d2}/{m2}/{a2}",
+    }
+    if m_conclusoes:
+        resultado["pct_no_prazo"] = float(m_conclusoes.group(1).replace(",", "."))
+        resultado["pct_em_atraso"] = float(m_conclusoes.group(2).replace(",", "."))
+    if m_colaboradores:
+        resultado["colaboradores_no_recorte"] = int(m_colaboradores.group(1))
+    if m_metas:
+        resultado["atingimento_medio_metas_pct"] = float(m_metas.group(1).replace(",", "."))
+    return resultado
 
 
 # ---------------------------------------------------------------------------

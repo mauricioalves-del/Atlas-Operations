@@ -1553,6 +1553,26 @@ def _linha_scorecard_almoxarifado(item: dict) -> dict:
 # vez de reaproveitar por engano o número de um mês errado. Se este
 # indicador for pra continuar no MBR mês a mês, precisa de uma coleta manual
 # nova (ou uma integração automática, que não existe hoje) a cada geração.
+#
+# 02/09/2026 (pedido do usuário: "Agora o HTML do diario de bordo passa a
+# alimentar o indicador de performance e cumprimento de rotina"): esse dict
+# manual virou FALLBACK. _coletar_indicador_diario_bordo agora tenta
+# primeiro a extração automática do export HTML do Dashboard de Performance
+# (enviado como indicador dinâmico em Auditoria > Outros Dashboards - ver
+# dashboards_externos_extrator.extrair_diario_bordo) e só cai neste dict
+# quando não há extração automática disponível pra aquele mês. A extração
+# automática só traz os KPIs de topo (cumprimento geral, rotinas cumpridas/
+# devidas, no prazo/atraso) - NÃO reconstrói sequência/lapsos por dia útil
+# nem quebra semanal (o gráfico diário do export é um SVG Recharts com só
+# 16 dos 31 dias rotulados no eixo - risco real de atribuir valor ao dia
+# errado, ver docstring de extrair_diario_bordo). _slide_diario_bordo mostra
+# uma versão mais enxuta do slide quando esses campos não vêm no dado.
+_NOMES_DIARIO_BORDO_CANDIDATOS = (
+    "Constância e Disciplina — Diário de Bordo",
+    "Diário de Bordo",
+    "Dashboard de Performance",
+)
+
 _DIARIO_BORDO_POR_MES = {
     "2026-07": {
         "cumprimento_geral_pct": 97.0,
@@ -1575,7 +1595,12 @@ _DIARIO_BORDO_POR_MES = {
 }
 
 
-def _coletar_indicador_diario_bordo(mes: str) -> dict:
+def _coletar_indicador_diario_bordo(db: Session, mes: str) -> dict:
+    for nome in _NOMES_DIARIO_BORDO_CANDIDATOS:
+        automatico = _extrair_dashboard_externo_por_nome(db, nome, dash_ext.extrair_diario_bordo, mes)
+        if automatico.get("tem_dados"):
+            return automatico
+
     dado = _DIARIO_BORDO_POR_MES.get(mes)
     if not dado:
         return {"tem_dados": False, "mes": mes}
@@ -1772,7 +1797,7 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     # já coletados acima, foi removido em 22/08/2026 - ver comentário de
     # decisão antes de _slide_controle_movimentados).
     dados["scorecard_inventario_almoxarifado"] = _coletar_scorecard_inventario_almoxarifado(db, usuario, mes)
-    dados["diario_bordo"] = _coletar_indicador_diario_bordo(mes)
+    dados["diario_bordo"] = _coletar_indicador_diario_bordo(db, mes)
 
     return dados
 
@@ -3377,6 +3402,19 @@ def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d:
         {"valor": _fmt_moeda(dado["custo_medio_op"]), "rotulo": "Custo Médio por OP"},
     ], altura=0.85)
 
+    # 02/09/2026 (decisão do usuário sobre a nova lógica do indicador): itens
+    # sem custo cadastrado são excluídos do Gasto Total/Custo Médio por OP
+    # (não zerar/distorcer esses números), mas avisa quantos ficaram de fora
+    # em vez de simplesmente sumir com eles sem explicação.
+    itens_sem_custo = dado.get("itens_sem_custo") or 0
+    if itens_sem_custo:
+        _texto(
+            slide, MARGEM_IN, 2.55, LARGURA_IN - 2 * MARGEM_IN, 0.26,
+            f"Obs.: {_fmt_num(itens_sem_custo)} item(ns) consumido(s) no mês sem custo cadastrado foram excluídos "
+            "deste total — confira o cadastro de custo desses materiais.",
+            tamanho=10, cor=COR_ATENCAO, negrito=True,
+        )
+
     top = dado.get("top_materias_primas") or []
     if top:
         categorias = [t["nome"][:26] for t in reversed(top)]
@@ -4067,16 +4105,39 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
         )
         return slide
 
+    # 02/09/2026: a coleta manual completa (_DIARIO_BORDO_POR_MES) tem
+    # sequência/lapsos por dia útil e quebra semanal; a extração automática
+    # do export HTML (dashboards_externos_extrator.extrair_diario_bordo) só
+    # traz os KPIs de topo (não reconstrói o gráfico diário - ver docstring
+    # da função). Detecta qual das duas gerou este `dado` pela presença do
+    # campo exclusivo da coleta manual, e mostra uma versão mais enxuta do
+    # slide quando é extração automática, em vez de inventar os campos que
+    # faltam.
+    completo = "maior_sequencia_dias_uteis_100" in dado
     lapsos = dado.get("lapsos_dias_uteis") or []
-    _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_pct(dado["cumprimento_geral_pct"]), "rotulo": "Cumprimento Geral do Mês"},
-        {"valor": f"{_fmt_num(dado['rotinas_cumpridas'])}/{_fmt_num(dado['rotinas_devidas'])}",
-         "rotulo": "Rotinas Cumpridas / Devidas"},
-        {"valor": _fmt_num(dado["maior_sequencia_dias_uteis_100"]), "rotulo": "Maior Sequência a 100%",
-         "cor": COR_SUCESSO},
-        {"valor": _fmt_num(len(lapsos)), "rotulo": "Lapsos em Dias Úteis",
-         "cor": COR_ATENCAO if lapsos else COR_SUCESSO},
-    ], altura=0.85)
+
+    if completo:
+        kpis = [
+            {"valor": _fmt_pct(dado["cumprimento_geral_pct"]), "rotulo": "Cumprimento Geral do Mês"},
+            {"valor": f"{_fmt_num(dado['rotinas_cumpridas'])}/{_fmt_num(dado['rotinas_devidas'])}",
+             "rotulo": "Rotinas Cumpridas / Devidas"},
+            {"valor": _fmt_num(dado["maior_sequencia_dias_uteis_100"]), "rotulo": "Maior Sequência a 100%",
+             "cor": COR_SUCESSO},
+            {"valor": _fmt_num(len(lapsos)), "rotulo": "Lapsos em Dias Úteis",
+             "cor": COR_ATENCAO if lapsos else COR_SUCESSO},
+        ]
+    else:
+        pct_atraso = dado.get("pct_em_atraso")
+        kpis = [
+            {"valor": _fmt_pct(dado["cumprimento_geral_pct"]), "rotulo": "Cumprimento Geral do Mês"},
+            {"valor": f"{_fmt_num(dado['rotinas_cumpridas'])}/{_fmt_num(dado['rotinas_devidas'])}",
+             "rotulo": "Rotinas Cumpridas / Devidas"},
+            {"valor": _fmt_pct(dado.get("pct_no_prazo")), "rotulo": "Conclusões no Prazo",
+             "cor": COR_SUCESSO},
+            {"valor": _fmt_pct(pct_atraso), "rotulo": "Conclusões em Atraso",
+             "cor": COR_ATENCAO if (pct_atraso or 0) > 0 else COR_SUCESSO},
+        ]
+    _linha_kpis(slide, 1.55, kpis, altura=0.85)
 
     largura_esquerda = 7.1
     semanas = dado.get("semanas") or []
@@ -4087,33 +4148,58 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
         valores = [s["cumprimento_pct"] for s in semanas]
         _grafico_categoria(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, categorias, "Cumprimento (%)", valores,
                             tipo=XL_CHART_TYPE.LINE_MARKERS, cor_serie=AZUL_INSTITUCIONAL)
-    else:
+    elif completo:
         _caixa_leitura(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, "Evolução semanal",
                        "Sem quebra semanal coletada pra este mês.")
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, "Evolução semanal",
+            "A extração automática deste indicador traz só os KPIs de topo do export — quebra semanal e "
+            "sequência/lapsos por dia útil ainda dependem de coleta manual complementar na Rotina Master.",
+        )
 
     x_direita = MARGEM_IN + largura_esquerda + 0.35
     largura_direita = LARGURA_IN - MARGEM_IN - x_direita
-    if lapsos:
+    if completo and lapsos:
         texto_leitura = (
             f"Média em dias úteis: {_fmt_pct(dado['media_dias_uteis_pct'])} — {len(lapsos)} lapso(s) pontual(is) "
             f"({', '.join(lapsos)}), sempre recuperados no dia útil seguinte, sem arrastar pra outros dias. Maior "
             f"sequência sem falha: {_fmt_num(dado['maior_sequencia_dias_uteis_100'])} dias úteis consecutivos a "
             "100%. Fins de semana ficam fora dessa leitura — não têm rotina devida no app."
         )
-    else:
+    elif completo:
         texto_leitura = (
             f"Média em dias úteis: {_fmt_pct(dado['media_dias_uteis_pct'])}, sem nenhum lapso no mês — maior "
             f"sequência de {_fmt_num(dado['maior_sequencia_dias_uteis_100'])} dias úteis consecutivos a 100%. "
             "Fins de semana ficam fora dessa leitura — não têm rotina devida no app."
         )
+    else:
+        texto_leitura = (
+            f"Cumprimento geral do mês: {_fmt_pct(dado['cumprimento_geral_pct'])} "
+            f"({_fmt_num(dado['rotinas_cumpridas'])} de {_fmt_num(dado['rotinas_devidas'])} rotinas), sendo "
+            f"{_fmt_pct(dado.get('pct_no_prazo'))} concluídas no prazo e {_fmt_pct(dado.get('pct_em_atraso'))} em "
+            "atraso. Extraído automaticamente do Dashboard de Performance da Rotina Master — ainda não traz "
+            "sequência/lapsos por dia útil nem quebra semanal; pra esse detalhe é necessária uma coleta manual "
+            "complementar."
+        )
     _caixa_leitura(slide, x_direita, 3.05, largura_direita, 3.35, "Leitura Executiva",
                    texto_leitura, cor_fundo=OFF_WHITE, tamanho_texto=12)
 
+    if dado.get("coletado_em"):
+        texto_fonte = (
+            f"Coletado manualmente em {dado.get('coletado_em', '—')} navegando na Rotina Master "
+            "(rotinabusiness.lovable.app), filtrado pelo mês de fechamento — app separado do Atlas, sem integração "
+            "automática ainda."
+        )
+    else:
+        texto_fonte = (
+            f"Extraído automaticamente do Dashboard de Performance da Rotina Master (rotinabusiness.lovable.app), "
+            f"enviado em Auditoria > Outros Dashboards em {dado.get('enviado_em') or '—'}"
+            + (f" — período do export: {dado['periodo']}." if dado.get("periodo") else ".")
+        )
     _texto(
         slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        f"Coletado manualmente em {dado.get('coletado_em', '—')} navegando na Rotina Master "
-        "(rotinabusiness.lovable.app), filtrado pelo mês de fechamento — app separado do Atlas, sem integração "
-        "automática ainda.",
+        texto_fonte,
         tamanho=9.5, cor=CINZA_TEXTO, italico=True,
     )
     return slide
