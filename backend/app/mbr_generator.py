@@ -413,9 +413,14 @@ def _texto(slide, x, y, w, h, texto, tamanho=16, negrito=False, cor=CINZA_TEXTO,
 
 
 def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
+    # 03/09/2026, pedido da usuária ("quero que todos os slides mantenham o
+    # padrão de título, subtítulo e cards igual o slide 14 [Dashboard Baixas
+    # Operacionais]. Analisar e padronizar"): título 27 -> 24pt em TODOS os
+    # slides, replicando o ajuste que até então só existia feito à mão (em
+    # PowerPoint) naquele slide específico, nunca propagado pra este gerador.
     _texto(slide, MARGEM_IN, 0.32, 9.5, 0.22, "RELATÓRIO EXECUTIVO · MÁGIO CHOCOLATES",
            tamanho=10, negrito=True, cor=VERDE_AMAZONIA)
-    _texto(slide, MARGEM_IN, 0.58, 9.7, 0.55, titulo, tamanho=27, negrito=True,
+    _texto(slide, MARGEM_IN, 0.58, 9.7, 0.55, titulo, tamanho=24, negrito=True,
            cor=AZUL_INSTITUCIONAL, fonte=FONTE_TITULO)
     if subtitulo:
         _texto(slide, MARGEM_IN, 1.10, 9.7, 0.35, subtitulo, tamanho=13, cor=CINZA_TEXTO)
@@ -499,7 +504,16 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
     tamanho_rotulo = 10.0
     if texto_rotulo:
         max_chars = max(1, int(largura_texto / ((tamanho_rotulo / 72.0) * 0.72)))
-        while tamanho_rotulo > 7.5 and len(texto_rotulo) > max_chars:
+        # 03/09/2026, piso 7.5 -> 7.0: achado nesta mesma rodada de
+        # padronização (via MBR_Atlas_202608_11.pptx, slide "Impacto do
+        # Atlas") que 2 rótulos fixos ("Frentes Nativas Mapeadas pelo
+        # Atlas", "Controles Paralelos Integrados ao MBR") sempre cortavam
+        # com reticências no piso antigo de 7.5pt - corrigido à mão na
+        # entrega daquele mês (sz 750 -> 700), mas nunca propagado pra cá,
+        # então repetiria todo mês. 7.0pt é o menor tamanho que cabe os 2
+        # rótulos inteiros nesta largura de cartão (verificado com a mesma
+        # lógica de contagem de caracteres abaixo).
+        while tamanho_rotulo > 7.0 and len(texto_rotulo) > max_chars:
             tamanho_rotulo -= 0.5
             max_chars = max(1, int(largura_texto / ((tamanho_rotulo / 72.0) * 0.72)))
         if len(texto_rotulo) > max_chars:
@@ -522,7 +536,31 @@ def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCI
         _texto(slide, x + pad, y + h - 0.16, w - 2 * pad, 0.16, contexto, tamanho=9.5, cor=cor_contexto or CINZA_TEXTO)
 
 
-def _linha_kpis(slide, y, kpis, altura=0.85, deslocamento_rotulo=None, tamanho_valor_base=27):
+def _linha_kpis(slide, y, kpis, altura=0.65, deslocamento_rotulo=0.383, tamanho_valor_base=20):
+    # 03/09/2026, pedido da usuária ("quero que todos os slides mantenham o
+    # padrão de título, subtítulo e cards igual o slide 14. Analisar e
+    # padronizar"): defaults viram os do padrão compacto do slide 14/
+    # Recuperação de Shelf (0,85in/27pt -> 0,65in/20pt, rótulo colado no
+    # valor via `deslocamento_rotulo`) pra todo cartão SEM contexto sair já
+    # no formato aprovado.
+    #
+    # Cartões COM 3ª linha de contexto exigem um cartão um pouco mais alto
+    # (`altura=0.68`, não o default 0.65) - achado ao gerar um deck de teste
+    # com este mesmo default 0.65 pra validar a padronização: com contexto,
+    # `_cartao_kpi` posiciona o rótulo em y+h-0.32 (ver fórmula abaixo), e em
+    # h=0.65 isso cai DENTRO da altura nominal da caixa do valor (que vai de
+    # y+0.08 a y+0.42, fixo, independente de h) - na renderização (LibreOffice,
+    # valor de 20pt em negrito ocupando a caixa quase inteira) o rótulo
+    # invadia visualmente os últimos caracteres do valor (ex.: "PASSIVOS
+    # MAPEADOS" sobre o "0.538" de "R$ 10.538"). Com h=0.68 (y+h-0.32=0.36,
+    # só 0.03in a mais de folga) a mesma renderização já sai limpa - é
+    # exatamente a altura que "Controle de Pacotes de Baixa" (4 cards, todos
+    # com contexto) já usava, herdada de um ajuste anterior a esta rodada;
+    # cada uma das chamadas com contexto abaixo agora passa esse mesmo
+    # `altura=0.68` explicitamente (sobrescrevendo o default 0.65, que seria
+    # inseguro pra elas). `deslocamento_rotulo` só entra em jogo quando o
+    # cartão específico NÃO tem contexto (ver condição em _cartao_kpi), então
+    # não afeta os cartões com contexto de uma mesma chamada "mista".
     n = len(kpis)
     largura_total = LARGURA_IN - 2 * MARGEM_IN
     gap = 0.22
@@ -2706,7 +2744,7 @@ def _slide_resumo_executivo(prs: Presentation, mes_label: str, pagina: int, d: d
         kpi_baixas,
         kpi_risco_validade,
         {"valor": _fmt_pct(movimentados.get("pct_acuracia")), "rotulo": "Controle de Movimentados", "cor": AZUL_INSTITUCIONAL, "contexto": label_mov, "cor_contexto": cor_mov},
-    ], altura=0.85)
+    ], altura=0.68)
 
     analise = _analise_geral(d)
 
@@ -2871,7 +2909,7 @@ def _slide_painel_inventario(prs: Presentation, mes_label: str, pagina: int, d: 
         {"valor": _fmt_num(kpis["total_itens"]), "rotulo": "Itens Avaliados"},
         {"valor": _fmt_num(kpis["total_divergentes"]), "rotulo": "Itens Divergentes"},
         {"valor": _fmt_moeda(kpis["resultado_liquido"]), "rotulo": "Resultado Líquido", "cor": COR_SUCESSO if (kpis["resultado_liquido"] or 0) >= 0 else COR_ERRO},
-    ], altura=0.85)
+    ], altura=0.68)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     evolucao = d["evolucao_inventario"][-6:]
@@ -3060,7 +3098,7 @@ def _slide_acuracia_ponderada_iap(prs: Presentation, mes_label: str, pagina: int
          "rotulo": "Variação do IAP (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
          "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
          "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
-    ], altura=0.85)
+    ], altura=0.68)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     if len(evolucao) >= 2:
@@ -3157,7 +3195,7 @@ def _slide_acuracia_ponderada_iaq(prs: Presentation, mes_label: str, pagina: int
          "rotulo": "Variação do IAQ (MoM)", "cor": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO,
          "contexto": "Melhora" if (delta_mom or 0) >= 0 else ("Piora" if delta_mom is not None else None),
          "cor_contexto": COR_SUCESSO if (delta_mom or 0) >= 0 else COR_ERRO},
-    ], altura=0.85)
+    ], altura=0.68)
 
     largura_cheia = LARGURA_IN - 2 * MARGEM_IN
     if len(evolucao) >= 2:
@@ -3580,7 +3618,7 @@ def _slide_controle_movimentados(prs: Presentation, mes_label: str, pagina: int,
          "cor": COR_ATENCAO if resumo.get("itens_com_divergencia") else COR_SUCESSO},
         {"valor": (f"+{_fmt_pct(delta_implantacao)}" if delta_implantacao is not None and delta_implantacao >= 0 else _fmt_pct(delta_implantacao)),
          "rotulo": "Ganho desde a Implantação", "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
-    ], altura=0.85)
+    ], altura=0.68)
 
     # Altura da seção de topo encolhida (era 3.35/3.65) pra abrir espaço pra
     # tabela "Resultado por Almoxarifado" abaixo (22/08/2026, mockup aprovado v9).
@@ -3752,7 +3790,7 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
         {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
         {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
         {"valor": _fmt_num(fefo.get("total_sem_correspondencia")), "rotulo": "Sem Correspondência no Mês"},
-    ], altura=0.85)
+    ], altura=0.68)
 
     top = fefo.get("top_produtos_com_quebra") or []
     if top:
@@ -3818,7 +3856,7 @@ def _slide_testes_industriais(prs: Presentation, mes_label: str, pagina: int, d:
         {"valor": _fmt_moeda(dado["gasto_total"]), "rotulo": "Gasto Total no Mês", "cor": COR_ATENCAO},
         {"valor": _fmt_num(dado["ops"]), "rotulo": "OPs Testadas"},
         {"valor": _fmt_moeda(dado["custo_medio_op"]), "rotulo": "Custo Médio por OP"},
-    ], altura=0.85)
+    ])
 
     # 02/09/2026 (decisão do usuário sobre a nova lógica do indicador): itens
     # sem custo cadastrado são excluídos do Gasto Total/Custo Médio por OP
@@ -3890,7 +3928,7 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
          "cor": COR_ERRO if (dado["impacto_liquido"] or 0) > 0 else COR_SUCESSO},
         {"valor": _fmt_num(dado["ops_criticas"]), "rotulo": "OPs Críticas",
          "cor": COR_ERRO if dado["ops_criticas"] else COR_SUCESSO},
-    ], altura=0.85)
+    ])
 
     # Tendência Financeira mês a mês (22/08/2026, pedido do usuário: "adicione
     # rótulo de dados no indicador de Dispersão de Ficha Técnica") - Perda,
@@ -4026,7 +4064,7 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
          "cor": COR_FAROL_PERIGO, "contexto": _fmt_moeda(_valor_bucket(bucket_perigo)), "cor_contexto": COR_FAROL_PERIGO},
         {"valor": _fmt_num(qtd.get("61_90")), "rotulo": "61-90 Dias (Atenção)",
          "cor": COR_FAROL_ATENCAO, "contexto": _fmt_moeda(_valor_bucket(bucket_atencao)), "cor_contexto": COR_FAROL_ATENCAO},
-    ], altura=0.85)
+    ], altura=0.68)
 
     # Risco por Almoxarifado (barra empilhada em R$) e Custo por Grupo e
     # Status (barra empilhada em 100%), lado a lado - geometria (posição e
@@ -4445,12 +4483,18 @@ def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int
     # Cards compactos, estrutura idêntica nos 4 (valor + rótulo + contexto) -
     # "no padrão dos demais" e "diminua os cards" da 1ª rodada continuam
     # valendo aqui.
+    # 03/09/2026: as 3 frases originais (49/40/37 caracteres) sempre
+    # estouravam o _caber_no_espaco abaixo e saíam cortadas com reticências,
+    # em QUALQUER mês (não é caso raro de texto longo - as 3 opções possíveis
+    # já são compridas demais pra largura do cartão em 9.5pt) - achado ao
+    # gerar um deck de teste pra validar esta mesma rodada de padronização.
+    # Versões enxutas (≤29 caracteres cada, cabem inteiras sem cortar).
     if abs(diferenca) < 1:
-        cor_diferenca, contexto_diferenca = COR_SUCESSO, "perda física e baixa aprovada praticamente batem"
+        cor_diferenca, contexto_diferenca = COR_SUCESSO, "perda e baixa quase batem"
     elif diferenca > 0:
-        cor_diferenca, contexto_diferenca = COR_ATENCAO, "perda física acima da baixa já aprovada"
+        cor_diferenca, contexto_diferenca = COR_ATENCAO, "perda física acima da baixa"
     else:
-        cor_diferenca, contexto_diferenca = COR_INFO, "baixa aprovada acima da perda física"
+        cor_diferenca, contexto_diferenca = COR_INFO, "baixa acima da perda física"
     # Largura real do texto de contexto dentro de CADA um dos 4 cartões desta
     # linha (mesmo cálculo de _linha_kpis: largura_card - 2*pad) - usada só
     # pra alimentar _caber_no_espaco abaixo, rede de segurança contra o
@@ -4783,7 +4827,7 @@ def _slide_impacto_atlas(prs: Presentation, mes_label: str, pagina: int, d: dict
          "rotulo": "Ganho de Acurácia (Movimentados)",
          "cor": COR_SUCESSO if (delta_implantacao or 0) >= 0 else COR_ERRO},
         {"valor": _fmt_moeda(valor_visibilidade), "rotulo": "Valor sob Visibilidade Ativa", "cor": AZUL_INSTITUCIONAL},
-    ], altura=0.85)
+    ])
 
     largura_esquerda = 6.3
     _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "COBERTURA DE PROCESSOS HOJE", tamanho=11,
@@ -4881,7 +4925,7 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
             {"valor": _fmt_pct(pct_atraso), "rotulo": "Conclusões em Atraso",
              "cor": COR_ATENCAO if (pct_atraso or 0) > 0 else COR_SUCESSO},
         ]
-    _linha_kpis(slide, 1.55, kpis, altura=0.85)
+    _linha_kpis(slide, 1.55, kpis)
 
     largura_esquerda = 7.1
     semanas = dado.get("semanas") or []
