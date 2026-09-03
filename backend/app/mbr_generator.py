@@ -1659,6 +1659,12 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     ano_int, mes_int = (int(parte) for parte in mes.split("-"))
 
     dados = {
+        # "YYYY-MM" do mês deste relatório, cru (02/09/2026) - usado por slides
+        # que precisam recortar uma série mensal a partir de um mês fixo
+        # relativo ao ano do próprio relatório (ex.: "Controle de Pacotes de
+        # Baixa" mostra a evolução "a partir de Julho" do mesmo ano do
+        # relatório, não um Julho fixo no código).
+        "mes_relatorio": mes,
         "kpis_inventario": fechamento_router.dashboard_kpis(almoxarifado=None, mes=mes, usuario=usuario, db=db),
         # 22/08/2026 (bug reportado pelo usuário: relatório de julho trazendo dados de
         # agosto "em quase todos os módulos"): dashboard_evolucao_mensal não tem
@@ -1712,6 +1718,15 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # continuam coexistindo, cada um alimentando um slide diferente.
         "pacotes_baixas_operacionais": baixas_operacionais_router.dashboard_pacotes_por_operacao(
             ano=ano_int, mes=mes_int, usuario=usuario, db=db
+        ),
+        # Linha a linha das divergências resolvidas no mês como AJUSTE DE
+        # PROCESSO (02/09/2026, redesenho do slide "Controle de Pacotes de
+        # Baixa" - pedido do usuário: "crie uma tabela com as justificativas
+        # de acertos feitos no sistema que não foram uma perda real, mas sim
+        # ajustes de processos") - detalhe por trás do agregado já existente
+        # em resumo_passivos["divergencias_resolvidas"]["ajuste_processo"].
+        "justificativas_ajuste_processo": baixas_operacionais_router.dashboard_justificativas_ajuste_processo(
+            ano=ano_int, mes=mes_int, limite=8, usuario=usuario, db=db
         ),
         # Evolução mensal REAL de Passivos, já cruzada com o Fluxo de Inventário
         # (entradas/saídas/resultado de TODOS os inventários) mês a mês - histórico
@@ -3916,129 +3931,201 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     return slide
 
 
-_ROTULOS_CATEGORIA_ORIGEM_CURTOS = {
-    "inventario_mensal": "Inventário Mensal",
-    "movimentacao_diaria": "Movimentação Diária",
-    "aguardando_divergencia": "Aguardando Divergência",
-    "nao_decidida": "Não Decidida",
-}
+def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Controle de Pacotes de Baixa (02/09/2026 - REDESENHO TOTAL do slide
+    "Pacotes de Baixas Operacionais", rejeitado pelo usuário: "Ficou ruim
+    essa visão. Não gostei. Retire esse indicador, volte com o indicador
+    'Passivos — Evolução e Concentração', renomeie o mesmo para controle de
+    Pacotes de baixa. Deixe o visual mais bonito, no padrão dos demais,
+    diminua os cards e titulo do slide. foque nos gráficos. Deixe o valor de
+    acertos por inventário positivos, Crie uma barra composta dividindo
+    baixas operacionais de baixas realizadas no Inventário. Adicione Rótulo
+    de dados de uma forma que não fique dados um em cima do outro. Adicione
+    cards com os principais indicadores do mês. Abaixo, crie uma tabela com
+    as justificativas de acertos feitos no sistema que não foram uma perda
+    real, mas sim ajustes de processos. Mostre Evolução do processo de
+    baixas operacionais (realizadas a partir de Julho) e ajustes por
+    inventário. Venda o peixe das ações realizadas pelo controle para
+    melhorar o fluxo de Processo".
 
+    Decisões de design pra atender o pedido, ponto a ponto:
+      - Cards pequenos (mesmo estilo compacto já usado em "Dashboard Baixas
+        Operacionais"/"Recuperação de Shelf": altura=0.65, tamanho_valor_
+        base=20) - "no padrão dos demais", não um cartão novo/maior.
+      - "Foque nos gráficos": um ÚNICO gráfico central, em largura cheia,
+        ocupando a maior fatia vertical do slide - a barra composta abaixo -
+        em vez de dois gráficos pequenos lado a lado como na v1 rejeitada.
+      - "Barra composta dividindo baixas operacionais de baixas realizadas
+        no Inventário" + "Evolução... a partir de Julho... e ajustes por
+        inventário": LEITURA como uma coisa só - uma barra EMPILHADA (não
+        clusterizada) por mês, a partir de julho do ano deste relatório,
+        com duas séries (Baixas Operacionais x Baixas via Inventário) -
+        ver baixas_operacionais_router.dashboard_passivos_evolucao_mensal
+        (campos valor_operacional/valor_inventario, adicionados nesta
+        mesma rodada).
+      - "Rótulo de dados... que não fique um em cima do outro": com só 2
+        segmentos por coluna normalmente caberia rótulo por segmento, mas
+        pra manter a leitura limpa em meses com um segmento bem menor que o
+        outro (rótulo pequeno demais/sobreposto na fronteira dos
+        segmentos), a técnica usada em "Total de Baixas por Mês" é
+        reaproveitada: rótulo por segmento DESLIGADO, rótulo de TOTAL por
+        coluna via _adicionar_rotulo_total_empilhado (uma 2ª série de linha
+        invisível, ancorada no topo da pilha) - sem risco de sobreposição
+        em nenhum mês, com qualquer proporção entre as duas séries.
+      - "Valor de acertos por inventário positivos": card "Ajuste de
+        Inventário no Mês" mostra o valor em módulo (abs), com a cor
+        (verde/vermelho) e o contexto (Entradas − Saídas) carregando a
+        informação de sinal - não é mais exibido como número negativo cru.
+      - "Justificativas de acertos... ajustes de processos": tabela nova,
+        linha a linha (SKU, Almoxarifado, Motivo, Valor), alimentada por
+        baixas_operacionais_router.dashboard_justificativas_ajuste_processo
+        (novo endpoint desta rodada - resumo_executivo só tinha o agregado).
+      - "Venda o peixe": frase de leitura executiva, calculada a partir dos
+        mesmos dados (valor evitado como perda + variação do peso de
+        Inventário desde julho), destacada em verde acima do rodapé-fonte.
 
-def _slide_pacotes_baixas_operacionais(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Pacotes de Baixas Operacionais (02/09/2026, pedido do usuário:
-    "acrescentar no Mapeamento de Passivos o KPI... Pode nomeá-lo como
-    'Pacotes de Baixas Operacionais'. dividir em duas operações PA - Pará e
-    SP - São Paulo... Não traga os mesmos indicadores de mapeamento de
-    baixas operacionais... atribuindo peso as baixas operacionais
-    relacionadas de Inventários e no processo do dia a dia... criar uma
-    visão das baixas com justificativas, que não representam um prejuízo
-    financeiro, mas sim um ajuste e processos errados").
-
-    Indicador NOVO, NATIVO do Atlas (dado exato, direto do banco, mês
-    fechado) - COEXISTE com o dashboard externo "Baixas Operacionais
-    (Pacote)"/"Controle Paralelo" (Stock Savvy, slide anterior) e com o
-    Resumo Executivo/Scorecard (que já leem d["resumo_passivos"]) sem
-    repetir os KPIs de nenhum dos dois (prejuízo total/% concentrado por
-    motivo/setor-grupo de maior impacto já estão no slide anterior) - ver
-    bloco de decisão em baixas_operacionais_router.dashboard_pacotes_por_
-    operacao pro contexto completo de PA/SP e da categorização de origem
-    reaproveitada (mesma usada no Resumo Executivo, não é uma lógica nova).
-
-    A visão de "baixas com justificativa que não são prejuízo financeiro"
-    reaproveita d["resumo_passivos"]["divergencias_resolvidas"] (já
-    calculado pra alimentar o resumo narrado do Resumo Executivo, mas até
-    agora nunca exibido como indicador próprio em nenhum slide)."""
+    PA x SP (dashboard_pacotes_por_operacao) e o "peso por origem" da v1
+    NÃO foram descartados - o usuário não criticou esse conceito, só a
+    apresentação visual - PA/SP virou 2 dos 4 cards compactos, e o peso
+    Inventário x Operacional agora está DENTRO da própria barra composta
+    (mais direto que um gráfico de barras % à parte)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(
-        slide, "Pacotes de Baixas Operacionais", mes_label, pagina,
-        "Visão nativa do Atlas — passivos aprovados por operação (PA/SP) e por peso de origem (Inventário x "
-        "Processo do Dia a Dia); não repete os indicadores do Dashboard de Baixas Operacionais (Stock Savvy)",
+        slide, "Controle de Pacotes de Baixa", mes_label, pagina,
+        "Evolução mensal de baixas operacionais desde julho — Inventário × Processo do dia a dia, por operação",
     )
 
-    dado = d.get("pacotes_baixas_operacionais") or {}
-    total = dado.get("Total") or {}
-    if not total.get("quantidade"):
+    dado_pacotes = d.get("pacotes_baixas_operacionais") or {}
+    total_pacotes = dado_pacotes.get("Total") or {}
+    if not total_pacotes.get("quantidade"):
         _caixa_leitura(
             slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem baixas aprovadas em {mes_label}",
-            "Não há baixa operacional aprovada no mês deste relatório para quebrar por operação (PA/SP) e por "
-            "peso de origem.",
+            "Não há baixa operacional aprovada no mês deste relatório para montar a evolução por operação (PA/SP) "
+            "e por origem (Inventário x Processo do Dia a Dia).",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
         )
         return slide
 
-    pa = dado.get("PA") or {"valor": 0.0, "quantidade": 0}
-    sp = dado.get("SP") or {"valor": 0.0, "quantidade": 0}
-    nao_informado = dado.get("Não informado") or {"valor": 0.0, "quantidade": 0}
-    total_valor = total.get("valor") or 0
-    pct_pa = round(pa["valor"] / total_valor * 100, 1) if total_valor else 0.0
-    pct_sp = round(sp["valor"] / total_valor * 100, 1) if total_valor else 0.0
+    pa = dado_pacotes.get("PA") or {"valor": 0.0, "quantidade": 0}
+    sp = dado_pacotes.get("SP") or {"valor": 0.0, "quantidade": 0}
+    total_valor_pacotes = total_pacotes.get("valor") or 0
+    pct_pa = round(pa["valor"] / total_valor_pacotes * 100, 1) if total_valor_pacotes else 0.0
+    pct_sp = round(sp["valor"] / total_valor_pacotes * 100, 1) if total_valor_pacotes else 0.0
 
+    resultado_inventario = (d.get("resumo_passivos") or {}).get("resultado_inventario") or {}
+    resultado_valor = resultado_inventario.get("resultado_valor") or 0.0
+    ajuste_positivo = resultado_valor >= 0
+
+    # Cards compactos - mais baixos e com número menor que a v1 rejeitada
+    # (altura 0.85 -> 0.74, valor 27pt -> 22pt), "no padrão dos demais": as 4
+    # cards usam a MESMA estrutura valor+rótulo+contexto (nunca mistura
+    # cards com/sem contexto na mesma linha - o rótulo de um card sem
+    # contexto fica mais perto do topo que o de um card com contexto, e as
+    # duas alturas ficarem visualmente desalinhadas foi visto na QA visual
+    # desta rodada).
     _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_moeda(total_valor), "rotulo": "Total Aprovado no Mês"},
-        {"valor": _fmt_num(total["quantidade"]), "rotulo": "Baixas Aprovadas", "contexto": "no mês, status APROVADA"},
+        {"valor": _fmt_moeda(total_valor_pacotes), "rotulo": "Total Aprovado no Mês",
+         "contexto": f"{_fmt_num(total_pacotes['quantidade'])} baixa(s) no mês"},
+        {"valor": _fmt_moeda(abs(resultado_valor)), "rotulo": "Ajuste de Inventário no Mês",
+         "cor": COR_SUCESSO if ajuste_positivo else COR_ERRO,
+         "contexto": f"{'positivo' if ajuste_positivo else 'negativo'} · Entradas {_fmt_moeda(resultado_inventario.get('entradas_valor'))} "
+                     f"− Saídas {_fmt_moeda(resultado_inventario.get('saidas_valor'))}"},
         {"valor": _fmt_moeda(pa["valor"]), "rotulo": "Operação PA — Pará", "cor": COR_ATENCAO,
          "contexto": f"{_fmt_pct(pct_pa)} do total · {_fmt_num(pa['quantidade'])} baixa(s)"},
         {"valor": _fmt_moeda(sp["valor"]), "rotulo": "Operação SP — São Paulo", "cor": AZUL_INSTITUCIONAL,
          "contexto": f"{_fmt_pct(pct_sp)} do total · {_fmt_num(sp['quantidade'])} baixa(s)"},
-    ], altura=0.85)
+    ], altura=0.74, tamanho_valor_base=22)
 
-    largura_esquerda = 7.1
-    _texto(slide, MARGEM_IN, 3.05, largura_esquerda, 0.28, "PESO POR ORIGEM NO MÊS (% DO VALOR APROVADO)",
+    # Barra composta (foco do slide): Baixas Operacionais x Baixas via
+    # Inventário, mês a mês, a partir de julho do ANO deste relatório (não um
+    # julho fixo no código - ver d["mes_relatorio"]).
+    ano_relatorio = (d.get("mes_relatorio") or "0000-01").split("-")[0]
+    mes_corte = f"{ano_relatorio}-07"
+    evolucao_completa = d.get("evolucao_passivos_fluxo") or []
+    evolucao = [p for p in evolucao_completa if p.get("mes", "") >= mes_corte]
+
+    _texto(slide, MARGEM_IN, 2.40, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+           "EVOLUÇÃO DE BAIXAS — OPERACIONAL × INVENTÁRIO (R$, DESDE JULHO)",
            tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    por_categoria = total.get("por_categoria") or {}
-    ordem_categorias = ["movimentacao_diaria", "inventario_mensal", "aguardando_divergencia", "nao_decidida"]
-    categorias_com_dado = [c for c in ordem_categorias if (por_categoria.get(c) or {}).get("quantidade")]
-    if categorias_com_dado:
-        categorias_grafico = [_ROTULOS_CATEGORIA_ORIGEM_CURTOS[c] for c in reversed(categorias_com_dado)]
-        valores_grafico = [por_categoria[c]["pct_valor"] for c in reversed(categorias_com_dado)]
-        _grafico_categoria(
-            slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, categorias_grafico, "% do valor", valores_grafico,
-            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=VERDE_AMAZONIA,
+    y_grafico, altura_grafico = 2.66, 1.72
+    if len(evolucao) >= 1:
+        categorias = [_nome_mes(p["mes"])[:3] + "/" + p["mes"][2:4] for p in evolucao]
+        valores_operacional = [p.get("valor_operacional") or 0.0 for p in evolucao]
+        valores_inventario = [p.get("valor_inventario") or 0.0 for p in evolucao]
+        chart = _grafico_categoria_multi(
+            slide, MARGEM_IN, y_grafico, LARGURA_IN - 2 * MARGEM_IN, altura_grafico, categorias,
+            [("Baixas Operacionais", valores_operacional, AZUL_INSTITUCIONAL),
+             ("Baixas via Inventário", valores_inventario, VERDE_AMAZONIA)],
+            tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False,
         )
+        totais = [o + i for o, i in zip(valores_operacional, valores_inventario)]
+        _adicionar_rotulo_total_empilhado(chart, categorias, totais, cor_texto_hex=_hex_cor(CINZA_TEXTO), formato_numero='R$ #,##0')
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.40, largura_esquerda, 3.0, "Peso por origem",
-                       "Sem baixa classificada por origem neste mês.")
+        _caixa_leitura(
+            slide, MARGEM_IN, y_grafico, LARGURA_IN - 2 * MARGEM_IN, altura_grafico,
+            "Evolução não disponível", "Nenhuma baixa aprovada a partir de julho deste ano para montar a evolução mensal.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
 
-    x_direita = MARGEM_IN + largura_esquerda + 0.35
-    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
-    _texto(slide, x_direita, 3.05, largura_direita, 0.28, "BAIXAS COM JUSTIFICATIVA (R$)",
+    # Tabela de justificativas (ajuste de processo, não é perda real).
+    _texto(slide, MARGEM_IN, 4.48, LARGURA_IN - 2 * MARGEM_IN, 0.22,
+           "JUSTIFICATIVAS DE AJUSTE DE PROCESSO — NÃO REPRESENTAM PERDA REAL",
            tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    divergencias_resolvidas = d.get("resumo_passivos", {}).get("divergencias_resolvidas") or {}
+    justificativas = d.get("justificativas_ajuste_processo") or []
+    y_tabela, altura_tabela_max = 4.72, 1.56
+    if justificativas:
+        linhas_dado = justificativas[:5]
+        linhas = [
+            [j["sku"] or "—", (j["almoxarifado_label"] or "—")[:16], j["hipotese_label"] or "—", _fmt_moeda(j["valor_estimado"])]
+            for j in linhas_dado
+        ]
+        # Altura proporcional ao Nº de linhas de verdade (0,32in de cabeçalho +
+        # 0,26in por linha), não o orçamento máximo fixo - com só 1-2
+        # justificativas no mês (comum), uma altura fixa "esticava" a única
+        # linha de dado numa caixa enorme (visto na QA visual: cabeçalho e
+        # linha ocupando quase 0,8in cada, com um vão vazio gigante embaixo).
+        # A coluna de justificativa NÃO trunca com corte seco (só a MENOR,
+        # de almoxarifado) - a célula já quebra linha sozinha (word_wrap) e a
+        # coluna é larga o bastante (larguras_relativas) pra caber o rótulo
+        # mais longo do catálogo (hipoteses_config.HIPOTESES) numa linha só.
+        altura_tabela = min(altura_tabela_max, 0.32 + 0.26 * len(linhas_dado))
+        _tabela(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela,
+                ["SKU", "Almoxarifado", "Justificativa (Ajuste de Processo)", "Valor"], linhas,
+                larguras_relativas=[1.3, 1.6, 3.4, 1.1], tamanho_fonte=10)
+    else:
+        _caixa_leitura(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela,
+                       "Justificativas de ajuste de processo",
+                       "Nenhuma divergência resolvida como ajuste de processo neste mês.")
+
+    # "Venda o peixe": leitura executiva do que o controle já entregou no
+    # recorte, calculada a partir dos mesmos dados acima - nunca um texto
+    # fixo/genérico.
+    divergencias_resolvidas = (d.get("resumo_passivos") or {}).get("divergencias_resolvidas") or {}
     ajuste_processo = divergencias_resolvidas.get("ajuste_processo") or {"quantidade": 0, "valor": 0}
-    perda_real = divergencias_resolvidas.get("perda_real") or {"quantidade": 0, "valor": 0}
-    nao_classificado = divergencias_resolvidas.get("nao_classificado") or {"quantidade": 0, "valor": 0}
-    total_resolvidas = ajuste_processo["quantidade"] + perda_real["quantidade"] + nao_classificado["quantidade"]
-    if total_resolvidas:
-        categorias_just = ["Perda Real\n(confirmada)", "Ajuste de Processo\n(não é perda)"]
-        valores_just = [perda_real["valor"], ajuste_processo["valor"]]
-        if nao_classificado["quantidade"]:
-            categorias_just.insert(0, "Não Classificado")
-            valores_just.insert(0, nao_classificado["valor"])
-        _grafico_categoria(
-            slide, x_direita, 3.40, largura_direita, 2.15, categorias_just, "Valor (R$)", valores_just,
-            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_SUCESSO, formato_numero='#,##0',
-        )
-        _texto(
-            slide, x_direita, 5.62, largura_direita, 0.75,
-            f"{_fmt_num(ajuste_processo['quantidade'])} baixa(s) justificada(s) como ajuste de processo "
-            f"({_fmt_moeda(ajuste_processo['valor'])}) NÃO representam perda financeira real — são erro de "
-            "cadastro/contagem, timing de nota fiscal/transferência ou produção não encerrada, entre outros.",
-            tamanho=9.5, cor=CINZA_TEXTO,
-        )
-    else:
-        _caixa_leitura(slide, x_direita, 3.40, largura_direita, 2.15, "Baixas com justificativa",
-                       "Nenhuma divergência resolvida neste mês pra classificar entre ajuste de processo e perda real.")
-
-    nota_nao_informado = (
-        f" {_fmt_num(nao_informado['quantidade'])} baixa(s) sem almoxarifado registrado "
-        f"({_fmt_moeda(nao_informado['valor'])}) ficaram fora da divisão PA/SP." if nao_informado["quantidade"] else ""
+    trecho_peso = ""
+    if len(evolucao) >= 2:
+        def _pct_inventario(p):
+            tot = (p.get("valor_operacional") or 0.0) + (p.get("valor_inventario") or 0.0)
+            return round((p.get("valor_inventario") or 0.0) / tot * 100, 1) if tot else None
+        pct_ini, pct_fim = _pct_inventario(evolucao[0]), _pct_inventario(evolucao[-1])
+        if pct_ini is not None and pct_fim is not None:
+            direcao = "caiu" if pct_fim < pct_ini else ("subiu" if pct_fim > pct_ini else "ficou estável")
+            trecho_peso = (
+                f" O peso de baixas via Inventário no total mensal {direcao} de {_fmt_pct(pct_ini)} em "
+                f"{categorias[0]} para {_fmt_pct(pct_fim)} em {categorias[-1]}."
+            )
+    _texto(
+        slide, MARGEM_IN, 6.36, LARGURA_IN - 2 * MARGEM_IN, 0.30,
+        f"O controle já evitou registrar {_fmt_moeda(ajuste_processo['valor'])} como perda real neste mês — "
+        f"{_fmt_num(ajuste_processo['quantidade'])} baixa(s) reclassificada(s) como ajuste de processo (erro de "
+        f"cadastro/contagem, timing de nota fiscal ou produção não encerrada, entre outros)." + trecho_peso,
+        tamanho=10, negrito=True, cor=COR_SUCESSO,
     )
     _texto(
-        slide, MARGEM_IN, 6.85, LARGURA_IN - 2 * MARGEM_IN, 0.35,
-        "Fonte: baixas operacionais aprovadas no banco do Atlas (Mapeamento de Passivos) — mesma categorização de "
-        "origem do Resumo Executivo, mesma classificação de ajuste-de-processo/perda-real das divergências "
-        "resolvidas do mês." + nota_nao_informado,
+        slide, MARGEM_IN, 6.70, LARGURA_IN - 2 * MARGEM_IN, 0.35,
+        "Fonte: baixas operacionais aprovadas e divergências resolvidas no banco do Atlas (Mapeamento de Passivos) — "
+        "mesma categorização de origem e de ajuste-de-processo/perda-real do Resumo Executivo.",
         tamanho=9, cor=CINZA_TEXTO, italico=True,
     )
     return slide
@@ -4629,7 +4716,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
     itens_riscos_passivos = [
-        "Dashboard Baixas Operacionais", "Pacotes de Baixas Operacionais",
+        "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Testes Industriais", "FEFO",
     ]
@@ -4643,7 +4730,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
            "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
-    _slide_pacotes_baixas_operacionais(prs, mes_label, _pag(), dados)
+    _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)

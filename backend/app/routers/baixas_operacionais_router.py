@@ -20,7 +20,7 @@ from ..database import get_db
 from ..deps import obter_usuario_atual, requer_papel, filtrar_por_almoxarifado_permitido
 from ..baixas_operacionais import sincronizar_com_lovable, SincronizacaoIndisponivel, importar_lote, importar_planilha_historico_lovable
 from .. import ia_generativa
-from ..hipoteses_config import HIPOTESES as _HIPOTESES_CATALOGO
+from ..hipoteses_config import HIPOTESES as _HIPOTESES_CATALOGO, ALMOXARIFADOS_PADRAO as _ALMOXARIFADOS_PADRAO
 
 router = APIRouter(prefix="/baixas-operacionais", tags=["baixas_operacionais"])
 
@@ -508,7 +508,18 @@ def dashboard_passivos_evolucao_mensal(
     ao lado do mapeamento de passivos, pra ficar tudo na mesma visão MoM.
     Respeita o mesmo recorte (Data/Mês/Ano/Almoxarifado/Motivo) do Resumo
     Executivo (13/08/2026) - o `mes` aqui é o filtro do painel (1-12), não
-    um "YYYY-MM" exato."""
+    um "YYYY-MM" exato.
+
+    02/09/2026 (pedido do usuário, redesenho do slide "Controle de Pacotes
+    de Baixa": "Crie uma barra composta dividindo baixas operacionais de
+    baixas realizadas no Inventário") - além do `valor` total por mês (já
+    existia), agora também quebra esse mesmo valor em duas metades usando a
+    MESMA categorização de origem do Resumo Executivo/Pacotes de Baixas
+    Operacionais (_categoria_mapeamento): `valor_inventario` (categoria
+    inventario_mensal) e `valor_operacional` (as demais - movimentacao_
+    diaria + aguardando_divergencia, ou seja, tudo que NÃO veio de um
+    fechamento de inventário) - as duas somam sempre o `valor` do mês.
+    `quantidade_inventario`/`quantidade_operacional` idem, em contagem."""
     di = _parse_data_iso(data_inicio, "data_inicio")
     df = _parse_data_iso(data_fim, "data_fim")
     motivos_lista = _parse_motivos(motivo)
@@ -519,15 +530,30 @@ def dashboard_passivos_evolucao_mensal(
     if motivos_lista:
         qb = qb.filter(models.BaixaOperacional.motivo_baixa_bruto.in_(motivos_lista))
     aprovadas = [b for b in qb.all() if _data_no_periodo(b.data_baixa, ano, mes, di, df)]
-    por_mes = defaultdict(lambda: {"quantidade": 0, "valor": 0.0, "resolvidas": 0})
+    divergencias_por_id = _mapa_divergencias_das_baixas(db, aprovadas)
+    fechamentos_mensais = _mapa_fechamentos_mensais_por_sku_almox(db)
+    por_mes = defaultdict(lambda: {
+        "quantidade": 0, "valor": 0.0, "resolvidas": 0,
+        "valor_inventario": 0.0, "valor_operacional": 0.0,
+        "quantidade_inventario": 0, "quantidade_operacional": 0,
+    })
     for b in aprovadas:
         if not b.data_baixa:
             continue
         mes_baixa = str(b.data_baixa)[:7]
-        por_mes[mes_baixa]["quantidade"] += 1
-        por_mes[mes_baixa]["valor"] += b.valor_total or 0
+        valor_baixa = b.valor_total or 0
+        v = por_mes[mes_baixa]
+        v["quantidade"] += 1
+        v["valor"] += valor_baixa
         if b.divergencia_vinculada_id:
-            por_mes[mes_baixa]["resolvidas"] += 1
+            v["resolvidas"] += 1
+        categoria = _categoria_mapeamento(b, divergencias_por_id, fechamentos_mensais)
+        if categoria == "inventario_mensal":
+            v["valor_inventario"] += valor_baixa
+            v["quantidade_inventario"] += 1
+        else:
+            v["valor_operacional"] += valor_baixa
+            v["quantidade_operacional"] += 1
 
     fluxo_por_mes = _fluxo_inventario_por_mes(db, ano=ano, mes_numero=mes, data_inicio=di, data_fim=df, almoxarifado=almoxarifado)
     todos_meses = sorted(set(por_mes.keys()) | set(fluxo_por_mes.keys()))
@@ -539,6 +565,8 @@ def dashboard_passivos_evolucao_mensal(
         fluxo = fluxo_por_mes.get(mes_str, {"entradas_valor": 0.0, "saidas_valor": 0.0, "resultado_valor": 0.0})
         resultado.append({
             "mes": mes_str, "quantidade": v["quantidade"], "valor": round(v["valor"], 2), "taxa_resolucao_automatica_pct": taxa,
+            "valor_inventario": round(v["valor_inventario"], 2), "valor_operacional": round(v["valor_operacional"], 2),
+            "quantidade_inventario": v["quantidade_inventario"], "quantidade_operacional": v["quantidade_operacional"],
             "resultado_inventario_mes": round(fluxo["resultado_valor"], 2),
             "entradas_inventario_mes": round(fluxo["entradas_valor"], 2),
             "saidas_inventario_mes": round(fluxo["saidas_valor"], 2),
@@ -1244,6 +1272,49 @@ def resumo_executivo(
         "divergencias_resolvidas": divergencias_resolvidas,
         "resumo_narrado": resumo_narrado,
     }
+
+
+_HIPOTESE_LABEL = {codigo: nome for codigo, nome, _descricao in _HIPOTESES_CATALOGO}
+_ALMOXARIFADO_LABEL = dict(_ALMOXARIFADOS_PADRAO)
+
+
+@router.get("/dashboard/justificativas-ajuste-processo")
+def dashboard_justificativas_ajuste_processo(
+    ano: int | None = None,
+    mes: int | None = Query(None, ge=1, le=12),
+    limite: int = Query(8, ge=1, le=50),
+    usuario: models.Usuario = Depends(obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Lista LINHA A LINHA (não agregada) das divergências resolvidas no mês
+    como AJUSTE DE PROCESSO - ou seja, o detalhe por trás do agregado
+    `divergencias_resolvidas.ajuste_processo` de resumo_executivo() (02/09/2026,
+    redesenho do slide "Controle de Pacotes de Baixa": pedido do usuário
+    "crie uma tabela com as justificativas de acertos feitos no sistema que
+    não foram uma perda real, mas sim ajustes de processos"). Mesmo critério
+    de classificação (Divergencia.status == "Resolvida" e hipotese_confirmada
+    em HIPOTESES_AJUSTE_PROCESSO), filtrado por data_deteccao no mês/ano do
+    relatório, ordenado do maior pro menor valor_estimado e limitado a
+    `limite` linhas (a tabela do slide só tem espaço pra poucas)."""
+    q = db.query(models.Divergencia).filter(
+        models.Divergencia.status == "Resolvida",
+        models.Divergencia.hipotese_confirmada.in_(HIPOTESES_AJUSTE_PROCESSO),
+    )
+    divergencias = [d for d in q.all() if _data_no_periodo(d.data_deteccao, ano, mes, None, None)]
+    divergencias.sort(key=lambda d: -(d.valor_estimado or 0))
+    return [
+        {
+            "sku": d.sku,
+            "almoxarifado": d.almoxarifado,
+            "almoxarifado_label": _ALMOXARIFADO_LABEL.get(d.almoxarifado, d.almoxarifado or "—"),
+            "hipotese": d.hipotese_confirmada,
+            "hipotese_label": _HIPOTESE_LABEL.get(d.hipotese_confirmada, d.hipotese_confirmada or "—"),
+            "valor_estimado": round(d.valor_estimado or 0, 2),
+            "data_deteccao": d.data_deteccao.isoformat() if d.data_deteccao else None,
+            "solucao_aplicada": d.solucao_aplicada,
+        }
+        for d in divergencias[:limite]
+    ]
 
 
 # ---------------------------------------------------------------------------
