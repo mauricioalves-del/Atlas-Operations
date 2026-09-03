@@ -1282,25 +1282,33 @@ _ALMOXARIFADO_LABEL = dict(_ALMOXARIFADOS_PADRAO)
 def dashboard_justificativas_ajuste_processo(
     ano: int | None = None,
     mes: int | None = Query(None, ge=1, le=12),
+    data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
+    data_fim: str | None = Query(None, description="YYYY-MM-DD"),
     limite: int = Query(8, ge=1, le=50),
     usuario: models.Usuario = Depends(obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    """Lista LINHA A LINHA (não agregada) das divergências resolvidas no mês
-    como AJUSTE DE PROCESSO - ou seja, o detalhe por trás do agregado
-    `divergencias_resolvidas.ajuste_processo` de resumo_executivo() (02/09/2026,
-    redesenho do slide "Controle de Pacotes de Baixa": pedido do usuário
-    "crie uma tabela com as justificativas de acertos feitos no sistema que
-    não foram uma perda real, mas sim ajustes de processos"). Mesmo critério
-    de classificação (Divergencia.status == "Resolvida" e hipotese_confirmada
-    em HIPOTESES_AJUSTE_PROCESSO), filtrado por data_deteccao no mês/ano do
-    relatório, ordenado do maior pro menor valor_estimado e limitado a
-    `limite` linhas (a tabela do slide só tem espaço pra poucas)."""
+    """Lista LINHA A LINHA (não agregada) das divergências resolvidas no
+    recorte como AJUSTE DE PROCESSO - ou seja, o detalhe por trás do
+    agregado `divergencias_resolvidas.ajuste_processo` de resumo_executivo()
+    (02/09/2026, redesenho do slide "Controle de Pacotes de Baixa": pedido
+    do usuário "crie uma tabela com as justificativas de acertos feitos no
+    sistema que não foram uma perda real, mas sim ajustes de processos").
+    Mesmo critério de classificação (Divergencia.status == "Resolvida" e
+    hipotese_confirmada em HIPOTESES_AJUSTE_PROCESSO), ordenado do maior pro
+    menor valor_estimado e limitado a `limite` linhas.
+
+    03/09/2026: ganhou data_inicio/data_fim (além de ano/mes) - mesmo padrão
+    de recorte do Resumo Executivo - porque o pedido seguinte do usuário
+    ("TOP 10 impactos com justificativas... a partir de Julho") precisa de
+    uma JANELA de meses (Julho até o mês do relatório), não um único mês."""
     q = db.query(models.Divergencia).filter(
         models.Divergencia.status == "Resolvida",
         models.Divergencia.hipotese_confirmada.in_(HIPOTESES_AJUSTE_PROCESSO),
     )
-    divergencias = [d for d in q.all() if _data_no_periodo(d.data_deteccao, ano, mes, None, None)]
+    di = _parse_data_iso(data_inicio, "data_inicio")
+    df = _parse_data_iso(data_fim, "data_fim")
+    divergencias = [d for d in q.all() if _data_no_periodo(d.data_deteccao, ano, mes, di, df)]
     divergencias.sort(key=lambda d: -(d.valor_estimado or 0))
     return [
         {
