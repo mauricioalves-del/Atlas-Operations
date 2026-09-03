@@ -1086,6 +1086,278 @@ def _adicionar_linha_visivel_sobre_empilhado(chart, categorias, valores, cor_hex
     # como <c:delete val="1"/>, o que só a técnica de rótulo invisível faz).
 
 
+def _clarear_cor_hex(cor: RGBColor, fator: float = 0.55) -> str:
+    """Clareia `cor` em direção ao branco (fator 0-1, 1 = branco puro) e
+    devolve o hex resultante - usado só pra distinguir visualmente um
+    "antes"/"depois" de um marco dentro do MESMO gráfico empilhado (ver
+    _atenuar_pontos_pre_corte), sem precisar de uma legenda/série nova."""
+    r = int(cor[0] + (255 - cor[0]) * fator)
+    g = int(cor[1] + (255 - cor[1]) * fator)
+    b = int(cor[2] + (255 - cor[2]) * fator)
+    return f"{r:02X}{g:02X}{b:02X}"
+
+
+def _atenuar_pontos_pre_corte(chart, indices_atenuados, cores_series_hex, fator_clareamento=0.55):
+    """Clareia (via <c:dPt>, override de cor POR PONTO) os pontos de
+    `indices_atenuados` em TODAS as séries de um <c:barChart> já existente,
+    mantendo os demais pontos com a cor cheia normal (a que
+    _grafico_categoria_multi já aplicou a nível de série) - técnica pra
+    "destacar" um marco dentro do MESMO gráfico sem precisar de eixo/série
+    nova (03/09/2026, pedido do usuário: "destaque a padronização de
+    processos de baixa, ocorridos a partir de julho" - aplicado aqui como
+    barras de Jan-Jun num tom mais claro das mesmas cores, Jul em diante na
+    cor cheia, já que ele deixou claro que o RECORTE de dados deve ser o
+    histórico completo desde janeiro, não só um destaque textual).
+
+    `cores_series_hex` é a cor-base de CADA série, na mesma ordem/tamanho
+    das séries que _grafico_categoria_multi recebeu - necessário porque o
+    <c:dPt> não herda a cor da série, tem que repetir a cor-base (clareada)
+    explicitamente em cada override.
+
+    <c:dPt> tem que vir logo depois de <c:spPr> dentro de <c:ser> (ordem de
+    schema: idx, order, tx, spPr, invertIfNegative, pictureOptions, dPt*,
+    dLbls, ...) - _grafico_categoria_multi nunca escreve invertIfNegative/
+    pictureOptions/dLbls quando mostrar_rotulos=False (conferido na própria
+    saída gerada), então inserir logo após spPr é sempre a posição certa
+    pros gráficos que este slide usa."""
+    chart_space = chart._chartSpace
+    plot_area = chart_space.find(qn("c:chart")).find(qn("c:plotArea"))
+    bar_chart = plot_area.find(qn("c:barChart"))
+    if bar_chart is None or not indices_atenuados:
+        return
+    sers = bar_chart.findall(qn("c:ser"))
+    for pos, ser in enumerate(sers):
+        if pos >= len(cores_series_hex):
+            continue
+        cor_clara = _clarear_cor_hex(RGBColor.from_string(cores_series_hex[pos]), fator_clareamento)
+        sppr = ser.find(qn("c:spPr"))
+        if sppr is None:
+            continue
+        insert_pos = list(ser).index(sppr) + 1
+        for offset, idx_cat in enumerate(indices_atenuados):
+            dpt_xml = f'''<c:dPt {nsdecls("c")}>
+              <c:idx val="{idx_cat}"/>
+              <c:invertIfNegative val="0"/>
+              <c:bubble3D val="0"/>
+              <c:spPr xmlns:a="{_A_NS}">
+                <a:solidFill><a:srgbClr val="{cor_clara}"/></a:solidFill>
+                <a:ln><a:noFill/></a:ln>
+              </c:spPr>
+            </c:dPt>'''
+            ser.insert(insert_pos + offset, parse_xml(dpt_xml))
+
+
+def _adicionar_camadas_mensais_baixa(chart, categorias, valores_passivos_mes, valores_topo_pilha, valores_ajustes_mes,
+                                      cor_rotulo_baixas_hex, cor_linha_ajustes_hex,
+                                      formato_numero='R$ #,##0'):
+    """Duas camadas de linha extras sobre o <c:barChart> empilhado
+    (Passivos do Mês + Resultado de Inventário do Mês), pedidas pelo
+    usuário (03/09/2026): "Rótulo de dados. Quero o valor acumulado das
+    baixas realizadas no período de cada mês. Na linha, traga o valor
+    acumulado dos ajustes mês a mês + o percentual de evolução ou
+    involução mês a mês" - "valor acumulado ... de cada mês"/"mês a mês"
+    aqui é lido como o TOTAL de cada mês (não uma soma corrida entre
+    meses): uma soma corrida real desses dois valores ficaria numa escala
+    muito maior que as barras mensais em qualquer janela de vários meses
+    (ex.: Jan-Set), o que estouraria o eixo único compartilhado (regra da
+    casa "nunca eixo duplo") e faria as barras mensais murcharem lá
+    embaixo - o valor MENSAL de cada série já é a leitura pedida
+    ("realizadas NO PERÍODO de cada mês"/"mês A mês") sem esse problema de
+    escala.
+
+    Camada 1 (invisível, só rótulo): valor de Passivos (baixas) DO MÊS,
+    mas ANCORADA na altura do TOPO DA PILHA INTEIRA (`valores_topo_pilha` =
+    passivos + resultado abs., não só passivos) e não na altura do próprio
+    valor de passivos - achado na 1ª renderização desta técnica (03/09/2026):
+    ancorar no valor de passivos colocava esse rótulo bem perto da linha
+    visível da Camada 2 (que também tende a ficar baixa, já que o
+    resultado de inventário mensal costuma ser bem menor que o total da
+    pilha), embolando os dois textos. Como o texto EXIBIDO continua sendo
+    só o valor de passivos (via <c:dLbl> com rich text por ponto, texto
+    desacoplado da posição - a mesma técnica da Camada 2, só que sem a 2ª
+    linha de %), a leitura não muda ("total de baixas deste mês"), só a
+    altura onde o número flutua, agora acima da pilha inteira.
+
+    Camada 2 (visível, linha+marcador): Resultado de Inventário DO MÊS,
+    com SINAL (não valor absoluto como a barra - aqui o sinal importa pra
+    "evolução ou involução"), rótulo composto (2 linhas: valor formatado +
+    variação % vs. o mês anterior, "+X%"/"-X%") via <c:dLbl> individual por
+    ponto com rich text - não dá pra fazer com <c:numFmt> porque são dois
+    números com formatação diferente na mesma etiqueta. 1º mês da série
+    não tem mês anterior pra comparar - rótulo só com o valor, sem %.
+
+    idx das duas séries calculado a partir do total de <c:ser> em TODO o
+    plotArea (barChart + qualquer <c:lineChart> já adicionado antes desta
+    chamada), não só `len(bar_chart.findall(ser))` como as técnicas mais
+    antigas fazem (_adicionar_rotulo_total_empilhado/_adicionar_linha_
+    visivel_sobre_empilhado) - aquele cálculo mais simples é seguro quando
+    só UMA técnica de linha é usada por gráfico, mas aqui as DUAS camadas
+    desta função são adicionadas juntas, então precisam de índices
+    sequenciais calculados uma vez só (senão colidiriam no mesmo idx)."""
+    chart_space = chart._chartSpace
+    plot_area = chart_space.find(qn("c:chart")).find(qn("c:plotArea"))
+    bar_chart = plot_area.find(qn("c:barChart"))
+    if bar_chart is None:
+        return
+    ax_ids = [e.get("val") for e in bar_chart.findall(qn("c:axId"))]
+    if len(ax_ids) < 2:
+        return
+    cat_ax_id, val_ax_id = ax_ids[0], ax_ids[1]
+    idx_base = len(bar_chart.findall(qn("c:ser")))
+    for lc in plot_area.findall(qn("c:lineChart")):
+        idx_base += len(lc.findall(qn("c:ser")))
+    idx_rotulo, idx_linha = idx_base, idx_base + 1
+
+    n = len(categorias)
+    pts_cat = "".join(f'<c:pt idx="{i}"><c:v>{_esc_xml(c)}</c:v></c:pt>' for i, c in enumerate(categorias))
+
+    # --- Camada 1: rótulo invisível, ANCORADO no topo da pilha inteira mas
+    # EXIBINDO o valor de Passivos do mês (texto desacoplado da posição via
+    # rich text por ponto - ver docstring) ---------------------------------
+    # NÃO somar folga em VALOR (tentativa anterior, revertida em 03/09/2026):
+    # somar um valor fixo às âncoras pra afastar a Camada 1 da Camada 2
+    # parecia razoável, mas o LibreOffice/PowerPoint reescalam o eixo Y
+    # automaticamente pro novo topo (inclusive a folga), o que aumenta o
+    # teto do eixo e ENCOLHE proporcionalmente todas as barras e etiquetas
+    # - o gap relativo não melhora, só desloca o problema. A separação
+    # certa é em ESPAÇO DE TELA (independente da escala de dados), feita
+    # via <c:layout><c:manualLayout> por ponto abaixo, não mexendo em
+    # nenhum valor plotado.
+    pts_val_rotulo = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(valores_topo_pilha) if v is not None
+    )
+    dlbl_rotulo_entries = []
+    for i, v_texto in enumerate(valores_passivos_mes):
+        if v_texto is None:
+            continue
+        dlbl_rotulo_entries.append(f'''<c:dLbl>
+          <c:idx val="{i}"/>
+          <c:layout>
+            <c:manualLayout><c:x val="0"/><c:y val="-0.045"/></c:manualLayout>
+          </c:layout>
+          <c:tx>
+            <c:rich xmlns:a="{_A_NS}">
+              <a:bodyPr wrap="none"/>
+              <a:lstStyle/>
+              <a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="pt-BR" sz="750" b="1"><a:solidFill><a:srgbClr val="{cor_rotulo_baixas_hex}"/></a:solidFill></a:rPr><a:t>{_esc_xml(_fmt_moeda(v_texto))}</a:t></a:r></a:p>
+            </c:rich>
+          </c:tx>
+          <c:dLblPos val="t"/>
+          <c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>
+          <c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/>
+        </c:dLbl>''')
+    rotulo_xml = f'''<c:lineChart {nsdecls("c")}>
+      <c:grouping val="standard"/>
+      <c:varyColors val="0"/>
+      <c:ser>
+        <c:idx val="{idx_rotulo}"/>
+        <c:order val="{idx_rotulo}"/>
+        <c:tx><c:v>Baixas do Mês (rótulo)</c:v></c:tx>
+        <c:spPr><a:ln xmlns:a="{_A_NS}"><a:noFill/></a:ln></c:spPr>
+        <c:marker><c:symbol val="none"/></c:marker>
+        <c:dLbls>
+          {"".join(dlbl_rotulo_entries)}
+          <c:dLblPos val="t"/>
+          <c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>
+          <c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/>
+          <c:showLeaderLines val="0"/>
+        </c:dLbls>
+        <c:cat>
+          <c:strRef><c:f>Sheet1!$A$2:$A${1 + n}</c:f><c:strCache><c:ptCount val="{n}"/>{pts_cat}</c:strCache></c:strRef>
+        </c:cat>
+        <c:val>
+          <c:numRef><c:f>Sheet1!$Y$2:$Y${1 + n}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="{n}"/>{pts_val_rotulo}</c:numCache></c:numRef>
+        </c:val>
+        <c:smooth val="0"/>
+      </c:ser>
+      <c:marker val="0"/>
+      <c:axId val="{cat_ax_id}"/>
+      <c:axId val="{val_ax_id}"/>
+    </c:lineChart>'''
+    bar_chart.addnext(parse_xml(rotulo_xml))
+    try:
+        legend = chart_space.find(qn("c:chart")).find(qn("c:legend"))
+        if legend is not None:
+            entry_xml = f'<c:legendEntry {nsdecls("c")}><c:idx val="{idx_rotulo}"/><c:delete val="1"/></c:legendEntry>'
+            legend_pos = legend.find(qn("c:legendPos"))
+            (legend_pos.addnext if legend_pos is not None else lambda e: legend.insert(0, e))(parse_xml(entry_xml))
+    except Exception:
+        pass
+
+    # --- Camada 2: linha visível com valor + variação % mês a mês --------
+    pts_val_linha = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(valores_ajustes_mes) if v is not None
+    )
+    dlbl_entries = []
+    anterior = None
+    for i, v in enumerate(valores_ajustes_mes):
+        if v is None:
+            anterior = v
+            continue
+        linha_pct = ""
+        if anterior is not None and anterior != 0:
+            pct = round((v - anterior) / abs(anterior) * 100, 1)
+            cor_pct_hex = _hex_cor(COR_SUCESSO) if pct >= 0 else _hex_cor(COR_ERRO)
+            texto_pct = f"{'+' if pct >= 0 else ''}{_fmt_num(pct, 1)}%"
+            linha_pct = f'''<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="pt-BR" sz="750" b="1"><a:solidFill><a:srgbClr val="{cor_pct_hex}"/></a:solidFill><a:highlight><a:srgbClr val="FFFFFF"/></a:highlight></a:rPr><a:t>{_esc_xml(texto_pct)}</a:t></a:r></a:p>'''
+        texto_valor = _fmt_moeda(v)
+        dlbl_entries.append(f'''<c:dLbl>
+          <c:idx val="{i}"/>
+          <c:tx>
+            <c:rich xmlns:a="{_A_NS}">
+              <a:bodyPr wrap="none"/>
+              <a:lstStyle/>
+              <a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="pt-BR" sz="850" b="1"><a:solidFill><a:srgbClr val="{cor_linha_ajustes_hex}"/></a:solidFill><a:highlight><a:srgbClr val="FFFFFF"/></a:highlight></a:rPr><a:t>{_esc_xml(texto_valor)}</a:t></a:r></a:p>
+              {linha_pct}
+            </c:rich>
+          </c:tx>
+          <c:dLblPos val="t"/>
+          <c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>
+          <c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/>
+        </c:dLbl>''')
+        anterior = v
+    dlbls_linha_xml = f'''<c:dLbls>
+      {"".join(dlbl_entries)}
+      <c:numFmt formatCode="{formato_numero}" sourceLinked="0"/>
+      <c:spPr xmlns:a="{_A_NS}"><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+      <c:dLblPos val="t"/>
+      <c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>
+      <c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/>
+    </c:dLbls>'''
+    linha_xml = f'''<c:lineChart {nsdecls("c")}>
+      <c:grouping val="standard"/>
+      <c:varyColors val="0"/>
+      <c:ser>
+        <c:idx val="{idx_linha}"/>
+        <c:order val="{idx_linha}"/>
+        <c:tx><c:v>Resultado de Inventário do Mês</c:v></c:tx>
+        <c:spPr>
+          <a:ln w="22225" xmlns:a="{_A_NS}"><a:solidFill><a:srgbClr val="{cor_linha_ajustes_hex}"/></a:solidFill></a:ln>
+        </c:spPr>
+        <c:marker>
+          <c:symbol val="circle"/>
+          <c:size val="6"/>
+          <c:spPr xmlns:a="{_A_NS}">
+            <a:solidFill><a:srgbClr val="{cor_linha_ajustes_hex}"/></a:solidFill>
+            <a:ln><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln>
+          </c:spPr>
+        </c:marker>
+        {dlbls_linha_xml}
+        <c:cat>
+          <c:strRef><c:f>Sheet1!$A$2:$A${1 + n}</c:f><c:strCache><c:ptCount val="{n}"/>{pts_cat}</c:strCache></c:strRef>
+        </c:cat>
+        <c:val>
+          <c:numRef><c:f>Sheet1!$X$2:$X${1 + n}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="{n}"/>{pts_val_linha}</c:numCache></c:numRef>
+        </c:val>
+        <c:smooth val="0"/>
+      </c:ser>
+      <c:marker val="1"/>
+      <c:axId val="{cat_ax_id}"/>
+      <c:axId val="{val_ax_id}"/>
+    </c:lineChart>'''
+    bar_chart.addnext(parse_xml(linha_xml))
+
+
 def _adicionar_linha_combo_eixo_duplo(chart, categorias, valores_linha, cor_hex,
                                        nome_serie, formato_numero_eixo="General", tracejado=False):
     """Adiciona uma 2ª série como <c:lineChart> em EIXO SECUNDÁRIO (dual-
@@ -4054,37 +4326,42 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
 
 
 def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Controle de Pacotes de Baixa (03/09/2026 - 2º REDESENHO, pedido do
-    usuário mostrando print da TELA REAL do Atlas/Mapeamento de Passivos
-    ("Evolução Mensal (MoM) — Análise Principal" + "Resultado por
-    Almoxarifado — Onde Estão as Maiores Perdas"): "Não criou o gráfico
-    solicitado baseado na tela do Atlas de Mapeamento de passivos... quero
-    voltar com o slide mostrando a evolução de processo apartir de Julho
-    quando começamos a dar baixa fiscal das baixas operacionais. Para isso,
-    traga uma análise MoM, mostrando curva de evolução com linha ativa ao
-    Lado traga o impacto por almoxarifado. Abaixo, traga duas tabelas, uma
-    de TOP 10 Baixas do periodo apresentado e outra Top 10 impactos com
-    justificativas, que entede-se que não houve uma divergência real, apenas
-    ajustes de processos. Faça uma comparação com o valor acumulado e tire a
-    diferença."
+    """Controle de Pacotes de Baixa (03/09/2026 - 3º REDESENHO desta rodada,
+    corrigindo o 2º: "Errado, Quero que traga a analise MoM completa.
+    trazendo dados atualizados desde o o inicio do processo em janeiro. o
+    que você não entendeu foi, quero que você destaque a padronização de
+    processos de baixa, ocorridos apartir de julho." + "Nos cards, traga
+    informações sobre o mês de fechamento." + (mesma mensagem, complemento)
+    "Rotulo de dados. Quero o valor acumulado das baixas realizadas no
+    periodo de cada mês. Na linha, traga o valor acumulado dos ajustes mês
+    a mês + o percentual de evolução ou involução mês a mês."
 
-    Este redesenho troca a barra composta Operacional×Inventário da 1ª
-    versão por uma reprodução direta dos DOIS gráficos da tela real
-    (mesma dupla de séries Passivos × Resultado de Inventário em valor
-    absoluto, mesmas cores vermelho/azul) + uma curva de linha VISÍVEL por
-    cima da pilha mensal (não um rótulo de total invisível como na 1ª
-    versão - aqui a linha É o "valor acumulado" pedido, com marcador e
-    rótulo próprios: ver _adicionar_linha_visivel_sobre_empilhado, nova
-    nesta rodada porque a técnica existente de linha-combo de eixo único
-    assumia um índice de série fixo, só seguro com UMA série de barra por
-    trás - aqui a pilha já tem 2).
+    O 2º redesenho cortava a série da evolução MoM em "desde julho" -
+    ERRADO: o usuário quer o HISTÓRICO COMPLETO desde janeiro (início do
+    processo), com Julho marcado como um MARCO dentro dele (quando a baixa
+    operacional passou a ser feita por nota fiscal - padronização), não
+    como recorte de dados. Mudança:
 
-    Janela: SEMPRE "desde Julho do ano deste relatório" (d["mes_relatorio"]
-    define o ano) até o mês do relatório - ver d["pacotes_resumo_acumulado"]/
-    d["pacotes_resultado_por_almoxarifado"]/d["pacotes_top_baixas"]/
-    d["justificativas_ajuste_processo"], todos coletados com esse mesmo
-    recorte em _coletar_dados_mbr (não é o histórico completo nem só o mês
-    do relatório - é a janela "desde que começamos a dar baixa fiscal").
+    - `evolucao` agora cobre janeiro-do-ano-do-relatório até o mês do
+      relatório (não mais julho até o mês do relatório) - ver
+      `mes_inicio_ano` abaixo. Cards 1-3 (Passivo/Resultado/Diferença
+      Acumulados) e a tabela/gráfico por almoxarifado CONTINUAM na janela
+      "desde julho" - o usuário só corrigiu o gráfico MoM, não esses outros
+      elementos (que representam a leitura "desde a padronização", uma
+      pergunta genuinamente diferente de "qual é o histórico completo").
+    - Destaque visual do marco de julho: barras de jan-jun num tom mais
+      claro das mesmas cores (vermelho/azul), jul em diante na cor cheia -
+      via _atenuar_pontos_pre_corte (novo, técnica de <c:dPt> por ponto,
+      não mexe em eixo/série).
+    - "Valor acumulado ... de cada mês"/"mês a mês" nos rótulos = LIDO
+      COMO O TOTAL DE CADA MÊS (não uma soma corrida entre meses - ver
+      docstring de _adicionar_camadas_mensais_baixa pro motivo técnico:
+      uma soma corrida cresceria muito além da escala das barras mensais
+      numa janela de vários meses, estourando o eixo único compartilhado).
+      Rótulo de "Baixas do Mês" ancorado no topo do segmento vermelho da
+      pilha; linha visível de "Resultado de Inventário do Mês" (com sinal,
+      não valor absoluto) com rótulo composto valor + variação % vs. o mês
+      anterior ("evolução"/"involução" pedida).
 
     "TOP 10" nos títulos das duas tabelas é o tamanho pedido pelos DADOS
     (os endpoints trazem até 10 linhas) - a exibição no slide corta pras
@@ -4095,14 +4372,27 @@ def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int
     "Diferença Acumulada" = |Resultado de Inventário acumulado| − Passivo
     aprovado acumulado, no card 3 - a mesma comparação que resumo_executivo
     já narra em texto (_montar_resumo_narrado), aqui como número em
-    destaque. "Venda o peixe": frase de leitura executiva ao final,
-    combinando o valor evitado como perda real (ajuste de processo) com
-    essa mesma diferença acumulada."""
+    destaque.
+
+    "Nos cards, traga informações sobre o mês de fechamento" - respondido
+    na própria conversa (pergunta ao usuário, resposta "As duas coisas"):
+    o card 4 passa a ser sobre o MÊS DE FECHAMENTO (o último mês, até o
+    mês do relatório, com ajuste de inventário de fato lançado - pode
+    ficar atrás do mês do relatório se o fechamento daquele mês ainda não
+    foi lançado) em vez do mês do relatório em si - o rótulo já NOMEIA
+    esse mês (resolve "até quando o inventário está fechado" sem precisar
+    de um elemento à parte) e o valor/contexto trazem Resultado de
+    Inventário + Passivo aprovado DAQUELE mês especificamente (resolve
+    "totais do mês", não só o acumulado dos cards 1-3).
+
+    "Venda o peixe": frase de leitura executiva ao final, combinando o
+    valor evitado como perda real (ajuste de processo) com a diferença
+    acumulada (cards 1-3, janela "desde julho")."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(
         slide, "Controle de Pacotes de Baixa", mes_label, pagina,
-        "Evolução mensal (MoM) desde julho — passivos aprovados × resultado de inventário, por almoxarifado",
+        "Evolução mensal (MoM) desde janeiro — tom cheio marca a padronização da baixa fiscal a partir de julho",
     )
 
     resumo_acum = d.get("pacotes_resumo_acumulado") or {}
@@ -4123,6 +4413,34 @@ def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int
         return slide
 
     resumo_mes = (d.get("resumo_passivos") or {}).get("passivos") or {"valor": 0.0, "quantidade": 0}
+
+    # Série completa da evolução MoM: janeiro do ano deste relatório até o
+    # mês do relatório (03/09/2026, correção do usuário - "análise MoM
+    # completa... desde o início do processo em janeiro"; julho continua
+    # existindo só como MARCO visual dentro dessa série, não como recorte -
+    # ver mes_corte_padronizacao/_atenuar_pontos_pre_corte mais abaixo).
+    def _rotulo_mes_curto(mes_str: str) -> str:
+        return _nome_mes(mes_str)[:3] + "/" + mes_str[2:4]
+
+    ano_relatorio = (d.get("mes_relatorio") or "0000-01").split("-")[0]
+    mes_inicio_ano = f"{ano_relatorio}-01"
+    mes_corte_padronizacao = f"{ano_relatorio}-07"
+    evolucao_completa = d.get("evolucao_passivos_fluxo") or []
+    evolucao = [p for p in evolucao_completa if p.get("mes", "") >= mes_inicio_ano]
+
+    # "Mês de fechamento" pro card 4: o último mês (até o mês do relatório)
+    # com ajuste de inventário DE FATO lançado (entradas ou saídas != 0) -
+    # pode ficar atrás do mês do relatório se o fechamento daquele mês
+    # ainda não foi lançado no Atlas. Cai pro mês do relatório se não achar
+    # nenhum (ex.: nenhum ajuste lançado em toda a janela).
+    mes_fechamento_registro = next(
+        (p for p in reversed(evolucao) if (p.get("entradas_inventario_mes") or 0) or (p.get("saidas_inventario_mes") or 0)),
+        evolucao[-1] if evolucao else None,
+    )
+    passivo_fechamento = (mes_fechamento_registro or {}).get("valor") or 0.0
+    resultado_fechamento = (mes_fechamento_registro or {}).get("resultado_inventario_mes") or 0.0
+    mes_fechamento_str = (mes_fechamento_registro or {}).get("mes") or d.get("mes_relatorio") or ""
+    mes_fechamento_curto = _rotulo_mes_curto(mes_fechamento_str) if mes_fechamento_str else "—"
 
     # Cards compactos, estrutura idêntica nos 4 (valor + rótulo + contexto) -
     # "no padrão dos demais" e "diminua os cards" da 1ª rodada continuam
@@ -4159,48 +4477,69 @@ def _slide_controle_pacotes_baixa(prs: Presentation, mes_label: str, pagina: int
                            f"{_fmt_num(resultado_inv_acum.get('saidas_qtd'))} saída(s)")},
         {"valor": _fmt_moeda(abs(diferenca)), "rotulo": "Diferença Acumulada", "cor": cor_diferenca,
          "contexto": _cab(contexto_diferenca)},
-        {"valor": _fmt_moeda(resumo_mes["valor"]), "rotulo": "Total Aprovado no Mês",
-         "contexto": _cab(f"{_fmt_num(resumo_mes['quantidade'])} baixa(s) no mês")},
+        # Card 4 (03/09/2026, "Nos cards, traga informações sobre o mês de
+        # fechamento" - resposta do usuário "As duas coisas"): não é mais o
+        # mês DO RELATÓRIO, é o mês DE FECHAMENTO do inventário (ver
+        # mes_fechamento_registro acima, que pode ficar atrás do mês do
+        # relatório) - o rótulo NOMEIA esse mês (resolve "até quando o
+        # inventário está fechado") e valor/contexto trazem Resultado de
+        # Inventário + Passivo aprovado DAQUELE mês (resolve "totais do
+        # mês", não só o acumulado dos cards 1-3).
+        {"valor": _fmt_moeda(resultado_fechamento), "rotulo": f"Resultado Invent. — {mes_fechamento_curto}",
+         "cor": COR_SUCESSO if resultado_fechamento >= 0 else COR_ERRO,
+         # Rótulo de contexto encurtado ("Passivo no mês", não "Passivo
+         # aprovado no mês") - achado na 3ª rodada de QA visual (03/09/2026):
+         # com o texto mais longo, _cab cortava a frase ANTES do valor em
+         # R$ aparecer ("Passivo aprovado no mês: R$…", sem nenhum dígito),
+         # o pior tipo de truncamento porque esconde exatamente o dado que
+         # o cartão existe pra mostrar. A versão curta cabe inteira (com
+         # folga) mesmo com valores de 6+ dígitos.
+         "contexto": _cab(f"Passivo no mês: {_fmt_moeda(passivo_fechamento)}")},
     ], altura=0.68, tamanho_valor_base=20)
 
     # --- Gráficos lado a lado (foco do slide) ---------------------------
     largura_esq, largura_dir = 7.15, LARGURA_IN - 2 * MARGEM_IN - 7.15 - 0.35
     x_dir = MARGEM_IN + largura_esq + 0.35
-    y_titulo_graf, y_grafico, altura_grafico = 2.26, 2.50, 1.80
-
-    ano_relatorio = (d.get("mes_relatorio") or "0000-01").split("-")[0]
-    mes_corte = f"{ano_relatorio}-07"
-    evolucao_completa = d.get("evolucao_passivos_fluxo") or []
-    evolucao = [p for p in evolucao_completa if p.get("mes", "") >= mes_corte]
+    y_titulo_graf, y_grafico, altura_grafico = 2.26, 2.48, 1.62
 
     _texto(slide, MARGEM_IN, y_titulo_graf, largura_esq, 0.22,
            "EVOLUÇÃO MENSAL (MoM) — PASSIVOS × RESULTADO DE INVENTÁRIO",
            tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
     if evolucao:
-        categorias = [_nome_mes(p["mes"])[:3] + "/" + p["mes"][2:4] for p in evolucao]
+        categorias = [_rotulo_mes_curto(p["mes"]) for p in evolucao]
         valores_passivos = [p.get("valor") or 0.0 for p in evolucao]
         valores_inv_abs = [abs(p.get("resultado_inventario_mes") or 0.0) for p in evolucao]
+        valores_inv_sinal = [p.get("resultado_inventario_mes") or 0.0 for p in evolucao]
         chart = _grafico_categoria_multi(
             slide, MARGEM_IN, y_grafico, largura_esq, altura_grafico, categorias,
             [("Passivos do Mês", valores_passivos, COR_ERRO),
              ("Resultado de Inventário (abs.)", valores_inv_abs, AZUL_INSTITUCIONAL)],
             tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False,
         )
-        # "Curva de evolução (valor acumulado)" - soma corrida das duas séries
-        # acima, mês a mês, desde julho (não desde o início do histórico -
-        # decisão do usuário: "evolução de processo apartir de Julho").
-        acumulado, corrida = [], 0.0
-        for pv, vi in zip(valores_passivos, valores_inv_abs):
-            corrida += pv + vi
-            acumulado.append(round(corrida, 2))
-        _adicionar_linha_visivel_sobre_empilhado(
-            chart, categorias, acumulado, cor_hex=_hex_cor(COR_ATENCAO), nome_serie="Valor Acumulado (R$)",
-            formato_numero='R$ #,##0', mostrar_rotulo=True, tamanho_pt=8.5,
+        # Destaque do marco de julho (padronização da baixa fiscal): meses
+        # ANTES de julho num tom mais claro das mesmas cores - ver docstring
+        # de _atenuar_pontos_pre_corte.
+        indices_pre_padronizacao = [i for i, p in enumerate(evolucao) if p.get("mes", "") < mes_corte_padronizacao]
+        _atenuar_pontos_pre_corte(chart, indices_pre_padronizacao, [_hex_cor(COR_ERRO), _hex_cor(AZUL_INSTITUCIONAL)])
+        # Rótulo "Baixas do Mês" (topo da pilha) + linha "Resultado de
+        # Inventário do Mês" com variação % - ver docstring de
+        # _adicionar_camadas_mensais_baixa pro porquê de serem valores
+        # MENSAIS, não uma soma corrida entre meses.
+        valores_topo_pilha = [pv + vi for pv, vi in zip(valores_passivos, valores_inv_abs)]
+        _adicionar_camadas_mensais_baixa(
+            chart, categorias, valores_passivos, valores_topo_pilha, valores_inv_sinal,
+            cor_rotulo_baixas_hex=_hex_cor(COR_ERRO), cor_linha_ajustes_hex=_hex_cor(COR_ATENCAO),
+            formato_numero='R$ #,##0',
+        )
+        _texto(
+            slide, MARGEM_IN, y_grafico + altura_grafico + 0.02, largura_esq, 0.16,
+            f"Tom claro = antes da padronização da baixa fiscal · tom cheio = a partir de {_rotulo_mes_curto(mes_corte_padronizacao)}",
+            tamanho=8, cor=CINZA_TEXTO, italico=True,
         )
     else:
         _caixa_leitura(
             slide, MARGEM_IN, y_grafico, largura_esq, altura_grafico,
-            "Evolução não disponível", "Nenhuma baixa aprovada nem ajuste de inventário a partir de julho deste ano.",
+            "Evolução não disponível", f"Nenhuma baixa aprovada nem ajuste de inventário desde janeiro de {ano_relatorio}.",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
         )
 
