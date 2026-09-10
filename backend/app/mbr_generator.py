@@ -61,6 +61,7 @@ from . import models
 from . import shelf_life as shelf_life_mod
 from . import fefo as fefo_mod
 from . import dashboards_externos_extrator as dash_ext
+from . import fechamento_stock_savvy_extrator as fech_ss_ext
 from .routers import (
     fechamento_router, baixas_operacionais_router, movimentados_router,
     cadastros_router,
@@ -1741,6 +1742,31 @@ def _extrair_dashboard_externo_por_nome(db: Session, nome_alvo: str, extrator, m
     return resultado
 
 
+def _extrair_fechamento_stock_savvy(db: Session, mes: str) -> dict:
+    """Fechamento Mensal do Stock Savvy (09/09/2026, ver
+    fechamento_stock_savvy_extrator.py e docstring de
+    _slide_fechamento_stock_savvy) - diferente de _extrair_dashboard_externo
+    (busca por CHAVE fixa, sempre "o mais recente"), aqui a busca é por MÊS:
+    o MBR de agosto precisa do arquivo enviado PRA agosto, não do último
+    enviado (podem existir vários meses guardados ao mesmo tempo). Mesmo
+    contrato de "nunca levanta exceção" dos outros extratores externos - um
+    upload ausente ou corrompido vira estado tratado pelo slide, não erro na
+    geração do MBR inteiro."""
+    registro = db.query(models.FechamentoStockSavvy).filter_by(mes=mes).first()
+    if not registro:
+        return {"tem_dados": False, "enviado": False}
+    try:
+        resultado = fech_ss_ext.extrair_fechamento_stock_savvy(registro.arquivo_pptx)
+    except Exception:
+        resultado = None
+    if resultado is None:
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True}
+    resultado["tem_dados"] = True
+    resultado["enviado"] = True
+    resultado["enviado_em"] = registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None
+    return resultado
+
+
 def _extrair_resumo_auditoria_fefo(db: Session, mes: str) -> dict:
     """FEFO do MBR (20/08/2026): pedido do usuário pra trocar a fonte do slide de
     FEFO do dashboard "Controle de FEFO" (Auditoria > Outros Dashboards,
@@ -2230,6 +2256,10 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "dispersao_ficha_tecnica_externo": _extrair_dashboard_externo_por_nome(
             db, "Dispersão de Ficha Técnica", dash_ext.extrair_dispersao_ficha_tecnica, mes
         ),
+        # Fechamento Mensal do Stock Savvy (09/09/2026) - substitui a antiga
+        # análise "Atlas + Stock Savvy" por números reais mapeados pela
+        # implementação (ver _slide_fechamento_stock_savvy).
+        "fechamento_stock_savvy": _extrair_fechamento_stock_savvy(db, mes),
     }
 
     # Mapeamento de Risco - Obsolescência (18/08/2026, pedido do usuário) - ver
@@ -4993,116 +5023,107 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
     return slide
 
 
-def _slide_atlas_stock_savvy_visao(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Atlas + Stock Savvy (20/08/2026, pedido do usuário: "Análise também o
-    Controle desenvolvido em paralelo no lovable, o aplicativo 'Stock
-    Savvy'... venda a ideia de ambos os projetos na construção de um
-    controle robusto e eficiente"). Conteúdo baseado em navegação real pelo
-    Stock Savvy (stockswift-sync-75.lovable.app, workspace Lovable "Stock
-    Savvy" - ver claude/sincronizacao-lovable-baixas.md pro histórico da
-    integração já existente entre os dois sistemas), não só na descrição
-    do usuário - confirmei estrutura e dado real de cada módulo citado
-    (Produção, Shelf Life, Gestão) direto nas telas.
+def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Fechamento Mensal do Stock Savvy (09/09/2026, pedido do usuário: "quero
+    adicionar ao MBR um modelo criado na outra ferramenta de controle
+    contemplando as principais ações e resultados do período [...] para
+    substituir o resultado da análise [...] para números reais obtidos e
+    mapeados através da implementação"). SUBSTITUI os antigos
+    _slide_atlas_stock_savvy_visao/_modulos (a análise qualitativa "por que
+    manter os dois", escrita a partir de navegação manual pelas telas do
+    Stock Savvy em 20/08/2026) por um resumo executivo compacto com números
+    REAIS do fechamento mensal que o Stock Savvy exporta (.pptx nativo,
+    upload em Auditoria > Fechamento Stock Savvy - ver
+    fechamento_stock_savvy_router.py e fechamento_stock_savvy_extrator.py):
+    ações criadas/concluídas/em aberto, aderência FEFO, o ponto de atenção
+    do mês e o resultado financeiro de Shelf Life (custo estimado de perda,
+    valor recuperado real, lucro operacional, ROI).
 
-    Posicionamento: os dois sistemas não competem - operam em camadas
-    diferentes da mesma operação. Stock Savvy é onde a ação acontece (
-    solicitar, escanear, aprovar com assinatura dupla, registrar uma ação de
-    lote com custo e recuperação); Atlas é onde as frentes se cruzam num
-    relatório executivo único, com histórico mensal e plano de ação — a
-    maior parte do que o Atlas já consome de Stock Savvy hoje (Farol de
-    Shelf, Dashboard Shelf Life/Recuperação, Dashboard de Baixas, Dispersão
-    de Lote) entra via os mesmos exports HTML que o Stock Savvy já gera."""
+    Usuário escolheu explicitamente o resumo COMPACTO em vez do relatório
+    completo (que também traz 5 rankings Top 10 por módulo, mapeamento por
+    módulo e destaques de risco - ver docstring do extrator) - 09/09/2026,
+    pergunta de múltipla escolha respondida "Resumo executivo compacto
+    (1-2 slides)"."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "Atlas + Stock Savvy", mes_label, pagina,
-               "Dois sistemas, duas camadas de controle — por que manter os dois é o que dá robustez")
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Ações e resultados reais do período — fechamento mensal exportado pelo Stock Savvy")
 
-    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 0.35) / 2
-    _caixa_leitura(
-        slide, MARGEM_IN, 1.55, largura_col, 3.15, "Stock Savvy — Camada Operacional",
-        "Onde a ação acontece, dia a dia, no chão de fábrica e na loja: solicitar uma baixa escaneando o QR do lote, "
-        "aprovar com assinatura dupla (Diretor de Operações + Coordenador Financeiro), registrar uma ação de "
-        "recuperação de lote (desconto, doação, anúncio) e acompanhar seu custo e retorno em tempo real. É o sistema "
-        "de registro e rastreabilidade — cada baixa, cada ação de lote, cada auditoria de ficha técnica nasce lá.",
-        cor_fundo=OFF_WHITE, cor_rotulo=AZUL_INSTITUCIONAL, tamanho_texto=12.5,
-    )
-    x_direita = MARGEM_IN + largura_col + 0.35
-    _caixa_leitura(
-        slide, x_direita, 1.55, largura_col, 3.15, "Atlas — Camada de Inteligência Executiva",
-        "Onde as frentes se cruzam: Inventário, Movimentados, FEFO, Shelf Life, Passivos e os controles paralelos da "
-        "equipe (incluindo os exports do próprio Stock Savvy) chegam num único relatório mensal, com histórico "
-        "real, evolução mês a mês e plano de ação por frente e por almoxarifado — não um retrato isolado de um "
-        "módulo, e sim a leitura de como a operação inteira está andando.",
-        cor_fundo=OFF_WHITE, cor_rotulo=VERDE_AMAZONIA, tamanho_texto=12.5,
-    )
+    dado = d.get("fechamento_stock_savvy") or {"tem_dados": False, "enviado": False}
+    if not dado.get("enviado"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4,
+            "Fechamento deste mês ainda não enviado",
+            "Suba o arquivo .pptx do fechamento mensal exportado pelo Stock Savvy em "
+            "Auditoria > Fechamento Stock Savvy pra que os números reais do período apareçam neste relatório.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+    if dado.get("erro_extracao"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4,
+            "Não foi possível ler o fechamento enviado",
+            "O arquivo enviado não pôde ser processado (formato inesperado, ou nenhum dos números "
+            "esperados foi encontrado) — reenvie o .pptx em Auditoria > Fechamento Stock Savvy.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ERRO, tamanho_texto=13,
+        )
+        return slide
 
-    texto_por_que = (
-        "Um sem o outro deixa uma lacuna real: só Stock Savvy dá execução granular e rastreável, mas sem visão "
-        "cruzada entre frentes nem histórico executivo; só Atlas dá a leitura consolidada, mas precisa de onde "
-        "vêm os dados operacionais de origem. Juntos, formam um controle de ponta a ponta — o dado nasce com "
-        "rastreabilidade e governança no Stock Savvy (quem pediu, quem aprovou, quando), e chega consolidado, "
-        "comparável mês a mês e com plano de ação no Atlas. Essa é a base de controle mais robusta possível hoje "
-        "para o estoque da Mágio: operação rastreada + inteligência executiva, sem depender de planilha solta "
-        "entre uma ponta e outra."
-    )
-    # Altura fixa (1.85) cortava esse texto pela rede de segurança de
-    # _caber_no_espaco - calcula a altura real necessária (com folga de
-    # 0.15 acima do mínimo teórico) em vez de chutar um valor fixo (mesmo
-    # padrão já usado em _slide_resumo_executivo, ver _altura_necessaria_
-    # caixa_leitura).
-    altura_por_que = max(1.85, _altura_necessaria_caixa_leitura(
-        texto_por_que, LARGURA_IN - 2 * MARGEM_IN, 12.5) + 0.15)
-    _caixa_leitura(
-        slide, MARGEM_IN, 4.95, LARGURA_IN - 2 * MARGEM_IN, altura_por_que, "Por que manter os dois",
-        texto_por_que,
-        cor_fundo=OFF_WHITE, cor_rotulo=COR_SUCESSO, tamanho_texto=12.5,
-    )
-    return slide
+    resumo = dado.get("resumo") or {}
+    financeiro = dado.get("financeiro_shelf_life") or {}
 
+    def _v(bloco, chave):
+        return (bloco.get(chave) or {}).get("valor") or "—"
 
-def _slide_atlas_stock_savvy_modulos(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Módulos recentes do Stock Savvy citados pelo usuário (Produção,
-    Shelf Life, Gestão) - conteúdo confirmado navegando nas telas reais
-    (20/08/2026), não apenas na descrição recebida."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Stock Savvy — Módulos Recentes", mes_label, pagina,
-               "O que cada módulo executa no Stock Savvy e como já se conecta ao Atlas hoje")
+    def _c(bloco, chave):
+        return (bloco.get(chave) or {}).get("contexto")
 
-    linhas = [
-        [
-            ("Produção", AZUL_INSTITUCIONAL, True),
-            "Dispersão de Lote (Ficha Técnica x consumo real por OP, com Ações Corretivas rastreadas por "
-            "responsável/status) e Auditoria de Ficha Técnica (cobertura de cadastro de BOM por produto).",
-            "Alimenta o slide de Dispersão de Ficha Técnica do MBR "
-            "(taxa de furo, materiais crônicos, impacto líquido).",
-        ],
-        [
-            ("Shelf Life", AZUL_INSTITUCIONAL, True),
-            "Mapeamento de Risco por almoxarifado, Ações de Lote (desconto, doação, anúncio — com custo e valor "
-            "recuperado por ação) e Farol de Shelf, consolidados no Dashboard Shelf Life com ROI operacional e "
-            "Saving recuperado.",
-            "Os mesmos exports HTML (Farol de Shelf, Dashboard Shelf Life) já alimentam os slides de Farol de "
-            "Shelf-Life e Recuperação de Shelf do MBR.",
-        ],
-        [
-            ("Gestão", AZUL_INSTITUCIONAL, True),
-            "Baixas Operacionais com fluxo completo de solicitação (scanner QR/EAN), fila de aprovação com "
-            "assinatura dupla e histórico, além do Dashboard de Baixas por motivo/setor/grupo.",
-            "Já sincronizado ao vivo com o módulo de Baixas Operacionais do Atlas (Mapeamento de Passivos) via "
-            "rota própria — integração automática, sem exportação manual de arquivo.",
-        ],
-    ]
-    _tabela(slide, MARGEM_IN, 1.65, LARGURA_IN - 2 * MARGEM_IN, 4.7,
-            ["Módulo", "Execução no Stock Savvy", "Conexão com o Atlas"], linhas,
-            larguras_relativas=[1.1, 3.6, 3.0], tamanho_fonte=12)
+    y_row1 = 1.55
+    _linha_kpis(slide, y_row1, [
+        {"valor": _v(resumo, "acoes_criadas"), "rotulo": "Ações Criadas"},
+        {"valor": _v(resumo, "concluidas"), "rotulo": "Concluídas", "cor": COR_SUCESSO},
+        {"valor": _v(resumo, "em_aberto"), "rotulo": "Em Aberto"},
+        {"valor": _v(resumo, "aderencia_fefo"), "rotulo": "Aderência FEFO"},
+    ])
 
-    _texto(
-        slide, MARGEM_IN, 6.55, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        "Levantamento feito navegando diretamente nas telas do Stock Savvy (workspace Lovable \"Stock Savvy\") "
-        "em 20/08/2026 — não é uma descrição de segunda mão.",
-        tamanho=9.5, cor=CINZA_TEXTO, italico=True,
-    )
+    y_apos_row1 = y_row1 + 0.65 + 0.28
+    ponto_atencao = dado.get("ponto_atencao")
+    if ponto_atencao:
+        altura_atencao = max(0.85, _altura_necessaria_caixa_leitura(
+            ponto_atencao, LARGURA_IN - 2 * MARGEM_IN, 12) + 0.15)
+        _caixa_leitura(
+            slide, MARGEM_IN, y_apos_row1, LARGURA_IN - 2 * MARGEM_IN, altura_atencao,
+            "Ponto de Atenção do Mês", ponto_atencao,
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
+        y_apos_atencao = y_apos_row1 + altura_atencao + 0.3
+    else:
+        y_apos_atencao = y_apos_row1
+
+    _texto(slide, MARGEM_IN, y_apos_atencao, LARGURA_IN - 2 * MARGEM_IN, 0.28,
+           "RESULTADO FINANCEIRO — SHELF LIFE", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    y_row2 = y_apos_atencao + 0.32
+    # Cores seguem o mesmo sentido semântico já usado no export original do
+    # Stock Savvy (custo em vermelho, recuperado em verde) - ver paletas de
+    # fonte lidas do .pptx de exemplo (09/09/2026).
+    _linha_kpis(slide, y_row2, [
+        {"valor": _v(financeiro, "custo_estimado_perda"), "rotulo": "Custo Estimado de Perda",
+         "cor": COR_ERRO, "contexto": _c(financeiro, "custo_estimado_perda")},
+        {"valor": _v(financeiro, "valor_recuperado_real"), "rotulo": "Valor Recuperado Real",
+         "cor": COR_SUCESSO, "contexto": _c(financeiro, "valor_recuperado_real")},
+        {"valor": _v(financeiro, "lucro_operacional"), "rotulo": "Lucro Operacional",
+         "cor": COR_SUCESSO, "contexto": _c(financeiro, "lucro_operacional")},
+        {"valor": _v(financeiro, "roi_operacional"), "rotulo": "ROI Operacional",
+         "contexto": _c(financeiro, "roi_operacional")},
+    ], altura=0.68)
+
+    rodape = "Fonte: fechamento mensal exportado pelo Stock Savvy (resumo executivo compacto)"
+    if dado.get("periodo"):
+        rodape += f" — período do export: {dado['periodo']}"
+    if dado.get("enviado_em"):
+        rodape += f" · enviado em {dado['enviado_em']}"
+    _texto(slide, MARGEM_IN, ALTURA_IN - 0.55, LARGURA_IN - 2 * MARGEM_IN, 0.4,
+           rodape, tamanho=9.5, cor=CINZA_TEXTO, italico=True)
     return slide
 
 
@@ -5305,12 +5326,11 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
 
     _secao(4, "Atlas",
            "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
-           ["Impacto do Atlas", "Constância e Disciplina — Diário de Bordo", "Atlas + Stock Savvy",
-            "Módulos Recentes do Stock Savvy", "Próximos Passos"])
+           ["Impacto do Atlas", "Constância e Disciplina — Diário de Bordo", "Fechamento Stock Savvy",
+            "Próximos Passos"])
     _slide_impacto_atlas(prs, mes_label, _pag(), dados)
     _slide_diario_bordo(prs, mes_label, _pag(), dados)
-    _slide_atlas_stock_savvy_visao(prs, mes_label, _pag(), dados)
-    _slide_atlas_stock_savvy_modulos(prs, mes_label, _pag(), dados)
+    _slide_fechamento_stock_savvy(prs, mes_label, _pag(), dados)
     _slide_proximos_passos(prs, mes_label, _pag(), dados)
 
     buffer = BytesIO()

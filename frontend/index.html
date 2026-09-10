@@ -996,6 +996,25 @@
       </div>
 
       <div class="panel">
+        <h2>Fechamento Mensal — Stock Savvy</h2>
+        <p class="hint">
+          Suba aqui, todo mês, o <code>.pptx</code> nativo que o Stock Savvy exporta no fechamento mensal. O Atlas
+          extrai o resumo executivo (ações do período, aderência FEFO e resultado financeiro de Shelf Life) e usa
+          esses números reais no lugar da antiga análise genérica "Atlas + Stock Savvy", na Seção 4 do MBR daquele mês.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px">
+          <select id="fechamento-ss-filtro-mes" class="select-filtro"></select>
+          <label class="btn-secundario" style="cursor:pointer">
+            Enviar .pptx
+            <input type="file" accept=".pptx" id="input-fechamento-ss-upload" style="display:none">
+          </label>
+          <button id="btn-fechamento-ss-remover" class="btn-secundario" type="button" style="display:none">Remover</button>
+        </div>
+        <p class="hint" id="fechamento-ss-status" style="margin-top:10px">Carregando...</p>
+        <div id="fechamento-ss-resumo"></div>
+      </div>
+
+      <div class="panel">
         <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
           <h2>Outros Dashboards</h2>
           <button id="btn-adicionar-indicador" class="btn-secundario" type="button">+ Adicionar indicador</button>

@@ -4417,6 +4417,7 @@ async function carregarAuditoria(pagina = 1) {
   carregarStatusBackup();
   carregarStatusMl();
   popularFiltroMesMbr();
+  carregarFechamentoStockSavvy();
   carregarDashboardsExternos();
   const resposta = await apiFetch(`${API}/auditoria?pagina=${pagina}&tamanho_pagina=50`).then((r) => r.json());
   document.querySelector("#tabela-auditoria tbody").innerHTML = resposta.itens
@@ -4642,6 +4643,122 @@ async function adicionarIndicadorExterno() {
 }
 
 document.getElementById("btn-adicionar-indicador")?.addEventListener("click", adicionarIndicadorExterno);
+
+// ---------- Fechamento Mensal — Stock Savvy (09/09/2026) ----------
+// Upload mensal do .pptx nativo exportado pelo Stock Savvy no fechamento - o Atlas
+// extrai o resumo executivo compacto (ver fechamento_stock_savvy_extrator.py) e ele
+// substitui a antiga análise genérica "Atlas + Stock Savvy" na Seção 4 do MBR por
+// números reais do período. Diferente de Outros Dashboards (upload "sempre o mais
+// recente"), aqui é upsert por MÊS - o MBR de agosto precisa do fechamento de
+// agosto, não do último enviado, então cada mês guarda seu próprio arquivo.
+let fechamentoSsFiltroMesCarregado = false;
+function popularFiltroMesFechamentoSS() {
+  if (fechamentoSsFiltroMesCarregado) return;
+  const sel = document.getElementById("fechamento-ss-filtro-mes");
+  const hoje = new Date();
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    const valor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const opt = document.createElement("option");
+    opt.value = valor;
+    opt.textContent = valor;
+    sel.appendChild(opt);
+  }
+  fechamentoSsFiltroMesCarregado = true;
+}
+
+async function carregarFechamentoStockSavvy() {
+  popularFiltroMesFechamentoSS();
+  const sel = document.getElementById("fechamento-ss-filtro-mes");
+  await carregarStatusFechamentoSS(sel.value);
+}
+
+async function carregarStatusFechamentoSS(mes) {
+  const statusEl = document.getElementById("fechamento-ss-status");
+  const resumoEl = document.getElementById("fechamento-ss-resumo");
+  const btnRemover = document.getElementById("btn-fechamento-ss-remover");
+  statusEl.textContent = "Carregando...";
+  resumoEl.innerHTML = "";
+  try {
+    const dado = await apiFetch(`${API}/fechamento-stock-savvy/${mes}`).then((r) => r.json());
+    if (!dado.enviado) {
+      statusEl.innerHTML = `Nenhum fechamento enviado ainda para <strong>${mes}</strong>.`;
+      btnRemover.style.display = "none";
+      return;
+    }
+    btnRemover.style.display = "";
+    const quando = dado.enviado_em ? new Date(dado.enviado_em).toLocaleString("pt-BR") : "—";
+    statusEl.innerHTML = `
+      <span class="badge badge-dash-enviado">Enviado</span>
+      Enviado por ${dado.enviado_por || "—"} em ${quando} · ${dado.nome_arquivo_original || ""}
+    `;
+    if (dado.erro_extracao || !dado.resumo_extraido) {
+      resumoEl.innerHTML = `<p class="hint" style="color:var(--critico); margin-top:8px">Não consegui reconhecer os números deste arquivo - confira se é o .pptx correto do fechamento do Stock Savvy e reenvie.</p>`;
+      return;
+    }
+    const r = dado.resumo_extraido;
+    const resumo = r.resumo || {};
+    const fin = r.financeiro_shelf_life || {};
+    const v = (bloco, chave) => (bloco[chave] && bloco[chave].valor) || "—";
+    resumoEl.innerHTML = `
+      ${r.periodo ? `<p class="hint" style="margin-top:10px">Período do export: ${r.periodo}</p>` : ""}
+      <div class="kpi-row" style="margin-top:10px; margin-bottom:10px">
+        <div class="kpi-card"><div class="kpi-label">Ações Criadas</div><div class="kpi-value">${v(resumo, "acoes_criadas")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Concluídas</div><div class="kpi-value accent">${v(resumo, "concluidas")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Em Aberto</div><div class="kpi-value">${v(resumo, "em_aberto")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Aderência FEFO</div><div class="kpi-value">${v(resumo, "aderencia_fefo")}</div></div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-card"><div class="kpi-label">Custo Estimado de Perda</div><div class="kpi-value">${v(fin, "custo_estimado_perda")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Valor Recuperado Real</div><div class="kpi-value accent">${v(fin, "valor_recuperado_real")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Lucro Operacional</div><div class="kpi-value accent">${v(fin, "lucro_operacional")}</div></div>
+        <div class="kpi-card"><div class="kpi-label">ROI Operacional</div><div class="kpi-value">${v(fin, "roi_operacional")}</div></div>
+      </div>
+      ${r.ponto_atencao ? `<p class="hint"><strong>Ponto de atenção do mês:</strong> ${r.ponto_atencao}</p>` : ""}
+    `;
+  } catch (erro) {
+    statusEl.textContent = "Falha ao carregar: " + erro.message;
+  }
+}
+
+document.getElementById("fechamento-ss-filtro-mes")?.addEventListener("change", (ev) => {
+  carregarStatusFechamentoSS(ev.target.value);
+});
+
+document.getElementById("input-fechamento-ss-upload")?.addEventListener("change", async (ev) => {
+  const arquivo = ev.target.files[0];
+  if (!arquivo) return;
+  const mes = document.getElementById("fechamento-ss-filtro-mes").value;
+  const statusEl = document.getElementById("fechamento-ss-status");
+  statusEl.textContent = "Enviando e conferindo o arquivo...";
+  const formData = new FormData();
+  formData.append("arquivo", arquivo);
+  try {
+    const res = await apiFetch(`${API}/fechamento-stock-savvy/${mes}/upload`, { method: "POST", body: formData });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(`Erro ao enviar: ${data.detail || "falha desconhecida."}`);
+      carregarStatusFechamentoSS(mes);
+      return;
+    }
+    carregarStatusFechamentoSS(mes);
+  } catch (erro) {
+    alert("Falha ao enviar: " + erro.message);
+  } finally {
+    ev.target.value = "";
+  }
+});
+
+document.getElementById("btn-fechamento-ss-remover")?.addEventListener("click", async () => {
+  const mes = document.getElementById("fechamento-ss-filtro-mes").value;
+  if (!confirm(`Remover o fechamento enviado de ${mes}? Isso não pode ser desfeito.`)) return;
+  try {
+    await apiFetch(`${API}/fechamento-stock-savvy/${mes}`, { method: "DELETE" });
+    carregarStatusFechamentoSS(mes);
+  } catch (erro) {
+    alert("Falha ao remover: " + erro.message);
+  }
+});
 
 // ---------- relatório de baixa (baixas operacionais importadas do Lovable) ----------
 function badgeStatusBaixa(statusFluxo) {

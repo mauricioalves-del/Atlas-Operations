@@ -1037,3 +1037,31 @@ class AuditoriaFefo(Base):
     arquivo_origem = Column(String, nullable=True)
     importado_por = Column(String, nullable=True)
     importado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class FechamentoStockSavvy(Base):
+    """Fechamento mensal exportado pelo Stock Savvy (09/09/2026, pedido do
+    usuário: "adicionar ao MBR um modelo criado na outra ferramenta de
+    controle contemplando as principais ações e resultados do período [...]
+    para substituir o resultado da análise [...] para números reais obtidos
+    e mapeados através da implementação"). Diferente de DashboardExterno (um
+    slot "sempre o mais recente", pensado pra HTML embutido via iframe),
+    este é um .pptx nativo gerado pelo próprio Stock Savvy no fechamento de
+    CADA mês (capa + resumo executivo + resultado financeiro de Shelf Life +
+    rankings Top 10 por módulo) - guardado por MÊS (upsert por `mes`, não
+    por chave fixa), porque o MBR de agosto precisa do fechamento de agosto,
+    não do último enviado.
+
+    `arquivo_pptx` guarda os bytes brutos do .pptx (não só o resultado já
+    extraído) pelo mesmo motivo de DashboardExterno.html_content: se a
+    lógica de extração (fechamento_stock_savvy_extrator.py) evoluir depois,
+    dá pra reprocessar os meses já enviados sem pedir reenvio pro usuário.
+    A extração roda sob demanda a cada geração de MBR (não fica cacheada
+    aqui), no mesmo padrão dos dashboards externos."""
+    __tablename__ = "fechamentos_stock_savvy"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mes = Column(String, unique=True, index=True, nullable=False)  # "AAAA-MM"
+    arquivo_pptx = Column(LargeBinary, nullable=False)
+    nome_arquivo_original = Column(String, nullable=True)
+    enviado_por = Column(String, nullable=True)
+    enviado_em = Column(DateTime, default=datetime.utcnow)
