@@ -55,10 +55,15 @@ function mostrarApp() {
     abrirFechamentoDetalhe(fechamentoLink);
   } else {
     mostrarView("hub");
-    // Saudação personalizada (19/08/2026) - toca só AQUI, uma vez por login,
-    // não em toda troca de tela (ver apresentarModuloAgora/window.__atlasFalando
-    // pra entender por que a narração automática por tela foi removida).
-    falarSaudacaoPersonalizada();
+    // Saudação personalizada (19/08/2026) - texto aparece sozinho ao entrar,
+    // uma vez por login. A FALA em voz alta virou opcional (14/09/2026,
+    // pedido do usuário: "o comando de voz, a frase de apresentação, deixe
+    // opcional no ícone de som existente, igual as demais telas") - agora só
+    // fala quando a pessoa clica no ícone de áudio da rail
+    // (#btn-narrar-modulo-atual) ou pede por comando de voz, mesmo padrão já
+    // usado pra narração dos outros módulos (ver apresentarModuloAgora,
+    // também 19/08/2026, e não mais automática por tela por esse mesmo motivo).
+    exibirSaudacaoHubSemFalar();
   }
   window.ativarEscutaAtlasSeNecessario();
   carregarPerguntasPadraoAssistente();
@@ -7108,16 +7113,31 @@ async function montarTextoSaudacaoPersonalizada() {
 }
 
 // Renderiza o texto da saudação no hub (sempre, visível independente do
-// navegador suportar/permitir fala) e tenta falar em voz alta - chamada tanto
-// automaticamente uma vez por login (ver mostrarApp) quanto sob demanda pelo
-// botão de áudio no topo da rail, quando a view atual é o hub.
-async function falarSaudacaoPersonalizada() {
-  const texto = await montarTextoSaudacaoPersonalizada();
+// navegador suportar/permitir fala ou de a fala estar ativada).
+function _exibirTextoSaudacaoHub(texto) {
   const alvo = document.getElementById("atlas-saudacao-hub");
   if (alvo) {
     alvo.innerHTML = `<strong>ATLAS:</strong> <span class="atlas-apresentacao-resumo">${texto}</span>`;
     alvo.classList.remove("hidden");
   }
+}
+
+// Só o texto, SEM falar em voz alta (14/09/2026, pedido do usuário - ver
+// mostrarApp) - chamada automaticamente uma vez por login.
+async function exibirSaudacaoHubSemFalar() {
+  const texto = await montarTextoSaudacaoPersonalizada();
+  _exibirTextoSaudacaoHub(texto);
+}
+
+// Texto + fala em voz alta - chamada sob demanda pelo botão de áudio no topo
+// da rail (#btn-narrar-modulo-atual) ou pelo comando de voz "Atlas,
+// assistente"/"Atlas, [módulo]", quando a view atual é o hub (ver
+// apresentarModuloAgora). Antes de 14/09/2026 essa era a única função e
+// tocava sozinha uma vez por login - a fala automática foi removida, o
+// texto continua aparecendo do mesmo jeito.
+async function falarSaudacaoPersonalizada() {
+  const texto = await montarTextoSaudacaoPersonalizada();
+  _exibirTextoSaudacaoHub(texto);
   falarResumoModulo(texto);
 }
 
