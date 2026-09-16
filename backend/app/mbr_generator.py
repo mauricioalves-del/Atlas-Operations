@@ -751,7 +751,7 @@ def _grafico_categoria(slide, x, y, w, h, categorias, nome_serie, valores, tipo=
 
 
 def _grafico_categoria_multi(slide, x, y, w, h, categorias, series, tipo=XL_CHART_TYPE.COLUMN_CLUSTERED,
-                              formato_numero='#,##0', mostrar_rotulos=True):
+                              formato_numero='#,##0', mostrar_rotulos=True, rotulo_contraste_por_serie=False):
     """Mesma convenção de UM eixo/UMA escala só (nunca dual-axis) - só que
     com VÁRIAS séries lado a lado sobre esse único eixo (ex.: Passivos vs.
     Resultado de Inventário, ambos em R$; Entradas vs. Saídas, idem). `series`
@@ -763,7 +763,19 @@ def _grafico_categoria_multi(slide, x, y, w, h, categorias, series, tipo=XL_CHAR
     com MUITAS séries empilhadas e segmentos pequenos (ex.: Risco por
     Almoxarifado/Grupo do Farol de Shelf-Life, 3-4 status por coluna), o
     rótulo de cada segmento fica ilegível/sobreposto (visto na QA visual) -
-    nesses casos o eixo numérico + a legenda já bastam pra leitura."""
+    nesses casos o eixo numérico + a legenda já bastam pra leitura.
+
+    `rotulo_contraste_por_serie=True` (15/09/2026, Mapeamento por Módulo -
+    "com essa tabela abaixo do gráfico com rótulos ativos"): pros gráficos
+    de barra/coluna EMPILHADA, o rótulo de cada segmento fica DENTRO dele
+    (PowerPoint não tem "fora da barra" pra empilhado), então uma cor de
+    texto única (o CINZA_TEXTO padrão) fica ilegível em cima de séries
+    escuras (ex.: "Concluídas" em azul institucional) - cada série ganha a
+    cor de rótulo com mais contraste sobre o PRÓPRIO preenchimento (mesma
+    lógica já usada em _cor_rotulo_contraste pra rótulo dentro de barra).
+    Não é o padrão pros outros gráficos clusterizados desta função (rótulo
+    OUTSIDE_END, sobre fundo branco - CINZA_TEXTO já tem contraste de
+    sobra), por isso continua opt-in."""
     chart_data = CategoryChartData()
     chart_data.categories = categorias
     for nome, valores, _cor in series:
@@ -795,6 +807,25 @@ def _grafico_categoria_multi(slide, x, y, w, h, categorias, series, tipo=XL_CHAR
         serie_obj.format.fill.solid()
         serie_obj.format.fill.fore_color.rgb = cor
         serie_obj.format.line.fill.background()
+        if mostrar_rotulos and rotulo_contraste_por_serie:
+            try:
+                # `series.data_labels` cria um <c:dLbls> NOVO no nível da
+                # série (get_or_add_dLbls) - o padrão do python-pptx pra
+                # esse elemento novo é showVal=0 (todos os "show*" 0), então
+                # sem `show_value = True` aqui a série ficaria com rótulo
+                # OCULTO, sobrescrevendo o showVal=1 do gráfico (herdado do
+                # `plot.has_data_labels = True` acima) - achado na QA visual
+                # deste rebuild (rótulos sumiram de vez ao tentar só trocar
+                # a cor).
+                dl = serie_obj.data_labels
+                dl.show_value = True
+                dl.font.size = Pt(9)
+                dl.font.bold = True
+                dl.font.color.rgb = _cor_rotulo_contraste(cor)
+                dl.number_format = formato_numero
+                dl.number_format_is_linked = False
+            except Exception:
+                pass
 
     try:
         cat_ax = chart.category_axis
@@ -1623,7 +1654,7 @@ def _grafico_combo_dual_eixo(slide, x, y, w, h, categorias, nome_barra, valores_
 
 
 def _tabela(slide, x, y, w, h, cabecalhos, linhas, larguras_relativas=None,
-            cor_cabecalho=AZUL_INSTITUCIONAL, tamanho_fonte=12):
+            cor_cabecalho=AZUL_INSTITUCIONAL, tamanho_fonte=12, margem_celula_in=None):
     n_linhas = len(linhas) + 1
     n_col = len(cabecalhos)
     shape = slide.shapes.add_table(n_linhas, n_col, Inches(x), Inches(y), Inches(w), Inches(h))
@@ -1639,6 +1670,8 @@ def _tabela(slide, x, y, w, h, cabecalhos, linhas, larguras_relativas=None,
         cel.fill.solid()
         cel.fill.fore_color.rgb = cor_cabecalho
         cel.vertical_anchor = MSO_ANCHOR.MIDDLE
+        if margem_celula_in is not None:
+            cel.margin_left = cel.margin_right = Inches(margem_celula_in)
         tf = cel.text_frame
         tf.word_wrap = True
         p = tf.paragraphs[0]
@@ -1659,6 +1692,8 @@ def _tabela(slide, x, y, w, h, cabecalhos, linhas, larguras_relativas=None,
             cel.fill.solid()
             cel.fill.fore_color.rgb = cor_fundo
             cel.vertical_anchor = MSO_ANCHOR.MIDDLE
+            if margem_celula_in is not None:
+                cel.margin_left = cel.margin_right = Inches(margem_celula_in)
             tf = cel.text_frame
             tf.word_wrap = True
             p = tf.paragraphs[0]
@@ -4190,6 +4225,54 @@ _CORES_SERIE_RECUPERACAO = {
     "Saving Recuperado": VERDE_AMAZONIA,
 }
 
+# Corte de "evolução mensal" pelo NOME do mês (10/09/2026, bug reportado pelo
+# usuário: "foi pedido o fechamento de Agosto/2026 e está trazendo dados do
+# mês atual" no gráfico "Total de Baixas por Mês"). Esse gráfico vem de um
+# dashboard HTML externo (upload "sempre o mais recente", sem mês próprio -
+# ver dashboards_externos_extrator.py) cujas categorias são só NOMES de mês
+# ("janeiro", "jan", sem ano) - o export cobre até o mês em que foi tirado, e
+# se o admin sobe o export em setembro pra gerar o MBR de agosto, o gráfico
+# ainda mostra o mês corrente (setembro, parcial) sobrando à direita.
+# Diferente do bug já corrigido em 22/08/2026 pros módulos NATIVOS do Atlas
+# (dashboard_evolucao_mensal etc., que carregam "AAAA-MM" de verdade e já são
+# cortados contra `mes_relatorio` na coleta - ver _coletar_dados_mbr), aqui
+# não há ano no dado de origem, então o corte é por CASAMENTO DE NOME: acha a
+# categoria cujo nome bate com o mês do relatório e descarta tudo depois
+# dela. Se o mês do relatório não aparecer na janela do export (ex.: MBR de
+# um mês mais antigo que o que o export cobre), devolve tudo sem cortar -
+# melhor mostrar o retrato completo do que arriscar cortar no lugar errado.
+_MESES_PT_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+
+
+def _prefixo_mes_normalizado(texto: str) -> str:
+    sem_acento = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode("ascii")
+    return sem_acento.strip().lower()[:3]
+
+
+def _recortar_evolucao_mensal_por_nome(evolucao: dict | None, mes_relatorio: str | None) -> dict | None:
+    if not evolucao or not evolucao.get("categorias") or not mes_relatorio:
+        return evolucao
+    try:
+        mes_num = int(mes_relatorio.split("-")[1])
+    except (ValueError, IndexError):
+        return evolucao
+    if not (1 <= mes_num <= 12):
+        return evolucao
+    prefixo_alvo = _MESES_PT_ABREV[mes_num - 1]
+    categorias = evolucao["categorias"]
+    indice_corte = next(
+        (i for i, cat in enumerate(categorias) if _prefixo_mes_normalizado(cat) == prefixo_alvo), None,
+    )
+    if indice_corte is None:
+        return evolucao
+    categorias_cortadas = categorias[: indice_corte + 1]
+    conjunto = set(categorias_cortadas)
+    series_cortadas = {
+        nome: {c: v for c, v in serie.items() if c in conjunto}
+        for nome, serie in (evolucao.get("series") or {}).items()
+    }
+    return {**evolucao, "categorias": categorias_cortadas, "series": series_cortadas}
+
 
 def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d: dict):
     """Recuperação de Shelf (20/08/2026) - dashboard cobre um período agregado
@@ -4234,7 +4317,9 @@ def _slide_recuperacao_shelf_externo(prs: Presentation, mes_label: str, pagina: 
     # Evolução Mensal (Perda × Receita Recuperada × Saving Recuperado),
     # largura cheia, entre os cartões e as 2 tabelas - geometria medida do
     # arquivo "MBR_Atlas_202607_15.pptx" (21/08/2026, Fase 3).
-    evolucao = dado.get("evolucao_mensal")
+    # Cortada até o mês deste relatório (10/09/2026) - ver
+    # _recortar_evolucao_mensal_por_nome.
+    evolucao = _recortar_evolucao_mensal_por_nome(dado.get("evolucao_mensal"), d.get("mes_relatorio"))
     if evolucao:
         categorias = evolucao["categorias"]
         series = [
@@ -4320,7 +4405,9 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
 
     # Total de Baixas por Mês, largura cheia, entre os cartões e as 2
     # tabelas (21/08/2026, Fase 3).
-    evolucao = dado.get("evolucao_mensal")
+    # Cortada até o mês deste relatório (10/09/2026) - ver
+    # _recortar_evolucao_mensal_por_nome.
+    evolucao = _recortar_evolucao_mensal_por_nome(dado.get("evolucao_mensal"), d.get("mes_relatorio"))
     y_grafico, altura_grafico = 2.32, 1.95
     if evolucao:
         categorias = evolucao["categorias"]
@@ -4386,8 +4473,9 @@ def _slide_baixas_operacionais_externo(prs: Presentation, mes_label: str, pagina
     exportado = dado.get("exportado_em") or "—"
     _texto(
         slide, MARGEM_IN, 6.70, LARGURA_IN - 2 * MARGEM_IN, 0.35,
-        f"Cartões: retrato do período {periodo}, exportado em {exportado}. Gráfico: histórico mensal completo "
-        "do export (janela mais longa) — os dois totais não baterem entre si é esperado, não é inconsistência.",
+        f"Cartões: retrato do período {periodo}, exportado em {exportado}. Gráfico: cortado até o mês deste "
+        "relatório, mas ainda cobre uma janela mais longa que os cartões acima — os dois totais não baterem "
+        "entre si é esperado, não é inconsistência.",
         tamanho=9, cor=CINZA_TEXTO, italico=True,
     )
     return slide
@@ -5023,33 +5111,11 @@ def _slide_diario_bordo(prs: Presentation, mes_label: str, pagina: int, d: dict)
     return slide
 
 
-def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Fechamento Mensal do Stock Savvy (09/09/2026, pedido do usuário: "quero
-    adicionar ao MBR um modelo criado na outra ferramenta de controle
-    contemplando as principais ações e resultados do período [...] para
-    substituir o resultado da análise [...] para números reais obtidos e
-    mapeados através da implementação"). SUBSTITUI os antigos
-    _slide_atlas_stock_savvy_visao/_modulos (a análise qualitativa "por que
-    manter os dois", escrita a partir de navegação manual pelas telas do
-    Stock Savvy em 20/08/2026) por um resumo executivo compacto com números
-    REAIS do fechamento mensal que o Stock Savvy exporta (.pptx nativo,
-    upload em Auditoria > Fechamento Stock Savvy - ver
-    fechamento_stock_savvy_router.py e fechamento_stock_savvy_extrator.py):
-    ações criadas/concluídas/em aberto, aderência FEFO, o ponto de atenção
-    do mês e o resultado financeiro de Shelf Life (custo estimado de perda,
-    valor recuperado real, lucro operacional, ROI).
-
-    Usuário escolheu explicitamente o resumo COMPACTO em vez do relatório
-    completo (que também traz 5 rankings Top 10 por módulo, mapeamento por
-    módulo e destaques de risco - ver docstring do extrator) - 09/09/2026,
-    pergunta de múltipla escolha respondida "Resumo executivo compacto
-    (1-2 slides)"."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
-               "Ações e resultados reais do período — fechamento mensal exportado pelo Stock Savvy")
-
-    dado = d.get("fechamento_stock_savvy") or {"tem_dados": False, "enviado": False}
+def _fechamento_stock_savvy_indisponivel(slide, dado: dict) -> bool:
+    """Mostra a caixa de aviso padrão (não enviado / erro de extração) e
+    devolve True se o slide deve parar por aí - usado pelas DUAS páginas do
+    Fechamento Stock Savvy (Panorama e Principais Ações), 10/09/2026, pra
+    não duplicar a lógica quando o conteúdo virou 2 slides."""
     if not dado.get("enviado"):
         _caixa_leitura(
             slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4,
@@ -5058,7 +5124,7 @@ def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int
             "Auditoria > Fechamento Stock Savvy pra que os números reais do período apareçam neste relatório.",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
         )
-        return slide
+        return True
     if dado.get("erro_extracao"):
         _caixa_leitura(
             slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4,
@@ -5067,26 +5133,213 @@ def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int
             "esperados foi encontrado) — reenvie o .pptx em Auditoria > Fechamento Stock Savvy.",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ERRO, tamanho_texto=13,
         )
+        return True
+    return False
+
+
+_PALAVRAS_COR_ERRO_CARTAO = ("perda", "custo")
+_PALAVRAS_COR_SUCESSO_CARTAO = ("conclu", "recuper", "lucro", "saving", "aderên", "aderen")
+
+
+def _truncar_contexto_cartao(texto, n_cards):
+    """`_cartao_kpi` reserva só 1 linha (0.16in) pra contexto, na posição
+    fixa do rodapé do cartão - com rótulo fixo, o contexto sempre coube
+    numa linha na prática (curto, escrito à mão pelo Stock Savvy). Agora
+    que o texto vem do export (15/09/2026) ele pode ser mais longo ("Baixas
+    aprovadas por vencimento no período", 44 caracteres) e sem truncar
+    quebraria em 2 linhas, invadindo visualmente a borda do cartão (achado
+    na QA visual deste rebuild, com dado real do arquivo de agosto/2026).
+    Usa a mesma estimativa de largura de caractere que `_caber_no_espaco`
+    já usa em outras caixas de texto deste gerador."""
+    if not texto:
+        return texto
+    largura_total = LARGURA_IN - 2 * MARGEM_IN
+    gap = 0.22
+    largura_card = (largura_total - gap * (n_cards - 1)) / n_cards
+    largura_texto = largura_card - 2 * 0.16
+    return _caber_no_espaco(texto, largura_texto, 0.16, 9.5)
+
+
+def _cor_por_rotulo_cartao(rotulo):
+    """Cor do cartão de KPI a partir de PALAVRAS-CHAVE no rótulo, não de uma
+    chave fixa (15/09/2026: os rótulos que o Stock Savvy exporta já mudaram
+    de um mês pro outro - ver docstring de fechamento_stock_savvy_extrator -
+    então a cor não pode mais depender de saber de antemão o texto exato de
+    cada rótulo). Mantém o mesmo sentido semântico do desenho original
+    (custo/perda em vermelho, concluído/recuperado/lucro em verde); rótulos
+    sem palavra-chave reconhecida (ex.: "Em Aberto", "Ações Criadas") ficam
+    na cor institucional padrão, igual ao desenho original."""
+    r = (rotulo or "").strip().lower()
+    if any(p in r for p in _PALAVRAS_COR_ERRO_CARTAO):
+        return COR_ERRO
+    if any(p in r for p in _PALAVRAS_COR_SUCESSO_CARTAO):
+        return COR_SUCESSO
+    return AZUL_INSTITUCIONAL
+
+
+_CORES_STATUS_MODULO = {
+    "sob controle": COR_SUCESSO,
+    "atenção": COR_ATENCAO,
+    "atencao": COR_ATENCAO,
+    "sem movimento": CINZA_TEXTO,
+}
+
+
+def _cor_status_modulo(status):
+    return _CORES_STATUS_MODULO.get((status or "").strip().lower(), CINZA_TEXTO)
+
+
+def _slide_fechamento_stock_savvy_mapeamento_modulo(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Fechamento Stock Savvy — Mapeamento por Módulo (15/09/2026, pedido do
+    usuário depois de ver a própria tela "Fechamento Mensal" do Stock Savvy:
+    "o relatório anexado no atlas já tem os dados requisitados [...] valide
+    o pptx anexado" - o gráfico "Concluídas x em aberto por módulo" e a
+    tabela "Mapeamento por módulo" já vêm prontos, NATIVOS, no .pptx que o
+    Stock Savvy exporta (um <c:barChart> embutido no slide de Resumo
+    Executivo + uma tabela num slide próprio) - ver
+    fechamento_stock_savvy_extrator._extrair_mapeamento_modulo. 1ª página
+    do Fechamento Stock Savvy (pedido explícito: "No slide 1 quero essa
+    visão"), antes do Panorama (que continua com os cartões de KPI/ponto de
+    atenção/financeiro já aprovados) e das Principais Ações.
+
+    Barra HORIZONTAL empilhada (não coluna vertical, como o gráfico
+    original do Stock Savvy) - os nomes de módulo são longos ("Dispersão de
+    Lote (ações corretivas)", "Mapeamento de Testes Operacionais") e
+    entortariam/se sobporiam num eixo de categorias vertical a 10pt; o MBR
+    já usa barra horizontal noutros gráficos com rótulo longo (Farol de
+    Shelf-Life, Concentração de Risco) - mesma convenção da casa. Rótulos
+    de valor LIGADOS (`mostrar_rotulos=True`, pedido explícito: "com essa
+    tabela abaixo do gráfico com rótulos ativos")."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Mapeamento por módulo — concluídas x em aberto e status por frente monitorada")
+
+    dado = d.get("fechamento_stock_savvy") or {"tem_dados": False, "enviado": False}
+    if _fechamento_stock_savvy_indisponivel(slide, dado):
         return slide
 
-    resumo = dado.get("resumo") or {}
-    financeiro = dado.get("financeiro_shelf_life") or {}
+    mapeamento = dado.get("mapeamento_modulo") or {}
+    categorias = mapeamento.get("categorias") or []
+    series_dado = mapeamento.get("series") or {}
+    tabela_dado = mapeamento.get("tabela")
 
-    def _v(bloco, chave):
-        return (bloco.get(chave) or {}).get("valor") or "—"
+    y = 1.55
+    if categorias and series_dado:
+        # Ordem/cor fixas (não a ordem de chegada do dict) - "Concluídas"
+        # sempre azul institucional, "Em aberto" sempre âmbar, do jeito que
+        # a própria tela do Stock Savvy mostra (ver print anexado pelo
+        # usuário) - independente da ordem em que o .pptx guarda as séries.
+        ordem_series = [n for n in ("Concluídas", "Em aberto") if n in series_dado]
+        ordem_series += [n for n in series_dado if n not in ordem_series]
+        cores_series = {"Concluídas": AZUL_INSTITUCIONAL, "Em aberto": COR_ATENCAO}
+        series = [
+            (nome, series_dado[nome], cores_series.get(nome, CINZA_TEXTO))
+            for nome in ordem_series
+        ]
+        altura_grafico = 2.55
+        _grafico_categoria_multi(
+            slide, MARGEM_IN, y, LARGURA_IN - 2 * MARGEM_IN, altura_grafico, categorias, series,
+            tipo=XL_CHART_TYPE.BAR_STACKED, formato_numero='#,##0', mostrar_rotulos=True,
+            rotulo_contraste_por_serie=True)
+        y += altura_grafico + 0.3
+    else:
+        altura_aviso = 1.4
+        _caixa_leitura(
+            slide, MARGEM_IN, y, LARGURA_IN - 2 * MARGEM_IN, altura_aviso,
+            "Gráfico por módulo não encontrado neste arquivo",
+            "Este export não trouxe o gráfico nativo \"Concluídas x em aberto por módulo\" (formato mais "
+            "antigo) — as demais páginas do Fechamento Stock Savvy continuam confiáveis.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
+        y += altura_aviso + 0.3
 
-    def _c(bloco, chave):
-        return (bloco.get(chave) or {}).get("contexto")
+    if tabela_dado:
+        _texto(slide, MARGEM_IN, y, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+               "STATUS POR MÓDULO", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        y += 0.3
+        cabecalhos = tabela_dado["cabecalho"]
+        linhas = [
+            [
+                (valor, _cor_status_modulo(valor), True) if j == len(linha) - 1 else valor
+                for j, valor in enumerate(linha)
+            ]
+            for linha in tabela_dado["linhas"]
+        ]
+        altura_tabela = min(0.34 * (len(linhas) + 1), ALTURA_IN - 0.55 - y)
+        n_col = len(cabecalhos)
+        larguras_relativas = [2.4] + [1.0] * (n_col - 3) + [1.3, 1.1] if n_col >= 3 else None
+        _tabela(slide, MARGEM_IN, y, LARGURA_IN - 2 * MARGEM_IN, altura_tabela, cabecalhos, linhas,
+                larguras_relativas=larguras_relativas, tamanho_fonte=10.5)
+
+    rodape = "Fonte: fechamento mensal exportado pelo Stock Savvy"
+    if dado.get("periodo"):
+        rodape += f" — período do export: {dado['periodo']}"
+    _texto(slide, MARGEM_IN, ALTURA_IN - 0.45, LARGURA_IN - 2 * MARGEM_IN, 0.32,
+           rodape, tamanho=9, cor=CINZA_TEXTO, italico=True)
+    return slide
+
+
+def _slide_fechamento_stock_savvy_panorama(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Fechamento Mensal do Stock Savvy — Panorama (09/09/2026, pedido do
+    usuário: "quero adicionar ao MBR um modelo criado na outra ferramenta de
+    controle contemplando as principais ações e resultados do período [...]
+    para substituir o resultado da análise [...] para números reais obtidos
+    e mapeados através da implementação"). SUBSTITUI os antigos
+    _slide_atlas_stock_savvy_visao/_modulos (a análise qualitativa "por que
+    manter os dois", escrita a partir de navegação manual pelas telas do
+    Stock Savvy em 20/08/2026) por um resumo executivo com números REAIS do
+    fechamento mensal que o Stock Savvy exporta (.pptx nativo, upload em
+    Auditoria > Fechamento Stock Savvy - ver fechamento_stock_savvy_router.py
+    e fechamento_stock_savvy_extrator.py): os KPIs do Resumo Executivo, o
+    ponto de atenção do mês e o resultado financeiro de Shelf Life.
+
+    10/09/2026 (feedback do usuário: "está muito pobre. Não conta a história
+    das atividades realizadas no periodo") - virou a 1ª de DUAS páginas: esta
+    (Panorama, só os KPIs) e _slide_fechamento_stock_savvy_acoes (as 5
+    maiores ações de cada categoria monitorada, contando a história de fato).
+
+    15/09/2026 (feedback do usuário sobre o resultado: "não ficou legal.
+    Traga exatamente os mesmos dados do relatório gerado"): a extração
+    parou de depender do TEXTO exato de cada rótulo (o Stock Savvy renomeou
+    os 4 rótulos financeiros entre dois exports da mesma semana - ver
+    fechamento_stock_savvy_extrator.py), então este slide também parou de
+    indexar por chave fixa ("acoes_criadas", "custo_estimado_perda" etc) -
+    `resumo`/`financeiro_shelf_life` agora são LISTAS de cartões (rótulo +
+    valor + contexto, na ordem em que aparecem no export), renderizadas
+    dinamicamente com o rótulo e o valor exatamente como o Stock Savvy
+    escreveu naquele mês."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Panorama do período — fechamento mensal exportado pelo Stock Savvy")
+
+    dado = d.get("fechamento_stock_savvy") or {"tem_dados": False, "enviado": False}
+    if _fechamento_stock_savvy_indisponivel(slide, dado):
+        return slide
+
+    resumo = dado.get("resumo") or []
+    financeiro = dado.get("financeiro_shelf_life") or []
 
     y_row1 = 1.55
-    _linha_kpis(slide, y_row1, [
-        {"valor": _v(resumo, "acoes_criadas"), "rotulo": "Ações Criadas"},
-        {"valor": _v(resumo, "concluidas"), "rotulo": "Concluídas", "cor": COR_SUCESSO},
-        {"valor": _v(resumo, "em_aberto"), "rotulo": "Em Aberto"},
-        {"valor": _v(resumo, "aderencia_fefo"), "rotulo": "Aderência FEFO"},
-    ])
+    if resumo:
+        _linha_kpis(slide, y_row1, [
+            {"valor": c.get("valor") or "—", "rotulo": c.get("rotulo") or "—",
+             "cor": _cor_por_rotulo_cartao(c.get("rotulo")),
+             "contexto": _truncar_contexto_cartao(c.get("contexto"), len(resumo))}
+            for c in resumo
+        ], altura=0.68 if any(c.get("contexto") for c in resumo) else 0.65)
+        y_apos_row1 = y_row1 + 0.65 + 0.28
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, y_row1, LARGURA_IN - 2 * MARGEM_IN, 0.85,
+            "Resumo executivo não encontrado neste arquivo",
+            "O layout do slide \"Resumo executivo do período\" não trouxe nenhum cartão de KPI reconhecível — "
+            "reenvie o .pptx em Auditoria > Fechamento Stock Savvy se isso não for esperado.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
+        y_apos_row1 = y_row1 + 0.85 + 0.28
 
-    y_apos_row1 = y_row1 + 0.65 + 0.28
     ponto_atencao = dado.get("ponto_atencao")
     if ponto_atencao:
         altura_atencao = max(0.85, _altura_necessaria_caixa_leitura(
@@ -5100,24 +5353,35 @@ def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int
     else:
         y_apos_atencao = y_apos_row1
 
-    _texto(slide, MARGEM_IN, y_apos_atencao, LARGURA_IN - 2 * MARGEM_IN, 0.28,
+    _texto(slide, MARGEM_IN, y_apos_atencao, LARGURA_IN - 2 * MARGEM_IN, 0.24,
            "RESULTADO FINANCEIRO — SHELF LIFE", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    y_row2 = y_apos_atencao + 0.32
-    # Cores seguem o mesmo sentido semântico já usado no export original do
-    # Stock Savvy (custo em vermelho, recuperado em verde) - ver paletas de
-    # fonte lidas do .pptx de exemplo (09/09/2026).
-    _linha_kpis(slide, y_row2, [
-        {"valor": _v(financeiro, "custo_estimado_perda"), "rotulo": "Custo Estimado de Perda",
-         "cor": COR_ERRO, "contexto": _c(financeiro, "custo_estimado_perda")},
-        {"valor": _v(financeiro, "valor_recuperado_real"), "rotulo": "Valor Recuperado Real",
-         "cor": COR_SUCESSO, "contexto": _c(financeiro, "valor_recuperado_real")},
-        {"valor": _v(financeiro, "lucro_operacional"), "rotulo": "Lucro Operacional",
-         "cor": COR_SUCESSO, "contexto": _c(financeiro, "lucro_operacional")},
-        {"valor": _v(financeiro, "roi_operacional"), "rotulo": "ROI Operacional",
-         "contexto": _c(financeiro, "roi_operacional")},
-    ], altura=0.68)
+    y_row2 = y_apos_atencao + 0.28
+    subtitulo_financeiro = dado.get("financeiro_subtitulo")
+    if subtitulo_financeiro:
+        _texto(slide, MARGEM_IN, y_row2, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+               subtitulo_financeiro, tamanho=9.5, cor=CINZA_TEXTO, italico=True)
+        y_row2 += 0.26
 
-    rodape = "Fonte: fechamento mensal exportado pelo Stock Savvy (resumo executivo compacto)"
+    if financeiro:
+        # Cores seguem o mesmo sentido semântico já usado no export original
+        # do Stock Savvy (custo/perda em vermelho, recuperado/lucro em
+        # verde) - ver _cor_por_rotulo_cartao.
+        _linha_kpis(slide, y_row2, [
+            {"valor": c.get("valor") or "—", "rotulo": c.get("rotulo") or "—",
+             "cor": _cor_por_rotulo_cartao(c.get("rotulo")),
+             "contexto": _truncar_contexto_cartao(c.get("contexto"), len(financeiro))}
+            for c in financeiro
+        ], altura=0.68)
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, y_row2, LARGURA_IN - 2 * MARGEM_IN, 0.85,
+            "Resultado financeiro não encontrado neste arquivo",
+            "O layout do slide \"Resultado Financeiro — Shelf Life\" não trouxe nenhum cartão de KPI "
+            "reconhecível — reenvie o .pptx em Auditoria > Fechamento Stock Savvy se isso não for esperado.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+        )
+
+    rodape = "Fonte: fechamento mensal exportado pelo Stock Savvy"
     if dado.get("periodo"):
         rodape += f" — período do export: {dado['periodo']}"
     if dado.get("enviado_em"):
@@ -5125,6 +5389,333 @@ def _slide_fechamento_stock_savvy(prs: Presentation, mes_label: str, pagina: int
     _texto(slide, MARGEM_IN, ALTURA_IN - 0.55, LARGURA_IN - 2 * MARGEM_IN, 0.4,
            rodape, tamanho=9.5, cor=CINZA_TEXTO, italico=True)
     return slide
+
+
+def _slide_fechamento_stock_savvy_acoes_indisponivel_ou_vazio(prs, mes_label, pagina, dado):
+    """Slide único de aviso (não enviado / erro / sem tabelas Top 10) -
+    usado quando não há categoria nenhuma pra mostrar, pra não gerar várias
+    páginas "Principais Ações" vazias."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Principais ações do período — as 5 maiores de cada frente monitorada pelo Stock Savvy")
+    if _fechamento_stock_savvy_indisponivel(slide, dado):
+        return slide
+    _caixa_leitura(
+        slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4,
+        "Nenhuma ação individual encontrada neste fechamento",
+        "O resumo executivo (KPIs e resultado financeiro) veio normalmente, mas este arquivo não trouxe "
+        "nenhuma das tabelas \"Top 10\" por categoria (formato de export mais antigo, ou nenhuma "
+        "categoria teve ação suficiente no período) — os números do panorama continuam confiáveis.",
+        cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=12,
+    )
+    return slide
+
+
+_RE_TOKEN_LARGURA = re.compile(r"[ /_\-]+")
+
+
+def _maior_token(textos, limite=16):
+    """Tamanho do maior "token" (pedaço sem espaço, "/", "-" ou "_") entre
+    todos os textos passados, capado em `limite` - usada como largura
+    MÍNIMA de uma coluna de texto, pra evitar que o PowerPoint/LibreOffice
+    seja forçado a quebrar uma palavra ou nome NO MEIO (ex.: "Responsável"
+    virando "Respon"/"sável", "Paola" virando "Pao"/"la") só porque a
+    coluna ficou mais estreita que uma única palavra - achado na 1ª versão
+    do pareamento de 2 tabelas por slide (16/09/2026), que dividia o espaço
+    das colunas de texto só por proporção de conteúdo, sem piso nenhum. O
+    cap em `limite` evita que um código/lote sem separador nenhum (ex.: um
+    número de 20 dígitos) tome sozinho todo o espaço disponível - quebrar
+    no meio de uma sequência de dígitos é bem menos chamativo que quebrar
+    no meio de uma palavra ou nome."""
+    maior = 0
+    for texto in textos:
+        if not texto:
+            continue
+        for token in _RE_TOKEN_LARGURA.split(str(texto)):
+            if token:
+                maior = max(maior, min(len(token), limite))
+    return maior
+
+
+def _larguras_por_conteudo(cabecalho, linhas, w, char_largura=0.078, padding=0.3,
+                            minimo_in=0.5, limite_fixo=12, limite_token=16,
+                            margem_celula_in=0.1):
+    """Largura ABSOLUTA (polegadas, somando ~w) de cada coluna, calculada a
+    partir do próprio conteúdo - 15/09/2026, rebuild pedido pelo usuário
+    depois de rejeitar a versão com colunas reduzidas (#/Ação/Detalhe/
+    Valor) e truncamento: "reenquadre as tabelas e traga todos os dados de
+    colunas presentes no relatório. Bem detalhado". Como agora cada
+    categoria mostra TODAS as suas colunas nativas (4 a 8, variando por
+    categoria - ver fechamento_stock_savvy_extrator.
+    _extrair_top5_categoria_completa), não dá mais pra usar uma proporção
+    fixa.
+
+    Duas categorias de coluna, não uma proporção única: colunas "curtas"
+    (cabeçalho e TODOS os valores com no máximo `limite_fixo` caracteres -
+    tipicamente #, Qtd, Custo, Saving, Valor) recebem exatamente a largura
+    que precisam pra nunca quebrar linha - um número partido ao meio (ex.:
+    "R$ 244," numa linha e "63" na próxima) é sempre ruim. O espaço que
+    sobra é dividido entre as colunas "longas" (texto descritivo, ex.:
+    "Produto (SKU)", "Lote / Almox.") em duas etapas: cada uma recebe
+    primeiro um PISO igual ao tamanho do seu maior "token" (ver
+    _maior_token) - o suficiente pra nunca forçar uma quebra no meio de
+    uma palavra/nome, mesmo numa tabela pareada (2 por slide, 16/09/2026)
+    com bem menos largura disponível que 1 categoria sozinha - e só o que
+    sobra depois disso é distribuído por peso (proporcional ao conteúdo).
+    Se nem os pisos cabem (caso extremo, tabela de muitas colunas espremida
+    numa largura pequena demais), degrada pra proporção pura como rede de
+    segurança - aceita que algum token bem comprido quebre no meio, o que
+    é preferível a colunas com largura negativa ou o cálculo travar.
+
+    (achado na 1ª tentativa desta função, que pesava TODAS as colunas por
+    caractere sem reservar o mínimo fixo das curtas - com 8 colunas, as
+    2-3 colunas de texto bem longo dominavam o peso total e espremiam
+    "Qtd"/"Custo"/"Saving" pra menos de 3 caracteres de largura, quebrando
+    até o cabeçalho "Qtd" em "Qt"/"d" e os valores em R$ pela metade)."""
+    n = len(cabecalho)
+    maiores = []
+    valores_por_coluna = [[] for _ in range(n)]
+    for j, titulo in enumerate(cabecalho):
+        maior = len(titulo or "")
+        for linha in linhas:
+            if j < len(linha) and linha[j]:
+                valor = str(linha[j])
+                valores_por_coluna[j].append(valor)
+                maior = max(maior, len(valor))
+        maiores.append(maior)
+
+    fixas = [m <= limite_fixo for m in maiores]
+    larguras = [0.0] * n
+    for j, m in enumerate(maiores):
+        if fixas[j]:
+            larguras[j] = max(m * char_largura + padding, minimo_in)
+
+    espaco_fixo = sum(larguras[j] for j in range(n) if fixas[j])
+    # Nunca deixa as colunas de texto com menos de 30% do total, mesmo se
+    # as colunas "curtas" somadas passarem disso (caso extremo, muitas
+    # colunas numéricas) - rede de segurança, não esperado no formato atual
+    # do Stock Savvy.
+    espaco_livre = max(w - espaco_fixo, w * 0.3)
+    indices_flex = [j for j in range(n) if not fixas[j]]
+    if indices_flex:
+        peso_total = sum(maiores[j] for j in indices_flex) or 1
+        pisos = {}
+        for j in indices_flex:
+            # Cabeçalho e dado calculados SEPARADOS, não junto num "maior
+            # texto" só: o cabeçalho da tabela é sempre bold (ver _tabela),
+            # bem mais largo por caractere que o dado normal - um piso só
+            # que misturasse os dois subestimava sistematicamente o
+            # cabeçalho (achado ao parear "Ações de Lote/Shelf Life": o
+            # piso "certo no papel" pra "Responsável" ainda deixava o "el"
+            # sobrando numa 2ª linha, porque o texto bold precisa de ~50%
+            # mais largura por letra que o normal usado pra calibrar
+            # `char_largura`).
+            piso_cabecalho = _maior_token([cabecalho[j]], limite_token) * char_largura * 1.5
+            piso_dados = _maior_token(valores_por_coluna[j], limite_token) * char_largura
+            # + margem_celula_in*2 (padding interno esquerda+direita da
+            # própria célula do PowerPoint, sempre presente independente
+            # do `margem_celula_in` passado pra _tabela - ver
+            # _tabela_categoria_acoes_completa) + uma folga pequena.
+            pisos[j] = max(piso_cabecalho, piso_dados) + margem_celula_in * 2 + 0.06
+        soma_pisos = sum(pisos.values())
+        if soma_pisos <= espaco_livre:
+            extra = espaco_livre - soma_pisos
+            for j in indices_flex:
+                larguras[j] = pisos[j] + extra * maiores[j] / peso_total
+        else:
+            # Nem os pisos cabem inteiros - em vez de abandoná-los e cair
+            # pra proporção pura por tamanho de conteúdo (regressão real
+            # encontrada aqui em 16/09/2026: isso podia dar a uma coluna
+            # MENOS espaço do que o piso calculava, só porque outra coluna
+            # do MESMO slide tinha um token grande o bastante pra estourar
+            # a soma - ex.: aumentar a folga de segurança de "Responsável"
+            # em 1 categoria piorava a quebra de palavra dela mesma, ao
+            # empurrar a soma total pra cima do espaço livre e descartar
+            # TODOS os pisos), encolhe todos os pisos na mesma proporção
+            # até caberem - cada coluna ainda recebe espaço proporcional à
+            # sua PRÓPRIA necessidade mínima, só que igualmente
+            # "espremida", em vez de voltar a ignorar completamente a
+            # lógica de não quebrar palavra no meio.
+            fator = (espaco_livre / soma_pisos) if soma_pisos else 0
+            for j in indices_flex:
+                larguras[j] = pisos[j] * fator
+    return larguras
+
+
+def _tabela_categoria_acoes_completa(slide, x, y, w, categoria, tamanho_fonte=11,
+                                      char_largura=0.078, padding=0.3, minimo_in=0.5,
+                                      margem_celula_in=0.1):
+    """Título da categoria + sua tabela de ações com TODAS as colunas
+    nativas (verbatim, sem reduzir/truncar - ver _larguras_por_conteudo).
+    `w`, `tamanho_fonte` e os parâmetros de _larguras_por_conteudo variam
+    conforme a tabela vai sozinha (largura inteira) ou pareada com outra
+    (metade da largura, fonte um pouco menor) - ver
+    _slides_fechamento_stock_savvy_acoes. `margem_celula_in` é passado tanto
+    pro cálculo de largura quanto pra própria célula da tabela (_tabela) -
+    os dois PRECISAM bater, senão o piso calculado em _larguras_por_conteudo
+    (que desconta essa margem do espaço de texto disponível) fica
+    inconsistente com a margem real renderizada, e uma palavra que
+    "deveria" caber acaba quebrando no meio mesmo assim (achado ao parear
+    Ações de Lote/Shelf Life, 16/09/2026: a margem padrão do PowerPoint
+    para células de tabela é 0.1in de cada lado - 0.2in no total -, bem
+    maior que a folga que o piso reservava, e "Responsável" continuava
+    quebrando em "Respons"/"ável" mesmo com o piso "certo" no papel)."""
+    _texto(slide, x, y, w, 0.28, categoria["categoria"].upper(),
+           tamanho=13, negrito=True, cor=AZUL_INSTITUCIONAL)
+
+    cabecalhos = categoria["cabecalho"]
+    linhas = categoria["linhas"]
+    larguras = _larguras_por_conteudo(cabecalhos, linhas, w, char_largura=char_largura,
+                                       padding=padding, minimo_in=minimo_in,
+                                       margem_celula_in=margem_celula_in)
+    # Altura NOMINAL de partida (cabeçalho + linhas de dado, no máximo 6) -
+    # o PowerPoint/LibreOffice expande cada linha automaticamente além
+    # disso conforme o texto quebra (word_wrap=True na _tabela), então este
+    # valor só precisa ser uma base razoável, não a altura final real.
+    altura_por_linha_tabela = 0.38 if tamanho_fonte >= 11 else 0.42
+    altura_tabela = altura_por_linha_tabela * (len(linhas) + 1)
+    _tabela(slide, x, y + 0.34, w, altura_tabela, cabecalhos, linhas,
+            larguras_relativas=larguras, tamanho_fonte=tamanho_fonte,
+            margem_celula_in=margem_celula_in)
+    return y + 0.34 + altura_tabela
+
+
+def _slide_fechamento_stock_savvy_acoes_categoria(prs, mes_label, pagina, dado, categoria):
+    """1 slide "Principais Ações" com 1 categoria sozinha, largura inteira -
+    usado só para a categoria que sobra quando o total é ímpar (ver
+    _slides_fechamento_stock_savvy_acoes); o caso normal é 2 categorias por
+    slide, lado a lado (_slide_fechamento_stock_savvy_acoes_par)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Principais ações do período — as 5 maiores de cada frente monitorada pelo Stock Savvy")
+
+    _tabela_categoria_acoes_completa(slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, categoria)
+
+    rodape = ("Fonte: fechamento mensal exportado pelo Stock Savvy — 5 maiores ações por categoria, "
+               "já ordenadas por impacto no próprio export")
+    if dado.get("periodo"):
+        rodape += f" · período: {dado['periodo']}"
+    _texto(slide, MARGEM_IN, ALTURA_IN - 0.45, LARGURA_IN - 2 * MARGEM_IN, 0.32,
+           rodape, tamanho=9, cor=CINZA_TEXTO, italico=True)
+    return slide
+
+
+def _parametros_tabela_categoria_par(categoria):
+    """Fonte/largura-de-coluna pra 1 tabela dentro de um slide pareado
+    (2 categorias lado a lado) - quanto mais colunas nativas a categoria
+    tiver, mais compacto precisa ser pra caber em meia largura de slide
+    sem forçar quebra no meio de palavra (16/09/2026, ver _maior_token)."""
+    n_col = len(categoria.get("cabecalho") or [])
+    # margem_celula_in mais estreita que o padrão do PowerPoint (0.1in) -
+    # reclama espaço de texto extra em toda coluna, essencial numa tabela
+    # pareada (metade da largura do slide) com várias colunas.
+    if n_col >= 7:
+        return dict(tamanho_fonte=9, char_largura=0.058, padding=0.2,
+                    minimo_in=0.38, margem_celula_in=0.05)
+    if n_col >= 6:
+        return dict(tamanho_fonte=9.5, char_largura=0.062, padding=0.22,
+                    minimo_in=0.4, margem_celula_in=0.05)
+    return dict(tamanho_fonte=10, char_largura=0.066, padding=0.24,
+                minimo_in=0.42, margem_celula_in=0.06)
+
+
+def _slide_fechamento_stock_savvy_acoes_par(prs, mes_label, pagina, dado, par):
+    """1 slide "Principais Ações" com 2 categorias lado a lado - modelo
+    padrão pedido pelo usuário (16/09/2026, correção sobre o 3º rebuild que
+    tinha virado 1 categoria por slide: "Errado, pedi para consolidar duas
+    tabelas por slide. não apenas 1. se fosse pra ser nesse padrão, não
+    pediria para diminuir a lista de 10 para 5 linhas. reordene as tabelas.
+    dois slides com dois top 5"). Fonte e largura de coluna adaptam ao
+    número de colunas nativas de CADA categoria (ver
+    _parametros_tabela_categoria_par) - uma categoria de 4-5 colunas
+    (ex.: Controle de FEFO, Dispersão de Lote) cabe confortável a 10pt;
+    uma de 7-8 (ex.: Ações de Lote/Shelf Life) precisa de fonte mais
+    compacta pra abrir espaço sem forçar quebra no meio de palavra/nome
+    (ver _maior_token em _larguras_por_conteudo). Em NENHum caso alguma
+    coluna é reduzida ou truncada - textos longos quebram em várias linhas
+    em vez de 1 (a tabela cresce em altura; nunca corta conteúdo)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Fechamento Stock Savvy", mes_label, pagina,
+               "Principais ações do período — as 5 maiores de cada frente monitorada pelo Stock Savvy")
+
+    gap = 0.3
+    largura_total = LARGURA_IN - 2 * MARGEM_IN
+    largura_tabela = (largura_total - gap) / 2
+    x_esquerda = MARGEM_IN
+    x_direita = MARGEM_IN + largura_tabela + gap
+
+    _tabela_categoria_acoes_completa(slide, x_esquerda, 1.6, largura_tabela, par[0],
+                                      **_parametros_tabela_categoria_par(par[0]))
+    if len(par) > 1:
+        _tabela_categoria_acoes_completa(slide, x_direita, 1.6, largura_tabela, par[1],
+                                          **_parametros_tabela_categoria_par(par[1]))
+
+    rodape = ("Fonte: fechamento mensal exportado pelo Stock Savvy — 5 maiores ações por categoria, "
+               "já ordenadas por impacto no próprio export")
+    if dado.get("periodo"):
+        rodape += f" · período: {dado['periodo']}"
+    _texto(slide, MARGEM_IN, ALTURA_IN - 0.45, LARGURA_IN - 2 * MARGEM_IN, 0.32,
+           rodape, tamanho=9, cor=CINZA_TEXTO, italico=True)
+    return slide
+
+
+def _slides_fechamento_stock_savvy_acoes(prs: Presentation, mes_label: str, obter_pagina, d: dict):
+    """Fechamento Mensal do Stock Savvy — Principais Ações (10/09/2026,
+    feedback do usuário sobre o slide único anterior: "está muito pobre. Não
+    conta a história das atividades realizadas no periodo [...] categorize
+    as 5 maiores ações [de] cada [categoria de] ação gerada no sistema").
+
+    2ª parte do Fechamento Stock Savvy - traz as 5 maiores ações de CADA
+    categoria que o Stock Savvy monitora (Baixas Operacionais, Dispersão de
+    Lote, Ações de Lote/Shelf Life, Testes Operacionais, Controle de FEFO),
+    já ordenadas por impacto pelo próprio export (ver fechamento_stock_
+    savvy_extrator._extrair_top_acoes).
+
+    15/09/2026, 2º rebuild (feedback do usuário sobre a 1ª versão, uma
+    grade única de 2 colunas x 3 linhas em fonte 8.5pt: "não ficou legal
+    [...] traga no mesmo layout do MBR") - virou 1 slide por categoria, 2
+    lado a lado (ver "TOP BAIXAS POR SKU"/"BAIXAS POR MOTIVO"). 3º rebuild,
+    ainda no mesmo dia (feedback sobre ESSA 2ª versão, que reduzia cada
+    categoria a 4 colunas genéricas #/Ação/Detalhe/Valor: "reenquadre as
+    tabelas e traga todos os dados de colunas presentes no relatório. Bem
+    detalhado. [...] top 5 aprovados. pode seguir nesse modelo") virou,
+    por engano, 1 categoria por slide em largura inteira - interpretação
+    errada de "pode seguir nesse modelo" (o usuário se referia ao modelo
+    lado-a-lado da 2ª versão, só pedindo pra consertar as colunas dentro
+    dele, não pra abandonar o pareamento). 4º rebuild (16/09/2026, correção
+    explícita: "pedi para consolidar duas tabelas por slide. não apenas 1
+    [...] dois slides com dois top 5") - voltou ao pareamento de 2
+    categorias por slide (_slide_fechamento_stock_savvy_acoes_par), agora
+    com TODAS as colunas nativas de cada categoria (sem reduzir/truncar) e
+    fonte/larguras recalibradas pra largura de meio-slide. Categoria ímpar
+    sobrando (quando o total não é múltiplo de 2) cai sozinha num slide de
+    largura inteira (_slide_fechamento_stock_savvy_acoes_categoria).
+    `obter_pagina` é a mesma closure `_pag` usada pro resto do relatório,
+    chamada 1x por página desta função - o número de slides gerados aqui
+    não é fixo (varia com quantas categorias tiveram movimento no
+    período), por isso não dá pra usar um único `pagina` recebido por
+    parâmetro como as outras funções de slide."""
+    dado = d.get("fechamento_stock_savvy") or {"tem_dados": False, "enviado": False}
+    categorias = dado.get("top_acoes") or []
+    if _fechamento_stock_savvy_indisponivel_ou_sem_categorias(dado, categorias):
+        _slide_fechamento_stock_savvy_acoes_indisponivel_ou_vazio(prs, mes_label, obter_pagina(), dado)
+        return
+
+    i, n = 0, len(categorias)
+    while i < n:
+        par = categorias[i:i + 2]
+        if len(par) == 2:
+            _slide_fechamento_stock_savvy_acoes_par(prs, mes_label, obter_pagina(), dado, par)
+        else:
+            _slide_fechamento_stock_savvy_acoes_categoria(prs, mes_label, obter_pagina(), dado, par[0])
+        i += 2
+
+
+def _fechamento_stock_savvy_indisponivel_ou_sem_categorias(dado, categorias) -> bool:
+    return (not dado.get("enviado")) or dado.get("erro_extracao") or not categorias
 
 
 def _slide_proximos_passos(prs: Presentation, mes_label: str, pagina: int, d: dict):
@@ -5326,11 +5917,22 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
 
     _secao(4, "Atlas",
            "Cobertura de processos hoje e melhorias esperadas com o uso contínuo da ferramenta.",
-           ["Impacto do Atlas", "Constância e Disciplina — Diário de Bordo", "Fechamento Stock Savvy",
-            "Próximos Passos"])
+           ["Impacto do Atlas", "Fechamento Stock Savvy — Mapeamento por Módulo",
+            "Fechamento Stock Savvy — Panorama",
+            "Fechamento Stock Savvy — Principais Ações", "Próximos Passos"])
     _slide_impacto_atlas(prs, mes_label, _pag(), dados)
-    _slide_diario_bordo(prs, mes_label, _pag(), dados)
-    _slide_fechamento_stock_savvy(prs, mes_label, _pag(), dados)
+    # "Constância e Disciplina — Diário de Bordo" removido da construção do
+    # relatório (10/09/2026, pedido do usuário) - _coletar_indicador_diario_
+    # bordo e _slide_diario_bordo continuam definidos (não usados) pra não
+    # perder o trabalho caso o indicador volte a fazer sentido mais adiante.
+    # Mapeamento por Módulo entra como a 1ª página do Fechamento Stock Savvy
+    # (15/09/2026, pedido explícito: "No slide 1 quero essa visão") - vem
+    # ANTES do Panorama, que continua com os cartões de KPI já aprovados.
+    _slide_fechamento_stock_savvy_mapeamento_modulo(prs, mes_label, _pag(), dados)
+    _slide_fechamento_stock_savvy_panorama(prs, mes_label, _pag(), dados)
+    # Número de páginas variável (até 2 categorias por slide) - ver docstring
+    # de _slides_fechamento_stock_savvy_acoes, 15/09/2026.
+    _slides_fechamento_stock_savvy_acoes(prs, mes_label, _pag, dados)
     _slide_proximos_passos(prs, mes_label, _pag(), dados)
 
     buffer = BytesIO()

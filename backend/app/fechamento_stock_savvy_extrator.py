@@ -8,29 +8,40 @@ implementação").
 Extrai do .pptx nativo que o Stock Savvy exporta no fechamento de cada mês
 (capa + Resumo Executivo do Período + Resultado Financeiro — Shelf Life +
 5 rankings Top 10 por módulo + Mapeamento por Módulo + Destaques de Risco)
-só o que o MBR precisa pro resumo executivo compacto que substitui a antiga
-análise genérica "Atlas + Stock Savvy" (ver
-mbr_generator._slide_fechamento_stock_savvy): os 4 KPIs do Resumo Executivo,
-o ponto de atenção do mês, e os 4 KPIs financeiros de Shelf Life (com seus
-sublabels de contexto). As tabelas Top 10 e o Mapeamento por Módulo não
-entram nesta extração (usuário optou por resumo compacto, não pelo
-relatório completo, em 09/09/2026) - ficam disponíveis pra uma extração
-futura se o formato do MBR mudar.
+o que o MBR precisa pro resumo executivo que substitui a antiga análise
+genérica "Atlas + Stock Savvy" (ver mbr_generator._slide_fechamento_stock_
+savvy_panorama/_acoes): os KPIs do Resumo Executivo, o ponto de atenção
+do mês, os KPIs financeiros de Shelf Life (com seus sublabels de
+contexto), e as 5 maiores ações de cada categoria (Top 10 por módulo -
+10/09/2026, pedido do usuário: o resumo só de KPIs "não conta a história
+das atividades realizadas no período"). O Mapeamento por Módulo e
+Destaques de Risco continuam fora desta extração - ficam disponíveis pra
+uma extração futura se o formato do MBR mudar.
 
 Ao contrário dos dashboards HTML (dashboards_externos_extrator.py, que lêem
 texto RENDERIZADO via BeautifulSoup), este é um .pptx nativo - lido direto
 por shape com python-pptx.
 
-Extração por CASAMENTO DE RÓTULO + shape numérico na mesma coluna (mesmo
-`left`, com tolerância), não por índice fixo de shape: no próprio arquivo
-de exemplo, a ordem já muda entre os dois slides (Resumo Executivo tem
-rótulo ACIMA do valor; Resultado Financeiro tem valor ACIMA do rótulo, com
-um sublabel de contexto embaixo) - fixar "valor = rótulo + 1 shape" quebraria
-um dos dois. O casamento por coluna+proximidade é resistente a essa
-diferença de ordem, mas ainda depende dos rótulos exatos que o Stock Savvy
-usa hoje (_ROTULOS_* abaixo); se o Stock Savvy renomear um rótulo, aquele
-card específico volta None (tratado no MBR como "—", sem quebrar os
-outros nem a extração inteira).
+Extração por GEOMETRIA (15/09/2026, achado comparando os arquivos de
+fechamento de agosto/2026 v7 e v8: o Stock Savvy renomeou os 4 rótulos do
+slide financeiro entre um export e outro da MESMA ferramenta, na MESMA
+semana - "Custo estimado de perda/Valor recuperado real/Lucro operacional/
+ROI operacional" virou "Perda estimada/Perda real/Valor recuperado/Saving
+recuperado", com a frase de contexto do slide também mudando. Casar por
+TEXTO de rótulo fixo (como a versão anterior deste módulo fazia) quebra
+toda vez que o Stock Savvy mexporta com um rótulo novo, mesmo que os dados
+continuem lá). Em vez de casar por rótulo, agrupamos os shapes "estreitos"
+(cartão de KPI, não título/subtítulo de largura cheia) em colunas por
+proximidade horizontal (`left`, com tolerância) - o layout em grade de
+colunas é estável mesmo quando o texto dos rótulos muda. Dentro de cada
+coluna, o shape numérico é o "valor"; dos textos não numéricos restantes,
+o mais próximo do valor é o "rótulo" e o segundo mais próximo (quando
+existe) é o "contexto" - isso funciona tanto pro Resumo Executivo (rótulo
+ACIMA do valor, sem contexto) quanto pro Resultado Financeiro (valor ACIMA
+do rótulo, com contexto embaixo), sem precisar saber a ordem nem o texto
+de nenhum rótulo. Cada card devolvido carrega o rótulo e o valor
+EXATAMENTE como o Stock Savvy escreveu naquele mês - "traga exatamente os
+mesmos dados do relatório gerado" (pedido do usuário, 15/09/2026).
 """
 import io
 import re
@@ -38,19 +49,8 @@ import re
 from pptx import Presentation
 
 _TOLERANCIA_COLUNA_EMU = 50_000  # ~0.05in de folga pra considerar "mesma coluna"
-
-_ROTULOS_RESUMO = [
-    ("acoes_criadas", "AÇÕES CRIADAS"),
-    ("concluidas", "CONCLUÍDAS"),
-    ("em_aberto", "EM ABERTO"),
-    ("aderencia_fefo", "ADERÊNCIA FEFO"),
-]
-_ROTULOS_FINANCEIRO_SHELF = [
-    ("custo_estimado_perda", "Custo estimado de perda"),
-    ("valor_recuperado_real", "Valor recuperado real"),
-    ("lucro_operacional", "Lucro operacional"),
-    ("roi_operacional", "ROI operacional"),
-]
+_LARGURA_MAXIMA_CARTAO_EMU = 3_000_000  # ~3.28in - separa cartões de KPI (estreitos)
+                                          # de títulos/subtítulos de largura cheia
 
 _RE_TEM_DIGITO = re.compile(r"\d")
 _RE_PERIODO = re.compile(r"^\d{2}/\d{2} a \d{2}/\d{2}/\d{4}$")
@@ -82,63 +82,80 @@ def _parece_numerico(texto: str) -> bool:
     return len(sobra) <= 2
 
 
-def _valor_na_coluna(shapes, rotulo_shape):
-    candidatos = [
-        s for s in shapes
-        if s is not rotulo_shape
-        and abs(s.left - rotulo_shape.left) <= _TOLERANCIA_COLUNA_EMU
-        and _parece_numerico(s.text_frame.text)
-    ]
-    if not candidatos:
+def _colunas_de_shapes(shapes, tolerancia=_TOLERANCIA_COLUNA_EMU):
+    """Agrupa shapes em colunas por proximidade horizontal (mesmo `left`,
+    com tolerância) - independe de rótulo/texto, só da geometria do
+    template do Stock Savvy (estável mês a mês, ao contrário do texto dos
+    rótulos - ver docstring do módulo)."""
+    ordenados = sorted(shapes, key=lambda s: s.left)
+    colunas = []
+    for s in ordenados:
+        for coluna in colunas:
+            if abs(coluna[0].left - s.left) <= tolerancia:
+                coluna.append(s)
+                break
+        else:
+            colunas.append([s])
+    return colunas
+
+
+def _cartao_da_coluna(coluna):
+    """Acha o valor (numérico) e, entre os textos não numéricos, o mais
+    próximo do valor vira rótulo e o segundo mais próximo vira contexto -
+    funciona tanto pro padrão rótulo-acima-valor (Resumo) quanto
+    valor-acima-rótulo-acima-contexto (Financeiro), sem depender do texto
+    exato de nenhum rótulo. Devolve None se a coluna não tem nenhum valor
+    numérico (não é um cartão de KPI de verdade)."""
+    numericos = [s for s in coluna if _parece_numerico(s.text_frame.text)]
+    if not numericos:
         return None
-    return min(candidatos, key=lambda s: abs(s.top - rotulo_shape.top))
+    valor_shape = numericos[0]
+    nao_numericos = sorted(
+        (s for s in coluna if s is not valor_shape and not _parece_numerico(s.text_frame.text)),
+        key=lambda s: abs(s.top - valor_shape.top),
+    )
+    rotulo = nao_numericos[0].text_frame.text.strip() if nao_numericos else None
+    contexto = nao_numericos[1].text_frame.text.strip() if len(nao_numericos) > 1 else None
+    return {"rotulo": rotulo, "valor": valor_shape.text_frame.text.strip(), "contexto": contexto}
 
 
-def _sublabel_na_coluna(shapes, rotulo_shape, valor_shape):
-    """Sublabel/contexto (ex.: "Valor em risco nas ações") - texto NÃO
-    numérico na mesma coluna, diferente do rótulo e do valor, mais perto do
-    valor (no exemplo real, fica colado nele - acima ou abaixo, dependendo
-    do slide)."""
-    ancora = valor_shape or rotulo_shape
-    candidatos = [
-        s for s in shapes
-        if s is not rotulo_shape and s is not valor_shape
-        and abs(s.left - rotulo_shape.left) <= _TOLERANCIA_COLUNA_EMU
-        and not _parece_numerico(s.text_frame.text)
-    ]
-    if not candidatos:
-        return None
-    return min(candidatos, key=lambda s: abs(s.top - ancora.top)).text_frame.text.strip()
-
-
-def _extrair_cards(slide, rotulos, com_contexto: bool):
-    """rotulos: lista de (chave, texto_do_rótulo). Devolve
-    {chave: {"valor": str|None, "contexto": str|None}}.
-
-    `com_contexto` liga a busca de sublabel só pros cards que REALMENTE têm
-    uma 3ª linha no template de origem (Resultado Financeiro) - nos cards
-    do Resumo Executivo (só rótulo + valor, sem 3ª linha), a busca por
-    "texto não-numérico mais próximo na mesma coluna" pegava por engano o
-    título do gráfico logo abaixo ("Concluídas x em aberto por módulo",
-    mesma coluna x do 1º card) como se fosse contexto do card - achado ao
-    testar contra o arquivo real de exemplo (09/09/2026)."""
+def _extrair_linha_cartoes(slide):
+    """[{"rotulo","valor","contexto"}, ...] pra cada coluna de KPI
+    encontrada no slide, na ordem esquerda->direita - substitui a extração
+    por rótulo fixo: o layout em colunas do Stock Savvy é estável, mas o
+    TEXTO dos rótulos já mudou de um mês pro outro (achado em 15/09/2026,
+    comparando fechamento_2026-08_7.pptx vs _8.pptx). Shapes de largura
+    cheia (título, subtítulo, caixa de atenção) são descartados antes de
+    agrupar em colunas - só cartões de KPI (estreitos) entram."""
     if slide is None:
-        return {chave: {"valor": None, "contexto": None} for chave, _ in rotulos}
-    shapes = _shapes_com_texto(slide)
-    por_texto = {}
-    for s in shapes:
-        por_texto.setdefault(s.text_frame.text.strip(), s)
-    resultado = {}
-    for chave, texto_rotulo in rotulos:
-        rotulo_shape = por_texto.get(texto_rotulo)
-        if rotulo_shape is None:
-            resultado[chave] = {"valor": None, "contexto": None}
-            continue
-        valor_shape = _valor_na_coluna(shapes, rotulo_shape)
-        valor = valor_shape.text_frame.text.strip() if valor_shape else None
-        contexto = _sublabel_na_coluna(shapes, rotulo_shape, valor_shape) if com_contexto else None
-        resultado[chave] = {"valor": valor, "contexto": contexto}
-    return resultado
+        return []
+    shapes = [s for s in _shapes_com_texto(slide) if s.width <= _LARGURA_MAXIMA_CARTAO_EMU]
+    colunas = _colunas_de_shapes(shapes)
+    cartoes = []
+    for coluna in colunas:
+        cartao = _cartao_da_coluna(coluna)
+        if cartao:
+            cartoes.append(cartao)
+    return cartoes
+
+
+def _subtitulo(slide):
+    """Frase de contexto de largura cheia logo abaixo do título (ex.: "33
+    ações abertas no período — do risco estimado ao que foi realmente
+    recuperado") - largura cheia (>_LARGURA_MAXIMA_CARTAO_EMU) e SEM dígito
+    algum, pra não pegar o título em si nem confundir com um cartão. Só
+    existe no slide financeiro hoje, mas a busca é genérica."""
+    if slide is None:
+        return None
+    candidatos = [
+        s for s in _shapes_com_texto(slide)
+        if s.width > _LARGURA_MAXIMA_CARTAO_EMU and not _RE_TEM_DIGITO.search(s.text_frame.text)
+    ]
+    if not candidatos:
+        return None
+    # a mais próxima do topo, mas não a primeira (título) - pega a 2ª mais alta
+    candidatos.sort(key=lambda s: s.top)
+    return candidatos[1].text_frame.text.strip() if len(candidatos) > 1 else None
 
 
 def _ponto_atencao(slide):
@@ -160,13 +177,189 @@ def _periodo(prs):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Top 5 ações por categoria (10/09/2026, pedido do usuário: o resumo
+# compacto original (só os 8 KPIs) "está muito pobre... não conta a história
+# das atividades realizadas no período" - adicionado por cima do resumo
+# compacto, sem remover nada dele. Cada categoria do Stock Savvy exporta seu
+# próprio slide "Top 10 — <categoria>" com uma tabela nativa (não HTML, não
+# precisa de heurística de posição como os KPIs acima) - aqui só pegamos as
+# 5 primeiras linhas de dado de cada tabela (o próprio Stock Savvy já as
+# ordena por maior impacto - "ordenados por saving recuperado" etc - não
+# reordenamos aqui).
+#
+# 15/09/2026, 2º rebuild (feedback do usuário sobre a 1ª versão, que reduzia
+# cada categoria a 4 colunas genéricas #/Ação/Detalhe/Valor: "reenquadre as
+# tabelas e traga todos os dados de colunas presentes no relatório. Bem
+# detalhado"): a extração agora devolve a tabela INTEIRA de cada categoria
+# (cabeçalho + linhas, com TODAS as colunas nativas, verbatim) em vez de
+# reduzir/combinar colunas - o número de colunas varia por categoria (8 em
+# Ações de Lote, 6 em Baixas Operacionais/Mapeamento de Testes, 4 em
+# Dispersão de Lote/FEFO); cabe ao MBR (mbr_generator.py) desenhar cada
+# tabela com a largura que ela precisar, não mais a esta extração decidir o
+# que "conta a história" e o que é ruído.
+# ---------------------------------------------------------------------------
+# Ordem de exibição preferida (categorias com mais impacto/volume primeiro,
+# pra contar a história do período do mais relevante pro menos) - qualquer
+# categoria nova que o Stock Savvy vier a exportar no futuro (título "Top
+# 10 — X" fora desta lista) ainda aparece, só que depois destas.
+_ORDEM_CATEGORIAS_ACOES = [
+    "Baixas Operacionais",
+    "Dispersão de Lote (identificadas)",
+    "Ações de Lote (Shelf Life)",
+    "Mapeamento de Testes Operacionais",
+    "Controle de FEFO",
+]
+
+
+def _tabela_do_slide(slide):
+    for shp in slide.shapes:
+        if shp.has_table:
+            return shp.table
+    return None
+
+
+def _slides_top_acoes(prs):
+    """[(categoria, slide), ...] pra cada slide "Top 10 — <categoria>"
+    encontrado, na ordem em que aparecem no arquivo."""
+    resultado = []
+    for slide in prs.slides:
+        for shp in _shapes_com_texto(slide):
+            texto = shp.text_frame.text.strip()
+            if texto.startswith("Top 10"):
+                separador = "—" if "—" in texto else "-"
+                categoria = texto.split(separador, 1)[1].strip() if separador in texto else texto
+                resultado.append((categoria, slide))
+                break
+    return resultado
+
+
+def _extrair_top5_categoria_completa(slide, maximo=5):
+    """{"cabecalho": [...], "linhas": [[...], ...]} com TODAS as colunas
+    nativas da tabela "Top 10" dessa categoria, verbatim - só as 5
+    primeiras linhas de DADO de verdade (pula a linha "Total", que
+    Mapeamento de Testes Operacionais tem, e qualquer linha malformada; uma
+    linha de dado de verdade sempre começa com o número do ranking). None
+    se a categoria não tiver tabela ou nenhuma linha válida."""
+    tabela = _tabela_do_slide(slide)
+    if tabela is None or len(tabela.rows) < 2:
+        return None
+    linhas_cruas = [[c.text.strip() for c in row.cells] for row in tabela.rows]
+    cabecalho, linhas_dado = linhas_cruas[0], linhas_cruas[1:]
+    linhas = []
+    for linha in linhas_dado:
+        if len(linhas) >= maximo:
+            break
+        if not linha or not linha[0].strip().isdigit():
+            continue
+        linhas.append(linha)
+    if not linhas:
+        return None
+    return {"cabecalho": cabecalho, "linhas": linhas}
+
+
+def _extrair_top_acoes(prs):
+    """[{"categoria": str, "cabecalho": [...], "linhas": [[...], ...até 5]}, ...]
+    só com categorias que realmente tinham pelo menos 1 linha de dado válida
+    (uma categoria "Sem movimento" no período - ex.: Dispersão de Lote (ações
+    corretivas) no arquivo de exemplo - nem gera o slide "Top 10", então já
+    fica de fora naturalmente)."""
+    encontrados = {}
+    for categoria, slide in _slides_top_acoes(prs):
+        tabela = _extrair_top5_categoria_completa(slide)
+        if tabela:
+            encontrados[categoria] = tabela
+    resultado = []
+    vistos = set()
+    for categoria in _ORDEM_CATEGORIAS_ACOES:
+        if categoria in encontrados:
+            resultado.append({"categoria": categoria, **encontrados[categoria]})
+            vistos.add(categoria)
+    for categoria, tabela in encontrados.items():
+        if categoria not in vistos:
+            resultado.append({"categoria": categoria, **tabela})
+    return resultado
+
+
+# ---------------------------------------------------------------------------
+# Mapeamento por Módulo (15/09/2026, pedido do usuário depois de ver a
+# própria tela "Fechamento Mensal" do Stock Savvy - "o relatório anexado no
+# atlas já tem os dados requisitados"): o gráfico "Concluídas x em aberto
+# por módulo" (nativo, embutido no slide "Resumo executivo do período") e a
+# tabela "Mapeamento por módulo" (slide próprio, 1 tabela nativa com
+# Módulo/Criadas/Concluídas/Em Aberto/Valor-Qtd./Status) já vêm prontos no
+# .pptx do Stock Savvy - a docstring do módulo já previa essa extração
+# futura ("ficam disponíveis pra uma extração futura se o formato do MBR
+# mudar"). Diferente dos cartões de KPI (texto solto por shape), o gráfico é
+# um objeto CHART nativo do python-pptx (categorias + séries já
+# estruturadas, sem heurística de posição) e a tabela é lida do mesmo jeito
+# que as tabelas de Top 10 (_tabela_do_slide).
+# ---------------------------------------------------------------------------
+def _grafico_do_slide(slide):
+    if slide is None:
+        return None
+    for shp in slide.shapes:
+        if shp.has_chart:
+            return shp.chart
+    return None
+
+
+def _extrair_grafico_modulo(prs):
+    """{"categorias": [...], "series": {nome: [valores]}} a partir do
+    PRIMEIRO gráfico nativo encontrado no arquivo (o Stock Savvy só embute
+    um gráfico no .pptx de fechamento, no slide de Resumo Executivo) - {}
+    se nenhum slide tiver um gráfico embutido (export mais antigo, sem esse
+    recurso)."""
+    for slide in prs.slides:
+        chart = _grafico_do_slide(slide)
+        if chart is None:
+            continue
+        try:
+            plot = chart.plots[0]
+            categorias = [str(c) for c in plot.categories]
+            series = {serie.name: list(serie.values) for serie in plot.series}
+        except Exception:
+            return {}
+        return {"categorias": categorias, "series": series}
+    return {}
+
+
+def _extrair_tabela_modulo(prs):
+    """{"cabecalho": [...], "linhas": [[...], ...]} da tabela nativa do
+    slide "Mapeamento por módulo" - None se o slide não existir (export
+    mais antigo) ou não tiver tabela."""
+    slide = _slide_por_titulo(prs, "Mapeamento por módulo", "Mapeamento por Módulo")
+    if slide is None:
+        return None
+    tabela = _tabela_do_slide(slide)
+    if tabela is None or len(tabela.rows) < 2:
+        return None
+    linhas_cruas = [[c.text.strip() for c in row.cells] for row in tabela.rows]
+    return {"cabecalho": linhas_cruas[0], "linhas": linhas_cruas[1:]}
+
+
+def _extrair_mapeamento_modulo(prs):
+    grafico = _extrair_grafico_modulo(prs)
+    tabela = _extrair_tabela_modulo(prs)
+    if not grafico and not tabela:
+        return None
+    return {
+        "categorias": grafico.get("categorias", []),
+        "series": grafico.get("series", {}),
+        "tabela": tabela,
+    }
+
+
 def extrair_fechamento_stock_savvy(pptx_bytes: bytes) -> dict:
     """Devolve None se o arquivo não é um .pptx válido (corrompido/formato
     inesperado - tratado pelo chamador como erro de extração) ou se NENHUM
-    dos 8 KPIs esperados foi encontrado (rótulos completamente diferentes -
-    provavelmente não é um export do Stock Savvy). Um resultado parcial
-    (alguns KPIs None, outros preenchidos) é devolvido normalmente - cada
-    card mostra "—" individualmente no slide, sem invalidar o resto."""
+    cartão de KPI foi encontrado em nenhum dos dois slides (layout
+    completamente diferente - provavelmente não é um export do Stock
+    Savvy). `resumo` e `financeiro_shelf_life` são listas de cartões (na
+    ordem em que aparecem no slide, esquerda->direita) com o rótulo e o
+    valor EXATAMENTE como o Stock Savvy escreveu naquele mês - não há mais
+    chaves fixas (ex.: "acoes_criadas"), porque o texto dos rótulos já
+    mudou de um export pro outro (15/09/2026)."""
     try:
         prs = Presentation(io.BytesIO(pptx_bytes))
     except Exception:
@@ -177,18 +370,23 @@ def extrair_fechamento_stock_savvy(pptx_bytes: bytes) -> dict:
         prs, "Resultado Financeiro — Shelf Life", "Resultado Financeiro - Shelf Life",
     )
 
-    resumo = _extrair_cards(slide_resumo, _ROTULOS_RESUMO, com_contexto=False)
-    financeiro = _extrair_cards(slide_financeiro, _ROTULOS_FINANCEIRO_SHELF, com_contexto=True)
+    resumo = _extrair_linha_cartoes(slide_resumo)
+    financeiro = _extrair_linha_cartoes(slide_financeiro)
+    subtitulo_financeiro = _subtitulo(slide_financeiro)
     ponto_atencao = _ponto_atencao(slide_resumo)
     periodo = _periodo(prs)
+    top_acoes = _extrair_top_acoes(prs)
+    mapeamento_modulo = _extrair_mapeamento_modulo(prs)
 
-    tem_algum_dado = any(v["valor"] for v in resumo.values()) or any(v["valor"] for v in financeiro.values())
-    if not tem_algum_dado:
+    if not resumo and not financeiro:
         return None
 
     return {
         "periodo": periodo,
         "resumo": resumo,
         "financeiro_shelf_life": financeiro,
+        "financeiro_subtitulo": subtitulo_financeiro,
         "ponto_atencao": ponto_atencao,
+        "top_acoes": top_acoes,
+        "mapeamento_modulo": mapeamento_modulo,
     }

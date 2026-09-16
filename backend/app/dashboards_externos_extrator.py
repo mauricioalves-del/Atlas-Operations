@@ -987,3 +987,245 @@ def extrair_dispersao_ficha_tecnica(html_content: str, mes: str) -> dict:
         ],
         "evolucao_mensal": evolucao_mensal,
     }
+
+
+# ---------------------------------------------------------------------------
+# 6. Metas Individuais ("Minhas metas", 16/09/2026, pedido do usuário: "Preciso
+#    implantar no relatório as metas individuais [...] Crie uma lógica para
+#    validar a informação") - indicador DINÂMICO (Outros Dashboards >
+#    Adicionar Indicador, mesmo mecanismo de Dispersão de Ficha Técnica), mas
+#    de um app Lovable diferente ("rotinabusiness.lovable.app/metas") - export
+#    é uma foto do app React (não um snapshot achatado tipo Farol/Recuperação/
+#    Baixas): cada meta é uma linha de grid (mesmas classes CSS Tailwind da
+#    linha de cabeçalho "Colaborador | Descrição | Meta anual | ..."), com um
+#    painel de detalhamento mensal (tabela HTML de verdade) logo abaixo dela
+#    no DOM. "Realizado"/"Tendência" são <input>, não texto solto - por isso
+#    não dá pra usar markitdown/get_text puro (que ignora o atributo `value`
+#    de input) como os extratores mais simples acima; olha `<table>`/`<input>`
+#    diretamente.
+#
+# VALIDAÇÃO (o pedido central do usuário, não só extração): o export tem pelo
+# menos 3 inconsistências REAIS, confirmadas comparando os números do próprio
+# arquivo entre si antes de escrever este extrator:
+#   1. "soma dos pesos" pode vir 0% (nenhum peso configurado) - toda média
+#      ponderada fica "—" no app de origem; sinalizado em vez de fingir um
+#      atingimento geral que não existe.
+#   2. Metas em R$ com direção "maior" às vezes têm a meta acumulada
+#      cadastrada NEGATIVA (ex.: -699) enquanto o realizado vem POSITIVO
+#      (ex.: 1.038,09) - a divisão direta (realizado/meta) que o app de
+#      origem usa produz um "% atingimento" sem sentido (ex.: -149%, exibido
+#      como se fosse uma queda de quase 150% quando na verdade os dois lados
+#      têm convenções de sinal diferentes). Marca `sinal_inconsistente` em vez
+#      de repetir esse percentual como se fosse confiável.
+#   3. Para metas em "%", o campo "Real acum." do app de origem é a SOMA das
+#      colunas mensais de Realizado, não a média - pra uma métrica limitada a
+#      0-100% isso produz acumulados/atingimentos impossíveis (confirmado:
+#      "Gestão de inventário quantidade (IAQ)" mostrava Real Acum.=630,9 e
+#      Ating. Acum.=637%, e 630,9 bate EXATO com a soma dos 8 valores mensais
+#      de Realizado - 78,6+92,89+0+66,2+96,75+98,38+99,13+98,95 - confirmando
+#      que é bug de soma-em-vez-de-média do app de origem, não um dado real).
+#      Marca `acumulado_provavel_soma_indevida` e calcula a média mensal como
+#      alternativa mais confiável (`media_mensal_ate_mes`).
+# Um 4º tipo de checagem - conferir a meta de "% Prejuízo de Matéria prima e
+# insumos" contra o número já consolidado no Fechamento Stock Savvy (Perda
+# Real de Shelf Life) - PRECISA dos dois conjuntos de dados juntos, então mora
+# em mbr_generator._validar_metas_individuais_vs_stock_savvy, não aqui.
+# ---------------------------------------------------------------------------
+_MESES_ABREV_METAS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+
+_RE_NUM_BR_SINAL = re.compile(r"[-−]?[\d.,]*\d")
+
+
+def _parse_num_br_sinal(texto):
+    """'-149%' -> -149.0 ; '1.038,09' -> 1038.09 ; '-699' -> -699.0 ;
+    '-149% YTD' -> -149.0 (ignora sufixo/rótulo colado, ex.: a célula
+    "Ating. acum." vem como "-149% YTD" - "YTD" faz parte do mesmo `<div>`,
+    não é um texto separado) ; '—'/''/None -> None. Diferente de
+    _parse_money_br: aceita '%' solto (sem R$) e preserva sinal negativo
+    explícito, que os dois usos deste extrator (percentuais de atingimento E
+    valores em R$/qtd que podem ser negativos por convenção do app de
+    origem) precisam. Usa regex pra extrair só o TOKEN numérico em vez de
+    tentar limpar a string inteira, pra não depender de toda palavra
+    adicional que o app de origem decida colar no mesmo elemento."""
+    if texto is None:
+        return None
+    s = str(texto).strip()
+    if not s or s in ("—", "-", "–"):
+        return None
+    m = _RE_NUM_BR_SINAL.search(s)
+    if not m:
+        return None
+    token = m.group(0)
+    negativo = token.startswith("-") or token.startswith("−")
+    s = token.lstrip("-−")
+    if not s:
+        return None
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        valor = float(s)
+    except ValueError:
+        return None
+    return -valor if negativo else valor
+
+
+def _linhas_tabela_por_rotulo(tabela):
+    """{'Meta': ['-699', ...], 'Realizado': ['', ..., '1.038,09', ...], ...} -
+    1ª célula de cada <tr> é o rótulo da linha (Mês/Meta/Realizado/Tendência/
+    % atingimento), as demais são os 12 meses. Lê o `value` de <input> (não
+    fica no texto do HTML - ver docstring da seção acima) e o texto de
+    <select>/<button> (usado pelas metas tipo sim/não, ver goal "Riscos e
+    Passivos" no export real)."""
+    linhas = {}
+    for tr in tabela.find_all("tr"):
+        celulas = tr.find_all(["td", "th"])
+        if not celulas:
+            continue
+        rotulo = celulas[0].get_text(strip=True)
+        valores = []
+        for c in celulas[1:]:
+            campo = c.find("input")
+            if campo is not None:
+                valores.append((campo.get("value") or "").strip())
+                continue
+            campo = c.find("select") or c.find("button")
+            if campo is not None:
+                valores.append(campo.get_text(strip=True))
+                continue
+            valores.append(c.get_text(strip=True))
+        linhas[rotulo] = valores
+    return linhas
+
+
+def _extrair_meta_individual(row, idx_mes):
+    filhos = row.find_all("div", recursive=False)
+    if len(filhos) < 8:
+        return None  # linha de grid inesperada (não é uma meta) - pula sem quebrar as outras
+
+    peso_input = filhos[0].find("input")
+    peso_pct = _parse_num_br_sinal(peso_input.get("value")) if peso_input else None
+
+    desc_filhos = filhos[1].find_all("div", recursive=False)
+    descricao = desc_filhos[0].get_text(strip=True) if desc_filhos else filhos[1].get_text(" ", strip=True)
+    direcao_unidade = desc_filhos[1].get_text(" ", strip=True) if len(desc_filhos) > 1 else ""
+    partes = direcao_unidade.split()
+    direcao = partes[0] if partes else None
+    if len(partes) > 1 and partes[1] == "não":  # "sim/não" quebra em ["sim/não"] só se sem espaço - defensivo
+        direcao = "sim/não"
+    unidade = partes[-1] if partes and partes[-1] not in ("maior", "menor", "sim/não") else None
+    tipo = "booleano" if (direcao or "").strip().lower() in ("sim/não", "sim/nao") else "numerico"
+
+    meta_anual = _parse_num_br_sinal(filhos[2].get_text(strip=True))
+    tend_anual = _parse_num_br_sinal(filhos[3].get_text(strip=True))
+    ating_anual_pct = _parse_num_br_sinal(filhos[4].get_text(strip=True))
+    meta_acum = _parse_num_br_sinal(filhos[5].get_text(strip=True))
+    real_acum = _parse_num_br_sinal(filhos[6].get_text(strip=True))
+    ating_acum_pct = _parse_num_br_sinal(filhos[7].get_text(strip=True))
+
+    painel = row.find_next_sibling("div")
+    tabela = painel.find("table") if painel else None
+    serie_meses = []
+    meta_mes = realizado_mes = ating_mes_pct = None
+    realizado_mes_texto = None
+    if tabela is not None:
+        por_rotulo = _linhas_tabela_por_rotulo(tabela)
+        meta_serie = por_rotulo.get("Meta") or [None] * 12
+        realizado_serie = por_rotulo.get("Realizado") or [None] * 12
+        ating_serie = por_rotulo.get("% atingimento") or [None] * 12
+        for i, abrev in enumerate(_MESES_ABREV_METAS):
+            realizado_bruto = realizado_serie[i] if i < len(realizado_serie) else None
+            serie_meses.append({
+                "mes_abrev": abrev,
+                "meta": _parse_num_br_sinal(meta_serie[i]) if i < len(meta_serie) else None,
+                "realizado": realizado_bruto if tipo == "booleano" else _parse_num_br_sinal(realizado_bruto),
+                "ating_pct": _parse_num_br_sinal(ating_serie[i]) if i < len(ating_serie) else None,
+            })
+        if 0 <= idx_mes < len(serie_meses):
+            meta_mes = serie_meses[idx_mes]["meta"]
+            realizado_mes = serie_meses[idx_mes]["realizado"] if tipo != "booleano" else None
+            realizado_mes_texto = serie_meses[idx_mes]["realizado"] if tipo == "booleano" else None
+            ating_mes_pct = serie_meses[idx_mes]["ating_pct"]
+
+    # --- Validação 2: sinal de meta x realizado do mês inconsistente ------
+    sinal_inconsistente = (
+        tipo == "numerico" and meta_mes is not None and realizado_mes is not None
+        and meta_mes != 0 and realizado_mes != 0
+        and (meta_mes < 0) != (realizado_mes < 0)
+    )
+
+    # --- Validação 3: acumulado de "%" provavelmente somado, não mediado --
+    acumulado_provavel_soma_indevida = False
+    media_mensal_ate_mes = None
+    if tipo == "numerico" and (unidade or "").strip() == "%" and real_acum is not None:
+        valores_ate_mes = [
+            m["realizado"] for m in serie_meses[:idx_mes + 1] if m["realizado"] is not None
+        ] if serie_meses else []
+        if valores_ate_mes:
+            soma = sum(valores_ate_mes)
+            media_mensal_ate_mes = soma / len(valores_ate_mes)
+            # tolerância de 1.0 (arredondamento do próprio export) - só marca
+            # quando a soma bate com o "Real Acum." exibido E o valor foge de
+            # uma faixa plausível de percentual (>105%, com folga pequena
+            # pra metas legitimamente superadas).
+            if abs(soma - real_acum) < 1.0 and real_acum > 105:
+                acumulado_provavel_soma_indevida = True
+
+    return {
+        "descricao": descricao,
+        "direcao": direcao,
+        "unidade": unidade,
+        "tipo": tipo,
+        "peso_pct": peso_pct,
+        "meta_anual": meta_anual,
+        "tend_anual": tend_anual,
+        "ating_anual_pct": ating_anual_pct,
+        "meta_acum": meta_acum,
+        "real_acum": real_acum,
+        "ating_acum_pct": ating_acum_pct,
+        "meta_mes": meta_mes,
+        "realizado_mes": realizado_mes,
+        "realizado_mes_texto": realizado_mes_texto,
+        "ating_mes_pct": ating_mes_pct,
+        "serie_meses": serie_meses,
+        "sinal_inconsistente": sinal_inconsistente,
+        "acumulado_provavel_soma_indevida": acumulado_provavel_soma_indevida,
+        "media_mensal_ate_mes": round(media_mensal_ate_mes, 1) if media_mensal_ate_mes is not None else None,
+    }
+
+
+def extrair_metas_individuais(html_content: str, mes: str) -> dict:
+    """mes: 'YYYY-MM'. Ver docstring da seção acima (nº 6) pro contexto geral
+    e as 3 validações internas (pesos, sinal, acumulado somado)."""
+    ano_str, mes_str = mes.split("-")
+    idx_mes = int(mes_str) - 1
+    if not (0 <= idx_mes < 12):
+        return None
+
+    soup = _soup_sem_svg(html_content)
+    linhas_grid = soup.select("div.grid")
+    if len(linhas_grid) < 3:
+        return None  # sem cabeçalho+resumo+pelo menos 1 meta - layout inesperado
+
+    resumo_row = linhas_grid[1]
+    filhos_resumo = resumo_row.find_all("div", recursive=False)
+    colaborador = filhos_resumo[0].get_text(" ", strip=True).replace("você", "").strip() if filhos_resumo else None
+    m_peso = re.search(r"soma dos pesos\s*([\d.,]+)\s*%", resumo_row.get_text(" ", strip=True))
+    soma_pesos_pct = _parse_num_br_sinal(m_peso.group(1)) if m_peso else None
+
+    metas = []
+    for row in linhas_grid[2:]:
+        meta = _extrair_meta_individual(row, idx_mes)
+        if meta:
+            metas.append(meta)
+    if not metas:
+        return None
+
+    return {
+        "tem_dados": True,
+        "mes": mes,
+        "idx_mes": idx_mes,
+        "colaborador": colaborador,
+        "soma_pesos_pct": soma_pesos_pct,
+        "pesos_configurados": soma_pesos_pct is not None and abs(soma_pesos_pct - 100) < 0.5,
+        "metas": metas,
+    }
