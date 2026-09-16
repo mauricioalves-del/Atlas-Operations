@@ -1757,23 +1757,57 @@ def _extrair_dashboard_externo_por_nome(db: Session, nome_alvo: str, extrator, m
     por slug do nome no momento em que o admin cria (ver
     dashboards_externos_router._slugificar) e pode variar se houver colisão
     de nome - buscar pelo nome (normalizado: sem acento, sem espaço duplo,
-    minúsculo) é mais robusto do que fixar a chave esperada no código."""
+    minúsculo) é mais robusto do que fixar a chave esperada no código.
+
+    17/09/2026 (BUG real reportado pelo usuário no slide de Metas
+    Individuais: o slide dedicado não apareceu, e em vez dele "Metas
+    individuais" apareceu como slide GENÉRICO, com "Realizado" vazio em
+    todas as colunas - sintoma de extrair_generico lendo as tabelas cruas,
+    que não sabe ler valor de <input>, exatamente o que extrair_metas_
+    individuais foi feito pra tratar). Causa: nada impede o admin de
+    cadastrar dois indicadores dinâmicos com o MESMO nome_exibicao (só a
+    CHAVE é única - ver dashboards_externos_router.criar_indicador_dinamico).
+    A versão antiga desta função pegava o PRIMEIRO registro que batesse
+    com o nome (ordem arbitrária do banco) e só devolvia A CHAVE DELE pra
+    exclusão da coleta genérica (_coletar_dashboards_extras) - se existisse
+    uma segunda cópia com o mesmo nome (ex.: indicador recriado por engano
+    depois de um teste), essa segunda cópia continuava batendo na coleta
+    genérica normalmente e gerava um slide duplicado com a extração burra.
+
+    Agora resolve TODOS os registros com esse nome (não só o primeiro),
+    escolhe o melhor pra extração dedicada (prioriza ter html_content e,
+    entre os que têm, o mais recente por enviado_em) e devolve a chave de
+    TODOS os matches em "_chaves_dashboard_externo_correlatas" - o chamador
+    deve excluir o GRUPO inteiro da coleta genérica, não só a chave do
+    vencedor, senão uma cópia parada/duplicada continua vazando como slide
+    genérico."""
     alvo = _normalizar_nome_indicador(nome_alvo)
-    registro = next(
-        (r for r in db.query(models.DashboardExterno).all() if _normalizar_nome_indicador(r.nome_exibicao) == alvo),
-        None,
+    candidatos = [r for r in db.query(models.DashboardExterno).all() if _normalizar_nome_indicador(r.nome_exibicao) == alvo]
+    chaves_correlatas = [r.chave for r in candidatos]
+    candidatos_com_conteudo = sorted(
+        (r for r in candidatos if r.html_content),
+        key=lambda r: r.enviado_em or datetime.min,
+        reverse=True,
     )
-    if not registro or not registro.html_content:
-        return {"tem_dados": False, "enviado": False, "_chave_dashboard_externo": None}
+    registro = candidatos_com_conteudo[0] if candidatos_com_conteudo else None
+
+    if not registro:
+        return {"tem_dados": False, "enviado": False, "_chave_dashboard_externo": None,
+                "_chaves_dashboard_externo_correlatas": chaves_correlatas}
     try:
         resultado = extrator(registro.html_content, mes)
     except Exception:
-        return {"tem_dados": False, "enviado": True, "erro_extracao": True, "_chave_dashboard_externo": registro.chave}
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True,
+                "_chave_dashboard_externo": registro.chave,
+                "_chaves_dashboard_externo_correlatas": chaves_correlatas}
     if resultado is None:
-        return {"tem_dados": False, "enviado": True, "erro_extracao": True, "_chave_dashboard_externo": registro.chave}
+        return {"tem_dados": False, "enviado": True, "erro_extracao": True,
+                "_chave_dashboard_externo": registro.chave,
+                "_chaves_dashboard_externo_correlatas": chaves_correlatas}
     resultado["enviado"] = True
     resultado["enviado_em"] = registro.enviado_em.strftime("%d/%m/%Y %H:%M") if registro.enviado_em else None
     resultado["_chave_dashboard_externo"] = registro.chave
+    resultado["_chaves_dashboard_externo_correlatas"] = chaves_correlatas
     return resultado
 
 
@@ -2291,6 +2325,20 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "dispersao_ficha_tecnica_externo": _extrair_dashboard_externo_por_nome(
             db, "Dispersão de Ficha Técnica", dash_ext.extrair_dispersao_ficha_tecnica, mes
         ),
+        # Metas Individuais (16/09/2026, pedido do usuário: "Preciso implantar
+        # no relatório as metas individuais [...] Html adicionado ao atlas.
+        # Crie um slide abordando o assunto e mensurando resultados
+        # operacionais destacando evolução ou involução de processo") -
+        # mesmo padrão de indicador DINÂMICO com extração/slide dedicados que
+        # "Dispersão de Ficha Técnica" (ver docstring de
+        # _extrair_dashboard_externo_por_nome e dashboards_externos_extrator.
+        # extrair_metas_individuais). O cruzamento com o dado já consolidado
+        # do Stock Savvy (perda real de shelf life x meta de "% Prejuízo de
+        # Matéria prima e insumos") acontece no slide, não aqui - ver
+        # _cruzar_meta_prejuizo_materia_prima_com_stock_savvy.
+        "metas_individuais_externo": _extrair_dashboard_externo_por_nome(
+            db, "Metas individuais", dash_ext.extrair_metas_individuais, mes
+        ),
         # Fechamento Mensal do Stock Savvy (09/09/2026) - substitui a antiga
         # análise "Atlas + Stock Savvy" por números reais mapeados pela
         # implementação (ver _slide_fechamento_stock_savvy).
@@ -2305,11 +2353,19 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     # adicionar mais indicadores e adicionar automaticamente na construção do
     # MBR") - qualquer DashboardExterno enviado que não é um dos 5 slots nativos
     # acima entra aqui, com extração genérica (ver _coletar_dashboards_extras).
-    # Exclui a chave de "Dispersão de Ficha Técnica" (se encontrada acima) pra
-    # não duplicar - ela já tem slide dedicado.
-    chave_dispersao_ficha = dados["dispersao_ficha_tecnica_externo"].pop("_chave_dashboard_externo", None)
+    # Exclui TODAS as chaves correlatas de "Dispersão de Ficha Técnica" e
+    # "Metas Individuais" (não só a chave do registro escolhido pra extração
+    # dedicada - ver docstring de _extrair_dashboard_externo_por_nome,
+    # 17/09/2026: se existir mais de um indicador dinâmico cadastrado com o
+    # mesmo nome_exibicao, TODAS as cópias precisam sair da coleta genérica,
+    # senão uma cópia parada/duplicada vaza como slide genérico duplicado).
+    dados["dispersao_ficha_tecnica_externo"].pop("_chave_dashboard_externo", None)
+    dados["metas_individuais_externo"].pop("_chave_dashboard_externo", None)
+    chaves_correlatas_dispersao = dados["dispersao_ficha_tecnica_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
+    chaves_correlatas_metas = dados["metas_individuais_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
+    chaves_dedicadas = {c for c in (*chaves_correlatas_dispersao, *chaves_correlatas_metas) if c}
     dados["dashboards_extras"] = _coletar_dashboards_extras(
-        db, chaves_excluir={chave_dispersao_ficha} if chave_dispersao_ficha else None
+        db, chaves_excluir=chaves_dedicadas or None
     )
 
     # Scorecard por almoxarifado (20/08/2026, pedido do usuário) - montado
@@ -4049,6 +4105,295 @@ def _slide_dispersao_ficha_tecnica(prs: Presentation, mes_label: str, pagina: in
         f"Materiais crônicos (≥ {dado.get('limiar_freq_ops', 5)} OPs): {_fmt_num(dado.get('materiais_cronicos'))} · "
         f"Concentração Top 20: {_fmt_pct(dado.get('concentracao_top20_pct'))} do impacto absoluto.",
         tamanho=10, cor=CINZA_TEXTO,
+    )
+    return slide
+
+
+_RE_VALOR_MOEDA_CARTAO = re.compile(r"[\d.]+,\d{2}|\d+")
+
+
+def _parse_valor_cartao_moeda(texto):
+    """'R$ 1.163,33' -> 1163.33 ; '-R$ 240,00' -> -240.0 ; '(R$ 50,00)' ->
+    -50.0 - parser dedicado pros cartões de _linha_kpis do Fechamento Stock
+    Savvy. dashboards_externos_extrator.py já tem um _parse_money_br
+    parecido, mas aqueles cartões vêm de fechamento_stock_savvy_extrator.py
+    (módulo diferente) como texto livre já formatado pra exibição, e podem
+    trazer sinal negativo ou parênteses que aquele parser não trata."""
+    if texto is None:
+        return None
+    s = str(texto).strip()
+    if not s or s in ("—", "-", "–"):
+        return None
+    negativo = s.startswith("-") or "(" in s
+    m = _RE_VALOR_MOEDA_CARTAO.search(s)
+    if not m:
+        return None
+    token = m.group(0)
+    if "," in token:
+        token = token.replace(".", "").replace(",", ".")
+    try:
+        valor = float(token)
+    except ValueError:
+        return None
+    return -valor if negativo else valor
+
+
+def _cruzar_meta_prejuizo_com_stock_savvy(dado_metas: dict, dado_stock_savvy: dict):
+    """Cruza a meta individual "% Prejuízo de Matéria prima e insumos" com o
+    cartão financeiro "Perda Real" do Fechamento Stock Savvy do MESMO mês -
+    pedido explícito do usuário (16/09/2026, ao pedir o slide de Metas
+    Individuais): "Preciso que essa meta converse com os dados já
+    consolidados no relatório." Apesar do nome trazer "%", o campo de
+    unidade do próprio export de Metas Individuais marca essa meta em R$
+    (confirmado direto no HTML, ver extrair_metas_individuais) - a mesma
+    grandeza do cartão "Perda Real" do Stock Savvy, então dá pra comparar
+    os dois valores diretamente, não só a direção/sinal.
+
+    Cartão buscado por PALAVRA-CHAVE no rótulo ("perda" + "real"), não por
+    texto exato - os rótulos financeiros do Stock Savvy já mudaram de nome
+    entre dois exports da mesma semana (ver docstring de
+    _slide_fechamento_stock_savvy_panorama), então fixar o texto quebraria
+    de novo na próxima renomeação. Devolve None se a meta ou o cartão não
+    existirem pra este mês (silencioso - o slide mostra a ausência sem
+    travar a geração do relatório)."""
+    metas = (dado_metas or {}).get("metas") or []
+    meta = next(
+        (m for m in metas if "prejuizo" in _normalizar_nome_indicador(m.get("descricao"))
+         and "materia prima" in _normalizar_nome_indicador(m.get("descricao"))),
+        None,
+    )
+    if not meta or meta.get("realizado_mes") is None:
+        return None
+
+    financeiro = (dado_stock_savvy or {}).get("financeiro_shelf_life") or []
+    cartao = next(
+        (c for c in financeiro
+         if "perda" in _normalizar_nome_indicador(c.get("rotulo"))
+         and "real" in _normalizar_nome_indicador(c.get("rotulo"))),
+        None,
+    )
+    if not cartao:
+        return None
+    valor_stock_savvy = _parse_valor_cartao_moeda(cartao.get("valor"))
+    if valor_stock_savvy is None:
+        return None
+
+    realizado_meta = meta["realizado_mes"]
+    diferenca = realizado_meta - valor_stock_savvy
+    base = max(abs(valor_stock_savvy), 1.0)
+    divergencia_pct = abs(diferenca) / base * 100
+    return {
+        "rotulo_cartao": cartao.get("rotulo") or "Perda Real",
+        "valor_stock_savvy": valor_stock_savvy,
+        "realizado_meta": realizado_meta,
+        "diferenca": diferenca,
+        "divergencia_pct": divergencia_pct,
+        "reconciliado": divergencia_pct <= 15,
+    }
+
+
+def _tendencia_meta(meta: dict, idx_mes):
+    """Evolução/Involução/Estável comparando o mês do relatório com o mês
+    imediatamente anterior da MESMA série mensal (serie_meses), respeitando
+    a direção configurada da meta (maior-é-melhor / menor-é-melhor / sim-
+    não). Usa sempre o valor mensal BRUTO de "realizado" (nunca o
+    acumulado - onde o bug de soma indevida foi encontrado, ver
+    _extrair_meta_individual em dashboards_externos_extrator.py), então a
+    tendência não herda essa distorção mesmo quando
+    "acumulado_provavel_soma_indevida" é True pra essa meta."""
+    serie = meta.get("serie_meses") or []
+    if idx_mes is None or idx_mes <= 0 or idx_mes >= len(serie):
+        return "Sem histórico", CINZA_TEXTO
+    atual = serie[idx_mes].get("realizado")
+    anterior = serie[idx_mes - 1].get("realizado")
+    if atual is None or anterior is None:
+        return "Sem histórico", CINZA_TEXTO
+
+    if meta.get("tipo") == "booleano":
+        atual_ok = str(atual).strip().lower() in ("sim", "true", "1")
+        anterior_ok = str(anterior).strip().lower() in ("sim", "true", "1")
+        if atual_ok == anterior_ok:
+            return ("Estável (em dia)" if atual_ok else "Estável (pendente)"), (COR_SUCESSO if atual_ok else COR_ATENCAO)
+        return ("Evolução", COR_SUCESSO) if atual_ok else ("Involução", COR_ERRO)
+
+    if atual == anterior:
+        return "Estável", CINZA_TEXTO
+    direcao = (meta.get("direcao") or "").strip().lower()
+    melhorou = (atual > anterior) if direcao == "maior" else (atual < anterior)
+    return ("Evolução", COR_SUCESSO) if melhorou else ("Involução", COR_ERRO)
+
+
+def _fmt_valor_meta(meta: dict, chave: str):
+    """Formata meta[chave] (um número cru) respeitando a UNIDADE daquela
+    meta especificamente (R$/%/número puro) - cada meta do export pode ter
+    unidade diferente (ver extrair_metas_individuais), então não dá pra
+    formatar a tabela inteira com uma regra só."""
+    if meta.get("tipo") == "booleano":
+        return (meta.get("realizado_mes_texto") if chave == "realizado_mes" else None) or "—"
+    valor = meta.get(chave)
+    if valor is None:
+        return "—"
+    unidade = (meta.get("unidade") or "").strip().upper()
+    if unidade == "%":
+        return _fmt_pct(valor)
+    if unidade in ("R$", "RS", "REAIS"):
+        return _fmt_moeda(valor, casas=2)
+    return _fmt_num(valor, casas=1)
+
+
+def _slide_metas_individuais(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Metas Individuais (16/09/2026, pedido do usuário: "Preciso implantar
+    no relatório as metas individuais. Preciso que essa meta converse com
+    os dados já consolidados no relatório. Crie uma lógica para validar a
+    informação. Html adicionado ao atlas. Crie um slide abordando o
+    assunto e mensurando resultados operacionais destacando evolução ou
+    involução de processo") - indicador dinâmico "Metas individuais"
+    (Rotina Business/Lovable, layout diferente da família de dashboards já
+    tratada em dashboards_externos_extrator.py - ver docstring da seção 6
+    daquele módulo), com extração/slide dedicados no mesmo padrão de
+    "Dispersão de Ficha Técnica" (ver docstring de
+    _extrair_dashboard_externo_por_nome).
+
+    Validação ("crie uma lógica para validar a informação"): o próprio
+    export trouxe 3 problemas reais, confirmados por reconciliação manual
+    contra os números do próprio arquivo (ver docstring de
+    _extrair_meta_individual) - soma dos pesos configurados diferente de
+    100%, sinal invertido entre Meta e Realizado em metas financeiras, e
+    acumulado calculado como SOMA em vez de MÉDIA em metas percentuais.
+    Nenhum desses números "ruins" é escondido nem corrigido em silêncio -
+    aparecem sinalizados na tabela (⚠) e explicados na caixa "Validação dos
+    Dados de Origem", com o valor corrigido (média até o mês) ao lado do
+    valor bruto do export quando aplicável.
+
+    Cruzamento com dado já consolidado ("preciso que essa meta converse com
+    os dados já consolidados no relatório"): a meta "% Prejuízo de Matéria
+    prima e insumos" é comparada com o cartão "Perda Real" do Fechamento
+    Stock Savvy do mesmo mês (ver _cruzar_meta_prejuizo_com_stock_savvy) -
+    duas fontes independentes medindo o mesmo prejuízo financeiro.
+
+    Evolução/involução ("destacando evolução ou involução de processo"):
+    cada meta é comparada com o mês anterior da própria série (ver
+    _tendencia_meta) - não com a meta anual, que mistura direções
+    diferentes e não conta a história mês a mês que o usuário pediu."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Metas Individuais", mes_label, pagina,
+               "Metas individuais x resultados operacionais consolidados — filtrado pelo mês deste relatório")
+
+    dado = d.get("metas_individuais_externo") or {"tem_dados": False, "enviado": False}
+    if _slide_externo_indisponivel(slide, dado, "Metas Individuais"):
+        return slide
+
+    if not dado.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem metas configuradas em {mes_label}",
+            "O dashboard de Metas Individuais enviado não trouxe metas reconhecíveis para este mês — confira se o "
+            "arquivo está atualizado em Auditoria > Outros Dashboards.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
+    metas = dado.get("metas") or []
+    idx_mes = dado.get("idx_mes")
+    tendencias = [_tendencia_meta(m, idx_mes) for m in metas]
+    n_evolucao = sum(1 for label, _ in tendencias if label == "Evolução")
+    n_involucao = sum(1 for label, _ in tendencias if label == "Involução")
+    n_inconsistentes = sum(1 for m in metas if m.get("sinal_inconsistente") or m.get("acumulado_provavel_soma_indevida"))
+
+    colaborador = dado.get("colaborador") or "—"
+    _texto(slide, MARGEM_IN, 1.28, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+           f"Responsável: {colaborador} · {len(metas)} meta(s) monitorada(s)",
+           tamanho=10.5, cor=CINZA_TEXTO, italico=True)
+
+    soma_pesos = dado.get("soma_pesos_pct")
+    pesos_ok = dado.get("pesos_configurados")
+    _linha_kpis(slide, 1.58, [
+        {"valor": _fmt_pct(soma_pesos) if soma_pesos is not None else "—",
+         "rotulo": "Soma dos Pesos (esperado: 100%)", "cor": COR_SUCESSO if pesos_ok else COR_ERRO},
+        {"valor": _fmt_num(n_evolucao), "rotulo": "Metas em Evolução", "cor": COR_SUCESSO if n_evolucao else CINZA_TEXTO},
+        {"valor": _fmt_num(n_involucao), "rotulo": "Metas em Involução", "cor": COR_ERRO if n_involucao else COR_SUCESSO},
+        {"valor": _fmt_num(n_inconsistentes), "rotulo": "Metas com Dado Inconsistente no Export",
+         "cor": COR_ATENCAO if n_inconsistentes else COR_SUCESSO},
+    ])
+
+    y_tabela = 2.5
+    linhas_tabela = []
+    for m, (tendencia_label, tendencia_cor) in zip(metas, tendencias):
+        descricao = m.get("descricao") or "—"
+        if len(descricao) > 38:
+            descricao = descricao[:38].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
+        marcador = " ⚠" if (m.get("sinal_inconsistente") or m.get("acumulado_provavel_soma_indevida")) else ""
+        linhas_tabela.append([
+            (descricao + marcador, CINZA_TEXTO, False),
+            ((_fmt_num(m.get("peso_pct"), casas=0) + "%") if m.get("peso_pct") is not None else "—", CINZA_TEXTO, False),
+            (_fmt_valor_meta(m, "realizado_mes"), CINZA_TEXTO, False),
+            (_fmt_valor_meta(m, "meta_mes"), CINZA_TEXTO, False),
+            (_fmt_pct(m.get("ating_mes_pct")) if m.get("ating_mes_pct") is not None else "—", CINZA_TEXTO, False),
+            (tendencia_label, tendencia_cor, True),
+        ])
+    altura_tabela = min(2.7, 0.5 + 0.4 * len(linhas_tabela))
+    _tabela(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela,
+            ["Meta", "Peso", "Realizado (mês)", "Meta (mês)", "Atingimento (mês)", "Tendência"],
+            linhas_tabela, larguras_relativas=[3.4, 0.7, 1.5, 1.5, 1.5, 1.4], tamanho_fonte=10.5)
+
+    y_apos_tabela = y_tabela + altura_tabela + 0.25
+    largura_metade = (LARGURA_IN - 2 * MARGEM_IN - 0.3) / 2
+
+    cruzamento = _cruzar_meta_prejuizo_com_stock_savvy(dado, d.get("fechamento_stock_savvy"))
+    if cruzamento:
+        texto_cruzamento = (
+            f"Meta individual (Realizado do mês): {_fmt_moeda(cruzamento['realizado_meta'], casas=2)} · "
+            f"Stock Savvy (\"{cruzamento['rotulo_cartao']}\"): {_fmt_moeda(cruzamento['valor_stock_savvy'], casas=2)} · "
+            f"Divergência: {_fmt_pct(cruzamento['divergencia_pct'])}. "
+            + ("Os dois números batem dentro da margem esperada."
+               if cruzamento["reconciliado"] else
+               "Divergência acima de 15% entre as duas fontes — vale conferir se medem exatamente o mesmo recorte "
+               "de perda antes de reportar os dois lado a lado.")
+        )
+        _caixa_leitura(
+            slide, MARGEM_IN, y_apos_tabela, largura_metade, 1.35,
+            "Cruzamento com Stock Savvy — Prejuízo de Matéria-Prima", texto_cruzamento,
+            cor_fundo=OFF_WHITE, cor_rotulo=(COR_SUCESSO if cruzamento["reconciliado"] else COR_ATENCAO), tamanho_texto=10.5,
+        )
+    else:
+        _caixa_leitura(
+            slide, MARGEM_IN, y_apos_tabela, largura_metade, 1.35,
+            "Cruzamento com Stock Savvy — Prejuízo de Matéria-Prima",
+            "Não foi possível cruzar esta meta com o Fechamento Stock Savvy deste mês — confira se a meta \"% "
+            "Prejuízo de Matéria prima e insumos\" e o cartão financeiro \"Perda Real\" existem para o mesmo período.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=10.5,
+        )
+
+    x_direita = MARGEM_IN + largura_metade + 0.3
+    problemas = []
+    if soma_pesos is not None and not pesos_ok:
+        problemas.append(
+            f"Soma dos pesos configurados = {_fmt_pct(soma_pesos)} (esperado 100%) — os pesos das metas deste "
+            "colaborador não estão configurados corretamente na ferramenta de origem."
+        )
+    for m in metas:
+        if m.get("sinal_inconsistente"):
+            problemas.append(
+                f"\"{m['descricao']}\": Meta e Realizado do mês têm sinais opostos no export de origem — o "
+                f"atingimento percentual mostrado ({_fmt_pct(m.get('ating_mes_pct'))}) não é confiável."
+            )
+        if m.get("acumulado_provavel_soma_indevida"):
+            problemas.append(
+                f"\"{m['descricao']}\": o acumulado do ano parece somar os meses em vez de tirar a média (métrica "
+                f"em %) — média real até {mes_label}: {_fmt_pct(m.get('media_mensal_ate_mes'))}."
+            )
+    texto_problemas = " ".join(problemas) if problemas else "Nenhuma inconsistência adicional identificada nos dados deste mês."
+    _caixa_leitura(
+        slide, x_direita, y_apos_tabela, largura_metade, 1.35,
+        "Validação dos Dados de Origem", texto_problemas,
+        cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO if problemas else COR_SUCESSO, tamanho_texto=10,
+    )
+
+    _texto(
+        slide, MARGEM_IN, ALTURA_IN - 0.45, LARGURA_IN - 2 * MARGEM_IN, 0.32,
+        f"Fonte: dashboard Metas Individuais (Auditoria > Outros Dashboards), enviado em {dado.get('enviado_em') or '—'} — "
+        "⚠ na tabela indica meta com inconsistência de dados detectada no export de origem (ver caixa de validação).",
+        tamanho=9, cor=CINZA_TEXTO, italico=True,
     )
     return slide
 
@@ -5894,7 +6239,8 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
         "Farol de Shelf-Life", "Recuperação de Shelf",
-        "Dispersão de Ficha Técnica", "Testes Industriais", "FEFO",
+        "Dispersão de Ficha Técnica", "Metas Individuais",
+        "Testes Industriais", "FEFO",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -5910,6 +6256,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
+    _slide_metas_individuais(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
     _slide_fefo(prs, mes_label, _pag(), dados)
     for item in dados["dashboards_extras"]:
