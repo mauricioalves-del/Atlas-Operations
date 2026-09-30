@@ -38,6 +38,68 @@ def seed_catalogo(db: Session):
     db.commit()
 
 
+def reprocessar_almoxarifados_nao_mapeados(db: Session):
+    """Corrige em massa fechamentos JÁ importados que ficaram com o
+    almoxarifado gravado como "NAO_MAPEADO__<valor original>" (ver
+    hipoteses_config.normalizar_almoxarifado).
+
+    Por que isso é necessário e por que editar a tela Cadastros >
+    Almoxarifados não resolve sozinho (30/09/2026, caso real: "Pátio
+    Paulista" aparecia como NAO_MAPEADO__ mesmo depois de cadastrar o
+    código lá): a normalização só roda NO MOMENTO DA IMPORTAÇÃO da
+    planilha de fechamento (ver fechamento_router.importar_fechamento) -
+    o resultado fica gravado como texto direto em várias tabelas
+    (FechamentoInventario, ItemFechamento, AcaoPosInventario, Divergencia,
+    MovimentacaoHistorico), sem nenhuma referência viva ao cadastro de
+    Almoxarifado. Cadastrar um código novo em Cadastros só afeta
+    IMPORTAÇÕES FUTURAS - não reprocessa o que já foi importado antes. Da
+    mesma forma, adicionar uma palavra-chave nova em
+    ALMOXARIFADO_DE_PARA_PREFIXOS (hipoteses_config.py) só resolve o
+    problema pra frente, a menos que os registros antigos sejam
+    reprocessados manualmente - é isso que esta função faz, sozinha, a
+    cada boot do backend: para cada valor ainda marcado NAO_MAPEADO__,
+    tenta normalizar de novo o valor original (a parte depois do prefixo)
+    com as regras ATUAIS de ALMOXARIFADO_DE_PARA_PREFIXOS: se agora
+    resolve pra um código oficial (por causa de uma palavra-chave
+    adicionada depois da importação original), atualiza todas as tabelas
+    acima que guardam essa cópia. Idempotente e seguro de rodar sempre:
+    se não sobrar nenhum NAO_MAPEADO__ que hoje já resolveria, não faz
+    nada; nunca derruba o boot do servidor se algo der errado."""
+    from .hipoteses_config import normalizar_almoxarifado
+
+    tabelas = [
+        models.FechamentoInventario, models.ItemFechamento, models.AcaoPosInventario,
+        models.Divergencia, models.MovimentacaoHistorico,
+    ]
+    try:
+        valores_antigos = set()
+        for tabela in tabelas:
+            for (v,) in db.query(tabela.almoxarifado).distinct().all():
+                if v and v.startswith("NAO_MAPEADO__"):
+                    valores_antigos.add(v)
+
+        total_corrigidos = 0
+        for valor_antigo in valores_antigos:
+            bruto = valor_antigo[len("NAO_MAPEADO__"):]
+            novo_codigo = normalizar_almoxarifado(bruto)
+            if novo_codigo == valor_antigo or novo_codigo.startswith("NAO_MAPEADO__"):
+                continue  # ainda não bate com nenhuma palavra-chave conhecida hoje
+            for tabela in tabelas:
+                n = (
+                    db.query(tabela)
+                    .filter(tabela.almoxarifado == valor_antigo)
+                    .update({"almoxarifado": novo_codigo}, synchronize_session=False)
+                )
+                total_corrigidos += n
+            print(f"Atlas: reprocessado almoxarifado '{valor_antigo}' -> '{novo_codigo}' ({total_corrigidos} registro(s) corrigido(s) até agora).")
+
+        if total_corrigidos:
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Atlas: falha ao reprocessar almoxarifados NAO_MAPEADO__ ({type(e).__name__}: {e}) - siga normalmente, tenta de novo no próximo boot.")
+
+
 def seed_dados_historicos(db: Session):
     """Só roda se a tabela de histórico ainda estiver vazia e os CSVs de
     seed_data/ existirem no deploy."""
@@ -115,6 +177,7 @@ def rodar_bootstrap_completo(SessionLocal):
     db = SessionLocal()
     try:
         seed_catalogo(db)
+        reprocessar_almoxarifados_nao_mapeados(db)
         seed_dados_historicos(db)
     finally:
         db.close()

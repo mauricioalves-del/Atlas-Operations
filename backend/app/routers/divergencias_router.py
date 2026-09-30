@@ -805,3 +805,90 @@ def confirmar(div_id: int, payload: schemas.ConfirmarDivergencia, usuario: model
     _marcar_investigacao_pendente(db, [div])
     buscar_avisos_baixa_pendente(db, [div])
     return div
+
+
+@router.post("/resolver-lote")
+def resolver_lote(payload: schemas.ResolverDivergenciasLote, usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
+    """Resolve várias divergências de uma vez - pensado pro fechamento
+    mensal de inventário (30/09/2026, pedido do usuário), quando várias
+    divergências pequenas já têm a mesma explicação (ex: "Baixa Semanal
+    de Avarias") e confirmá-las uma por uma pelo fluxo normal (abrir
+    detalhe -> escolher hipótese -> Confirmar) seria repetitivo.
+
+    Se `hipotese_confirmada` vier preenchido no payload, usa ela pra TODAS
+    as divergências selecionadas (valida uma vez só contra o catálogo). Se
+    vier vazio, usa a hipótese que cada divergência já tem (confirmada, se
+    houver, senão a sugerida pela IA) - útil quando o lote tem causas
+    diferentes mas você só quer bater o martelo em todas de uma vez.
+
+    Nunca falha o lote inteiro por causa de um item problemático - cada
+    divergência cai numa das categorias abaixo, todas reportadas de volta:
+    já resolvida antes (pulada, sem reprocessar), sem nenhuma hipótese
+    disponível (nem confirmada, nem de IA, nem informada no payload - não
+    dá pra resolver sem uma), ou id que não existe (possivelmente já
+    excluída/mudou de página entre a seleção e o clique). Mesma lógica de
+    aprendizado (ajuste de peso da hipótese + registro em CasoMLFeedback)
+    do endpoint /confirmar individual, aplicada a cada item resolvido."""
+    if not payload.ids:
+        raise HTTPException(400, "Selecione ao menos uma divergência.")
+
+    if payload.hipotese_confirmada and not db.query(models.Hipotese).filter_by(codigo=payload.hipotese_confirmada).first():
+        raise HTTPException(400, f"Hipótese '{payload.hipotese_confirmada}' não existe no catálogo oficial")
+
+    divergencias = db.query(models.Divergencia).filter(models.Divergencia.id.in_(payload.ids)).all()
+    por_id = {d.id: d for d in divergencias}
+    resolvidas, ja_resolvidas, sem_hipotese = [], [], []
+
+    for div_id in payload.ids:
+        div = por_id.get(div_id)
+        if not div:
+            continue
+        if div.status == "Resolvida":
+            ja_resolvidas.append(div_id)
+            continue
+
+        codigo_hipotese = payload.hipotese_confirmada or div.hipotese_confirmada or div.hipotese_ia
+        # a hipótese própria do item (confirmada antes, ou sugerida pela IA) pode
+        # ter sido descadastrada do catálogo desde então - revalida sempre que não
+        # veio explicitamente no payload (esse caso já foi validado acima).
+        if not codigo_hipotese or (
+            not payload.hipotese_confirmada and not db.query(models.Hipotese).filter_by(codigo=codigo_hipotese).first()
+        ):
+            sem_hipotese.append(div_id)
+            continue
+
+        div.hipotese_confirmada = codigo_hipotese
+        div.solucao_aplicada = payload.solucao_aplicada or div.solucao_aplicada
+        div.responsavel = payload.responsavel or usuario.nome_exibicao or usuario.username
+        div.status = "Resolvida"
+        div.resolvido_em = datetime.utcnow()
+
+        # --- mesmo loop de aprendizado do /confirmar individual ---
+        if div.hipotese_regras:
+            h = db.query(models.Hipotese).filter_by(codigo=div.hipotese_regras).first()
+            if h:
+                if div.hipotese_regras == codigo_hipotese:
+                    h.peso_padrao = min(PESO_MAX, h.peso_padrao + INCREMENTO_ACERTO)
+                else:
+                    h.peso_padrao = max(PESO_MIN, h.peso_padrao - DECREMENTO_ERRO)
+
+        db.add(models.CasoMLFeedback(
+            divergencia_id=div.id, sku=div.sku, almoxarifado=div.almoxarifado,
+            categoria_produto=div.categoria_produto, divergencia_qtd=div.divergencia_qtd,
+            valor_estimado=div.valor_estimado, data_deteccao=div.data_deteccao,
+            hipotese_confirmada=codigo_hipotese,
+        ))
+        resolvidas.append(div_id)
+
+    nao_encontrados = [i for i in payload.ids if i not in por_id]
+
+    registrar_log(db, usuario.username, "resolver_divergencias_lote", detalhes={
+        "total_solicitado": len(payload.ids), "resolvidas": len(resolvidas),
+        "ja_resolvidas": len(ja_resolvidas), "sem_hipotese": len(sem_hipotese),
+        "nao_encontrados": len(nao_encontrados), "hipotese_forcada": payload.hipotese_confirmada,
+    })
+    db.commit()
+    return {
+        "resolvidas": resolvidas, "ja_resolvidas": ja_resolvidas,
+        "sem_hipotese": sem_hipotese, "nao_encontrados": nao_encontrados,
+    }

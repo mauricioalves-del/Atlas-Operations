@@ -420,10 +420,25 @@
           </label>
         </div>
       </header>
+      <!-- 30/09/2026, pedido do usuário: resolver em lote divergências que o
+           fechamento mensal de inventário já deixou claro que não são mais um
+           problema real, sem confirmar uma por uma - ver resolverDivergenciasLote()
+           em app.js e POST /divergencias/resolver-lote no backend. Some pra quem
+           tem papel "leitura" em aplicarPermissoesNaUI(). -->
+      <div id="lista-barra-lote" class="hidden" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 10px">
+        <span class="hint" id="lista-lote-contagem" style="margin:0"></span>
+        <select id="lista-lote-hipotese" class="select-filtro" title="Deixe em branco para manter a hipótese que cada divergência já tem (confirmada ou sugerida pela IA)">
+          <option value="">Manter hipótese de cada item</option>
+        </select>
+        <input id="lista-lote-solucao" class="select-filtro" type="text" placeholder="Solução aplicada (opcional, para todas)">
+        <input id="lista-lote-responsavel" class="select-filtro" type="text" placeholder="Responsável (opcional)">
+        <button id="btn-resolver-lote" class="btn-primario" style="margin:0">Resolver selecionadas</button>
+      </div>
       <div class="lista-wrap">
         <table class="tabela" id="tabela-lista">
           <thead>
             <tr>
+              <th><input type="checkbox" id="lista-marcar-todos" title="Selecionar todas desta página"></th>
               <th class="th-ordenavel" data-campo="id">ID <span class="icone-ordenacao"></span></th>
               <th>SKU</th><th>Descrição</th><th>Almoxarifado</th><th>Data</th>
               <th class="th-ordenavel" data-campo="valor">Valor <span class="icone-ordenacao"></span></th>
@@ -1947,6 +1962,6 @@
   </div>
 </div>
 
-<script src="app.js?v=102"></script>
+<script src="app.js?v=103"></script>
 </body>
 </html>

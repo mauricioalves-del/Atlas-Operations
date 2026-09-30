@@ -67,6 +67,18 @@ class ConfirmarDivergencia(BaseModel):
     tempo_resolucao_minutos: Optional[float] = None
 
 
+class ResolverDivergenciasLote(BaseModel):
+    """30/09/2026, pedido do usuário: resolver em lote divergências que o
+    fechamento mensal de inventário já deixou claro que não são mais um
+    problema real (ex: várias pequenas baixas de avaria com a mesma
+    explicação), sem precisar confirmar uma por uma pelo fluxo normal.
+    Ver divergencias_router.resolver_lote."""
+    ids: list[int]
+    hipotese_confirmada: Optional[str] = None  # se vazio, usa a hipótese já sugerida/confirmada de cada item
+    solucao_aplicada: Optional[str] = None
+    responsavel: Optional[str] = None
+
+
 class ResumoImportacao(BaseModel):
     arquivo: str
     linhas_processadas: int

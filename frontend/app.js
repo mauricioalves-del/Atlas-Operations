@@ -90,6 +90,13 @@ function aplicarPermissoesNaUI() {
 
   const btnRecalcular = document.getElementById("btn-recalcular-valores");
   if (btnRecalcular) btnRecalcular.classList.toggle("hidden", usuarioAtual.papel === "leitura");
+  // resolver em lote (30/09/2026) - mesma restrição do backend (requer_papel
+  // admin/analista no POST /divergencias/resolver-lote). Some só a barra de
+  // ação; a coluna de checkbox fica visível mas inofensiva sem o botão pra
+  // acioná-la (escondê-la também desalinharia o cabeçalho com as linhas, já
+  // que cada <tr> sempre inclui o <td> da checkbox).
+  const barraLoteLista = document.getElementById("lista-barra-lote");
+  if (barraLoteLista && usuarioAtual.papel === "leitura") barraLoteLista.classList.add("hidden");
   const btnGerarCiencia = document.getElementById("btn-gerar-ciencia");
   if (btnGerarCiencia) btnGerarCiencia.classList.toggle("hidden", usuarioAtual.papel === "leitura");
   const btnCriarPedido = document.getElementById("btn-criar-pedido");
@@ -1447,6 +1454,7 @@ async function carregarLista(pagina = 1) {
   tbody.innerHTML = divs
     .map(
       (d) => `<tr data-id="${d.id}">
+        <td><input type="checkbox" class="lista-check" data-id="${d.id}"></td>
         <td>${d.id}</td><td>${d.sku}${d.tem_investigacao_pendente ? ' <span title="Este SKU já tem outro caso em investigação" style="color:var(--alto)">⚠️</span>' : ""}${d.aviso_baixa_pendente ? ` <span title="${d.aviso_baixa_pendente.replace(/"/g, "&quot;")}" style="color:var(--medio)">🕒</span>` : ""}</td><td class="col-descricao">${d.descricao_produto || "—"}</td><td>${d.almoxarifado}</td>
         <td>${formatarDataCurta(d.data_deteccao)}</td>
         <td>${formatarMoeda(d.valor_estimado)}</td>
@@ -1454,8 +1462,17 @@ async function carregarLista(pagina = 1) {
         <td>${badge(d.status)}</td><td>&rarr;</td>
       </tr>`
     )
-    .join("") || `<tr><td colspan="10" style="color:var(--muted)">Nenhuma divergência encontrada.</td></tr>`;
+    .join("") || `<tr><td colspan="11" style="color:var(--muted)">Nenhuma divergência encontrada.</td></tr>`;
   tbody.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => abrirDetalhe(tr.dataset.id)));
+  tbody.querySelectorAll(".lista-check").forEach((chk) => {
+    chk.addEventListener("click", (ev) => ev.stopPropagation());
+    chk.addEventListener("change", atualizarBarraLoteLista);
+  });
+  // a tabela é redesenhada a cada carregarLista() (mudou filtro/página/ordenação) -
+  // a seleção de um carregamento anterior não corresponde mais às linhas atuais.
+  document.getElementById("lista-marcar-todos").checked = false;
+  popularSelectHipotesesLote();
+  atualizarBarraLoteLista();
 
   const paginacaoEl = document.getElementById("paginacao-lista");
   if (paginacaoEl) {
@@ -1518,6 +1535,76 @@ if (btnRecalcularValores) {
     carregarLista();
   });
 }
+
+// ---------- resolver em lote (30/09/2026, pedido do usuário: o fechamento
+// mensal de inventário gera muitas divergências pequenas com a mesma
+// explicação - resolver uma por uma pelo fluxo normal (abrir detalhe ->
+// escolher hipótese -> Confirmar) ficava repetitivo). A seleção é só da
+// página atual (a lista é paginada no servidor) - por isso o contador deixa
+// isso explícito, em vez de dar a entender que cobre a lista inteira. ----------
+function popularSelectHipotesesLote() {
+  const sel = document.getElementById("lista-lote-hipotese");
+  if (sel.options.length > 1) return; // já populado
+  Object.entries(todasHipoteses())
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .forEach(([codigo, nome]) => {
+      const opt = document.createElement("option");
+      opt.value = codigo;
+      opt.textContent = nome;
+      sel.appendChild(opt);
+    });
+}
+
+function atualizarBarraLoteLista() {
+  const selecionados = Array.from(document.querySelectorAll(".lista-check:checked")).map((c) => c.dataset.id);
+  const barra = document.getElementById("lista-barra-lote");
+  const podeResolverLote = !usuarioAtual || usuarioAtual.papel !== "leitura"; // ver aplicarPermissoesNaUI()
+  barra.classList.toggle("hidden", selecionados.length === 0 || !podeResolverLote);
+  document.getElementById("lista-lote-contagem").textContent = `${selecionados.length} selecionada(s) nesta página`;
+}
+
+document.getElementById("lista-marcar-todos").addEventListener("change", (ev) => {
+  document.querySelectorAll(".lista-check").forEach((chk) => (chk.checked = ev.target.checked));
+  atualizarBarraLoteLista();
+});
+
+document.getElementById("btn-resolver-lote").addEventListener("click", async () => {
+  const ids = Array.from(document.querySelectorAll(".lista-check:checked")).map((c) => parseInt(c.dataset.id));
+  if (!ids.length) return;
+  const hipotese = document.getElementById("lista-lote-hipotese").value;
+  const solucao = document.getElementById("lista-lote-solucao").value.trim();
+  const responsavel = document.getElementById("lista-lote-responsavel").value.trim();
+  const rotuloEscolhido = hipotese ? todasHipoteses()[hipotese] || hipotese : "a hipótese que cada item já tem (confirmada ou sugerida pela IA)";
+  if (!confirm(`Resolver ${ids.length} divergência(s) usando ${rotuloEscolhido}?`)) return;
+
+  const btn = document.getElementById("btn-resolver-lote");
+  btn.textContent = "Resolvendo...";
+  const res = await apiFetch(`${API}/divergencias/resolver-lote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ids, hipotese_confirmada: hipotese || null,
+      solucao_aplicada: solucao || null, responsavel: responsavel || null,
+    }),
+  });
+  const data = await res.json();
+  btn.textContent = "Resolver selecionadas";
+  if (!res.ok) {
+    alert(data.detail || "Erro ao resolver divergências em lote.");
+    return;
+  }
+
+  const partes = [`${data.resolvidas.length} resolvida(s)`];
+  if (data.ja_resolvidas.length) partes.push(`${data.ja_resolvidas.length} já estava(m) resolvida(s) (ignorada(s))`);
+  if (data.sem_hipotese.length) partes.push(`${data.sem_hipotese.length} sem hipótese disponível - escolha uma hipótese fixa acima ou confirme individualmente`);
+  if (data.nao_encontrados.length) partes.push(`${data.nao_encontrados.length} não encontrada(s)`);
+  alert(partes.join(" · "));
+
+  document.getElementById("lista-lote-solucao").value = "";
+  document.getElementById("lista-lote-responsavel").value = "";
+  document.getElementById("lista-lote-hipotese").value = "";
+  carregarLista(paginaAtualLista);
+});
 
 
 // ---------- detalhe ----------
