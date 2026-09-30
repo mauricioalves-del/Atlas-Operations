@@ -3574,22 +3574,47 @@ function renderTabelasFechamentoDetalhe(termo) {
 
 async function abrirFechamentoDetalhe(id) {
   fechamentoDetalheAtualId = id;
-  const [f, divergentes, ok] = await Promise.all([
+  const [f, divergentes, ok, resumo] = await Promise.all([
     apiFetch(`${API}/fechamentos/${id}`).then((r) => r.json()),
     apiFetch(`${API}/fechamentos/${id}/itens?divergente=true`).then((r) => r.json()),
     apiFetch(`${API}/fechamentos/${id}/itens?divergente=false`).then((r) => r.json()),
+    apiFetch(`${API}/fechamentos/${id}/resumo`).then((r) => (r.ok ? r.json() : null)),
   ]);
 
   document.getElementById("fechamento-detalhe-titulo").textContent =
     `Fechamento — ${f.almoxarifado} — ${formatarDataCurta(f.data_fechamento)}`;
 
+  // Resumo de acurácia ponderada (30/09/2026, pedido do usuário: "resumo
+  // melhor de inventário... porcentagem ponderada IAP, IAQ e Item a Item
+  // [...] valor de sobra e valor de falta") - IAP/IAQ/item a item usam o
+  // MESMO farol de cor da tela "Acurácia Ponderada" (corFarolAcuracia),
+  // pra ler igual em qualquer lugar do Atlas. `resumo` pode vir null se o
+  // backend ainda não tiver essa rota (versão mais antiga) - nesse caso
+  // cai pros 4 cards de sempre, sem quebrar a tela.
+  const cardsAcuracia = resumo
+    ? [
+        { label: "Acurácia item a item", value: resumo.item_a_item_pct != null ? resumo.item_a_item_pct + "%" : "—", cor: corFarolAcuracia(resumo.item_a_item_pct) },
+        { label: "IAQ (ponderado por quantidade)", value: resumo.iaq_pct != null ? resumo.iaq_pct + "%" : "—", cor: corFarolAcuracia(resumo.iaq_pct) },
+        { label: "IAP (ponderado por valor)", value: resumo.iap_pct != null ? resumo.iap_pct + "%" : `— (custo: ${resumo.cobertura_custo_pct ?? 0}%)`, cor: resumo.iap_pct != null ? corFarolAcuracia(resumo.iap_pct) : "var(--muted)" },
+      ]
+    : [];
+  const cardsValor = resumo
+    ? [
+        { label: "Valor de falta", value: formatarMoeda(resumo.valor_falta), cor: resumo.valor_falta ? "var(--critico)" : "var(--muted)" },
+        { label: "Valor de sobra", value: formatarMoeda(resumo.valor_sobra), cor: resumo.valor_sobra ? "var(--ok)" : "var(--muted)" },
+        { label: "Resultado líquido (sobra − falta)", value: formatarMoeda(resumo.resultado_liquido), cor: resumo.resultado_liquido > 0 ? "var(--ok)" : resumo.resultado_liquido < 0 ? "var(--critico)" : "var(--muted)" },
+      ]
+    : [];
+
   document.getElementById("fechamento-kpi-row").innerHTML = [
     { label: "Itens avaliados", value: f.total_itens },
     { label: "Divergências", value: f.total_divergentes },
+    ...cardsAcuracia,
     { label: "Valor em risco", value: formatarMoeda(f.valor_total_divergente), accent: true },
+    ...cardsValor,
     { label: "Recorrentes (⭐)", value: divergentes.filter((i) => i.destaque_recorrente).length },
   ]
-    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value ${c.accent ? "accent" : ""}">${c.value}</div></div>`)
+    .map((c) => `<div class="kpi-card"><div class="kpi-label">${c.label}</div><div class="kpi-value ${c.accent ? "accent" : ""}" style="${c.cor ? "color:" + c.cor : ""}">${c.value}</div></div>`)
     .join("");
 
   fechamentoDetalheItensDivergentes = divergentes;

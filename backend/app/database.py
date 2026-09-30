@@ -102,6 +102,13 @@ def garantir_colunas_novas():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE conciliacoes_ciencia ADD COLUMN papel_assinatura VARCHAR"))
                 conn.commit()
+        if "resumo_acuracia_snapshot" not in colunas_ciencia:
+            # 30/09/2026: resumo de acurácia ponderada (IAP/IAQ/item-a-item +
+            # valor de sobra/falta) congelado no momento da assinatura, pro
+            # PDF de ciência documentar isso - ver models.ConciliacaoCiencia.
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE conciliacoes_ciencia ADD COLUMN resumo_acuracia_snapshot JSON"))
+                conn.commit()
 
     colunas_almox = {c["name"] for c in inspecao.get_columns("almoxarifados")}
     if "ativo" not in colunas_almox:

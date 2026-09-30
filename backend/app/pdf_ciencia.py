@@ -49,6 +49,36 @@ def gerar_pdf_ciencia(ciencia, fechamento) -> bytes:
     pdf.cell(0, 6, f"Valor total divergente: R$ {ciencia.valor_total_divergente:,.2f}", ln=True)
     pdf.ln(4)
 
+    # 30/09/2026, pedido do usuário: "adicione isso no documento assinado
+    # pelos gestores para que fique documentado" (sobre o resumo de
+    # acurácia ponderada IAP/IAQ/item-a-item + valor de sobra/falta,
+    # mesmas fórmulas da tela "Acurácia Ponderada" - ver
+    # fechamento_router._calcular_resumo_fechamento). `resumo` vem
+    # congelado em ciencia.resumo_acuracia_snapshot no momento da
+    # assinatura (gerar_ciencia) - se vier None (ciência assinada ANTES
+    # desta mudança existir), a seção inteira é omitida em vez de mostrar
+    # um resumo incompleto ou recalculado de dados que já podem ter
+    # mudado desde a assinatura.
+    resumo = getattr(ciencia, "resumo_acuracia_snapshot", None)
+    if resumo:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, "Resumo de acurácia ponderada", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+
+        def _pct_txt(v):
+            return f"{v:.2f}%" if v is not None else "sem dado"
+
+        pdf.cell(0, 6, f"Acurácia item a item: {_pct_txt(resumo.get('item_a_item_pct'))}", ln=True)
+        pdf.cell(0, 6, f"IAQ (ponderado por quantidade): {_pct_txt(resumo.get('iaq_pct'))}", ln=True)
+        iap_txt = _pct_txt(resumo.get("iap_pct"))
+        cobertura = resumo.get("cobertura_custo_pct")
+        if resumo.get("iap_pct") is None and cobertura is not None:
+            iap_txt = f"sem dado (cobertura de custo: {cobertura:.2f}%)"
+        pdf.cell(0, 6, f"IAP (ponderado por valor): {iap_txt}", ln=True)
+        pdf.cell(0, 6, f"Valor de falta: R$ {resumo.get('valor_falta', 0):,.2f}  |  Valor de sobra: R$ {resumo.get('valor_sobra', 0):,.2f}", ln=True)
+        pdf.cell(0, 6, f"Resultado líquido (sobra - falta): R$ {resumo.get('resultado_liquido', 0):,.2f}", ln=True)
+        pdf.ln(4)
+
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Confirmação de ciência", ln=True)
     pdf.set_font("Helvetica", "", 10)

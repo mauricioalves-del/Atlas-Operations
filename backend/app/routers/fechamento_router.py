@@ -1130,6 +1130,91 @@ def listar_itens_fechamento(
     return q.order_by(models.ItemFechamento.destaque_recorrente.desc(), models.ItemFechamento.valor_estimado.desc()).all()
 
 
+def _calcular_resumo_fechamento(db: Session, fechamento_id: int) -> dict:
+    """Resumo de acurácia de UM fechamento específico (30/09/2026, pedido
+    do usuário: "quero que faça um resumo melhor de inventário.
+    Considerando porcentagem ponderada IAP, IAQ e Item a Item. Bem como
+    valor de sobre e valor de falta" - ao olhar o card "Fechamento —
+    Almox_SP_Processo — 30/09", que só mostrava Itens avaliados/
+    Divergências/Valor em risco/Recorrentes).
+
+    Reaproveita EXATAMENTE as mesmas fórmulas de dashboard/kpis,
+    dashboard/iaq e dashboard/iap (pra não inventar uma segunda definição
+    de IAP/IAQ divergente da que a tela "Acurácia Ponderada" já usa) -
+    a única diferença é o escopo: aqueles três endpoints filtram por
+    almoxarifado+mês (podem agregar VÁRIOS fechamentos do mesmo
+    almoxarifado no mesmo mês), enquanto aqui o pedido é sobre UM
+    FECHAMENTO ESPECÍFICO (um almoxarifado, uma data) - por isso filtra
+    só por fechamento_id, sem passar por _query_itens_filtrados.
+
+    Valor de sobra/falta usa a mesma convenção de sinal de
+    dashboard_kpis: divergencia_qtd = qtd_contagem - qtd_sistema (ver
+    importar_fechamento), então divergencia_qtd > 0 é "saldo físico
+    maior" (sobra: tem mais no físico do que o sistema registra) e < 0 é
+    "saldo sistêmico maior" (falta: tem menos no físico do que deveria).
+
+    Extraída como função à parte (30/09/2026) pra ser chamada tanto pelo
+    endpoint GET /{fechamento_id}/resumo (tela) quanto por gerar_ciencia
+    (documento assinado pelos gestores) - pedido do usuário: "adicione
+    isso no documento assinado pelos gestores para que fique
+    documentado". gerar_ciencia congela o resultado desta função no
+    momento da assinatura (resumo_acuracia_snapshot), mesma lógica de
+    itens_divergentes_snapshot - ver docstring de models.ConciliacaoCiencia."""
+    itens = db.query(models.ItemFechamento).filter_by(fechamento_id=fechamento_id).all()
+    total = len(itens)
+    divergentes = [i for i in itens if i.divergente]
+    sem_divergencia = total - len(divergentes)
+    item_a_item_pct = round(sem_divergencia / total * 100, 2) if total else None
+
+    # IAQ - ponderado por quantidade (mesma fórmula de dashboard_iaq).
+    qtd_sistema_total = sum(abs(i.qtd_sistema or 0) for i in itens)
+    qtd_divergente_total = sum(abs(i.divergencia_qtd or 0) for i in divergentes)
+    iaq_pct = round((1 - qtd_divergente_total / qtd_sistema_total) * 100, 2) if qtd_sistema_total else None
+
+    # IAP - ponderado por valor (mesma fórmula de dashboard_iap, só que
+    # recalculando o custo com o universo de SKUs deste fechamento).
+    skus = {i.sku for i in itens}
+    custos = {
+        p.sku: p.custo_unitario
+        for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus), models.Produto.custo_unitario.isnot(None)).all()
+    }
+    itens_com_custo = [i for i in itens if i.sku in custos]
+    valor_portfolio = sum((i.qtd_sistema or 0) * custos[i.sku] for i in itens_com_custo)
+    valor_divergente_custo = sum(abs(i.divergencia_qtd or 0) * custos[i.sku] for i in itens_com_custo if i.divergente)
+    iap_pct = round((1 - valor_divergente_custo / valor_portfolio) * 100, 2) if valor_portfolio else None
+    cobertura_custo_pct = round(len(itens_com_custo) / total * 100, 2) if total else None
+
+    # Valor de sobra/falta (mesma convenção de dashboard_kpis).
+    valor_falta = sum(abs(i.valor_estimado or 0) for i in divergentes if (i.divergencia_qtd or 0) < 0)
+    valor_sobra = sum(abs(i.valor_estimado or 0) for i in divergentes if (i.divergencia_qtd or 0) > 0)
+    itens_com_falta = sum(1 for i in divergentes if (i.divergencia_qtd or 0) < 0)
+    itens_com_sobra = sum(1 for i in divergentes if (i.divergencia_qtd or 0) > 0)
+
+    return {
+        "total_itens": total,
+        "total_divergentes": len(divergentes),
+        "item_a_item_pct": item_a_item_pct,
+        "iaq_pct": iaq_pct,
+        "iap_pct": iap_pct,
+        "cobertura_custo_pct": cobertura_custo_pct,
+        "valor_falta": round(valor_falta, 2),
+        "valor_sobra": round(valor_sobra, 2),
+        "resultado_liquido": round(valor_sobra - valor_falta, 2),
+        "itens_com_falta": itens_com_falta,
+        "itens_com_sobra": itens_com_sobra,
+    }
+
+
+@router.get("/{fechamento_id}/resumo")
+def resumo_fechamento(fechamento_id: int, usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Ver docstring de _calcular_resumo_fechamento - este endpoint só
+    valida que o fechamento existe e devolve o resultado pra tela."""
+    f = db.query(models.FechamentoInventario).get(fechamento_id)
+    if not f:
+        raise HTTPException(404, "Fechamento não encontrado.")
+    return _calcular_resumo_fechamento(db, fechamento_id)
+
+
 PAPEIS_ASSINATURA_VALIDOS = {
     "Diretor_Operacoes": "Diretor de Operações",
     "Coordenador_Financeiro": "Coordenador Financeiro",
@@ -1184,10 +1269,19 @@ def gerar_ciencia(fechamento_id: int, payload: schemas.ConciliacaoCienciaCreate,
     ]
     valor_total = sum(abs(i.valor_estimado or 0) for i in itens_divergentes)
 
+    # 30/09/2026, pedido do usuário: "adicione isso no documento assinado
+    # pelos gestores para que fique documentado" - congela o resumo de
+    # acurácia ponderada (IAP/IAQ/item-a-item + valor de sobra/falta) no
+    # mesmo momento e com a mesma filosofia do itens_divergentes_snapshot
+    # acima, pra o PDF de ciência nunca mudar depois mesmo que o
+    # fechamento seja corrigido/reconciliado.
+    resumo_acuracia = _calcular_resumo_fechamento(db, fechamento_id)
+
     ciencia = models.ConciliacaoCiencia(
         fechamento_id=fechamento_id, gestor_username=usuario.username, gestor_nome=usuario.nome_exibicao,
         papel_assinatura=payload.papel_assinatura, observacao=payload.observacao, itens_divergentes_snapshot=snapshot,
         total_itens_divergentes=len(itens_divergentes), valor_total_divergente=round(valor_total, 2),
+        resumo_acuracia_snapshot=resumo_acuracia,
     )
     db.add(ciencia)
     registrar_log(db, usuario.username, "gerar_ciencia_conciliacao", entidade="fechamento", entidade_id=fechamento_id,

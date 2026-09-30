@@ -108,11 +108,14 @@ MOTIVO_ID_PARA_DESCRICAO = {
 # De-para tirado direto dos valores reais de `id_local` observados na
 # tabela baixa_operacional (consulta feita em 2026-08-07), contra a
 # lista oficial de almoxarifados do Atlas (ALMOXARIFADOS_PADRAO em
-# hipoteses_config.py). "Alm_Paulista" ficou de fora de propósito - não
-# tem um almoxarifado do Atlas claramente correspondente ainda
-# (pergunta em aberto pro Mauricio confirmar) - fica sem mapear, o que
-# significa que baixas desse local nunca vão casar com uma divergência
-# (não é erro, só fica incompleto até confirmar).
+# hipoteses_config.py).
+#
+# 30/09/2026, resolvido o "Alm_Paulista" (pergunta que estava em aberto pro
+# Mauricio confirmar, ver git blame): usuário decidiu dar um código PRÓPRIO
+# a esse local (não agrupar no "Alm_SP_Loja" genérico) - mesmo código novo
+# "Almox_SP_PatioPaulista" cadastrado em ALMOXARIFADOS_PADRAO
+# (hipoteses_config.py), que também resolve o "Pátio Paulista" aparecendo
+# como NAO_MAPEADO__ em Fechamento de Inventário.
 ALMOXARIFADO_LOVABLE_PARA_ATLAS = {
     "Alm_SP_Processo": "Almox_SP_Processo",
     "Alm_SP_Loja": "Almox_SP_Loja",
@@ -121,7 +124,7 @@ ALMOXARIFADO_LOVABLE_PARA_ATLAS = {
     "Alm_SP_Qualidade": "Almox_SP_Qualidade",
     "Alm_Degustacao": "Almox_SP_Degustacao",
     "Alm_Para": "Almox_PA_Para",
-    # "Alm_Paulista": ainda sem correspondência confirmada no Atlas.
+    "Alm_Paulista": "Almox_SP_PatioPaulista",
 }
 
 

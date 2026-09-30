@@ -125,6 +125,17 @@ ALMOXARIFADOS_PADRAO = [
     ("Almox_Box", "Box"),
     ("Almox_Box_2", "Box 2"),
     ("Almox_SP_Degustacao", "Degustação"),
+    # 30/09/2026, pedido do usuário (fechamento aparecia como
+    # "NAO_MAPEADO__17 -Amox - Pátio Paulista" em Fechamento de Inventário,
+    # enquanto os outros almoxarifados já sincronizavam certinho): código
+    # próprio (não agrupado no "Loja" genérico) - decisão explícita do
+    # usuário de acompanhar este local separadamente dos demais. Também
+    # fecha a lacuna documentada em baixas_operacionais.
+    # ALMOXARIFADO_LOVABLE_PARA_ATLAS ("Alm_Paulista": ainda sem
+    # correspondência confirmada no Atlas) - ver esse dicionário abaixo.
+    # seed_catalogo (bootstrap.py) cadastra este código automaticamente no
+    # próximo boot do backend, sem precisar de ação manual em Cadastros.
+    ("Almox_SP_PatioPaulista", "Pátio Paulista"),
 ]
 
 # De-para de almoxarifado a partir do arquivo bruto de origem (planilhas).
@@ -147,6 +158,13 @@ ALMOXARIFADO_DE_PARA_PREFIXOS = [
     ("Box 2", "Almox_Box_2"),  # com espaço
     ("Box", "Almox_Box"),
     ("Loja", "Almox_SP_Loja"),
+    # 30/09/2026, pedido do usuário: "Pátio Paulista" (registro #17) chegava
+    # como NAO_MAPEADO__ porque não tinha nenhuma palavra-chave própria
+    # ainda - usa "Paulista" (sem acento) pra não depender do mesmo bug de
+    # encoding que trunca "Pátio" (ver comentário do bloco acima sobre
+    # "Pará"/"Par#U") e checa ANTES de "Par" só por organização (não há
+    # sobreposição real entre as duas palavras).
+    ("Paulista", "Almox_SP_PatioPaulista"),
     ("Par", "Almox_PA_Para"),       # cobre "Pará" e a variante truncada "Par#U"
     ("Geral", "Almox_SP_Fabrica"),
     ("Frabrica", "Almox_SP_Fabrica"),  # typo real do sistema de origem (ex: "Alm Box --> Frabrica SP")

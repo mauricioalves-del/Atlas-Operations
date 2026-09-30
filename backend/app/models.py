@@ -416,6 +416,17 @@ class ConciliacaoCiencia(Base):
     itens_divergentes_snapshot = Column(JSON)
     total_itens_divergentes = Column(Integer, default=0)
     valor_total_divergente = Column(Float, default=0)
+    # 30/09/2026, pedido do usuário ("adicione isso no documento assinado
+    # pelos gestores para que fique documentado", sobre o resumo de
+    # acurácia ponderada IAP/IAQ/item-a-item + valor de sobra/falta do
+    # fechamento_router._calcular_resumo_fechamento): MESMA lógica de
+    # congelamento do itens_divergentes_snapshot acima - calculado uma
+    # única vez no momento da assinatura (gerar_ciencia) e guardado aqui,
+    # pra o PDF nunca mudar depois mesmo que o fechamento seja corrigido/
+    # reconciliado. Nullable porque ciências assinadas ANTES desta
+    # mudança não têm esse dado - o PDF trata isso como seção ausente,
+    # não como erro (ver pdf_ciencia.py).
+    resumo_acuracia_snapshot = Column(JSON, nullable=True)
 
 
 class ConferenciaRealizada(Base):
