@@ -518,6 +518,19 @@ def extrair_controle_fefo(html_content: str, mes: str) -> dict:
     total_quebras = len(quebras)
     total_inconclusivos = len(inconclusivos)
 
+    # Motivo dos "Inconclusivo" (06/10/2026, pro contexto do card "OK /
+    # Inconclusivo" no slide - ver _slide_fefo): usa o texto real de
+    # `status` de cada linha (ex.: "Sem validade (lote não encontrado)"),
+    # não um texto inventado - se houver mais de 1 motivo distinto no mês,
+    # o slide mostra um texto genérico em vez de escolher um só.
+    motivos_inconclusivo = {}
+    for r in inconclusivos:
+        motivo = r.get("status") or "—"
+        motivos_inconclusivo[motivo] = motivos_inconclusivo.get(motivo, 0) + 1
+    motivos_inconclusivo_lista = sorted(
+        [{"motivo": k, "qtd": v} for k, v in motivos_inconclusivo.items()], key=lambda x: -x["qtd"]
+    )
+
     por_dia = {}
     for r in do_mes:
         dia = r.get("data")
@@ -531,10 +544,17 @@ def extrair_controle_fefo(html_content: str, mes: str) -> dict:
         for d in dias_ordenados
     ]
 
+    # Agrupa por (id_produto, descricao) - não só descricao (06/10/2026,
+    # pedido do usuário com print do dashboard real: as barras do Top
+    # Produtos lá vêm com o código do produto na frente, ex.: "05004015 -
+    # MAGIO Língua de Onça ao Leite Cx80g"). Conferido no arquivo real: cada
+    # descrição só aparece com 1 id_produto nas linhas de quebra - não há
+    # risco de 2 produtos diferentes colidirem na mesma chave.
     contagem_produto = {}
     for r in quebras:
-        k = r.get("descricao") or "—"
-        contagem_produto[k] = contagem_produto.get(k, 0) + 1
+        chave = (r.get("id_produto") or "—", r.get("descricao") or "—")
+        contagem_produto[chave] = contagem_produto.get(chave, 0) + 1
+    produtos_distintos_quebra = len(contagem_produto)
     # [:8] (não [:10], visto na 1ª renderização de teste real, 06/10/2026):
     # com 10 categorias a altura do gráfico horizontal no slide (~1.7in)
     # força o LibreOffice a OMITIR barras inteiras (não só rótulos) pra
@@ -586,9 +606,14 @@ def extrair_controle_fefo(html_content: str, mes: str) -> dict:
         "total_ok": total - total_quebras - total_inconclusivos,
         "taxa_quebra_pct": (total_quebras / total * 100) if total else None,
         "por_dia": serie_diaria,
-        "top_produtos_quebra": [{"produto": p, "qtd": q} for p, q in top_produtos],
+        "top_produtos_quebra": [
+            {"produto": f"{id_produto} - {descricao}" if id_produto != "—" else descricao, "qtd": q}
+            for (id_produto, descricao), q in top_produtos
+        ],
+        "produtos_distintos_quebra": produtos_distintos_quebra,
         "por_destino": por_destino,
         "por_grupo": por_grupo,
+        "motivos_inconclusivo": motivos_inconclusivo_lista,
         "gerado_em": dados.get("geradoEm"),
     }
 

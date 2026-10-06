@@ -369,7 +369,7 @@ def _fundo(slide, cor: RGBColor):
     slide.background.fill.fore_color.rgb = cor
 
 
-def _retangulo(slide, x, y, w, h, cor_fill=None, cor_borda=None, arredondado=True, raio=0.10):
+def _retangulo(slide, x, y, w, h, cor_fill=None, cor_borda=None, arredondado=True, raio=0.10, espessura_borda_pt=0.75):
     tipo = MSO_SHAPE.ROUNDED_RECTANGLE if arredondado else MSO_SHAPE.RECTANGLE
     shape = slide.shapes.add_shape(tipo, Inches(x), Inches(y), Inches(w), Inches(h))
     if arredondado:
@@ -384,7 +384,7 @@ def _retangulo(slide, x, y, w, h, cor_fill=None, cor_borda=None, arredondado=Tru
         shape.fill.background()
     if cor_borda is not None:
         shape.line.color.rgb = cor_borda
-        shape.line.width = Pt(0.75)
+        shape.line.width = Pt(espessura_borda_pt)
     else:
         shape.line.fill.background()
     shape.shadow.inherit = False
@@ -432,8 +432,18 @@ def _cabecalho(slide, titulo, mes_label, pagina, subtitulo=None):
 
 
 def _cartao_kpi(slide, x, y, w, h, valor_texto, rotulo, cor_valor=AZUL_INSTITUCIONAL, contexto=None,
-                 cor_contexto=None, deslocamento_rotulo=None, tamanho_valor_base=27):
-    _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=CINZA_CLARO, raio=0.14)
+                 cor_contexto=None, deslocamento_rotulo=None, tamanho_valor_base=27, cor_borda_risco=None):
+    # `cor_borda_risco` (06/10/2026, 1º uso no slide de FEFO - pedido do
+    # usuário: "O formato aprovado e solicitado foi print acima", com borda
+    # vermelha nos 2 cards de risco da simulação aprovada): sobrescreve a
+    # borda cinza padrão por uma borda colorida mais grossa, só nos cards
+    # que o chamador marcar - os outros ~15 lugares que chamam este cartão
+    # continuam com a borda cinza de sempre (parâmetro opcional, sem
+    # default diferente de None).
+    if cor_borda_risco is not None:
+        _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=cor_borda_risco, raio=0.14, espessura_borda_pt=1.5)
+    else:
+        _retangulo(slide, x, y, w, h, cor_fill=BRANCO, cor_borda=CINZA_CLARO, raio=0.14)
     pad = 0.16
     largura_texto = w - 2 * pad
     # Os valores numéricos "de sempre" (R$, %, contagens) sempre couberam numa
@@ -570,7 +580,7 @@ def _linha_kpis(slide, y, kpis, altura=0.65, deslocamento_rotulo=0.383, tamanho_
     for k in kpis:
         _cartao_kpi(slide, x, y, largura_card, altura, k["valor"], k["rotulo"],
                     k.get("cor", AZUL_INSTITUCIONAL), k.get("contexto"), k.get("cor_contexto"),
-                    deslocamento_rotulo, tamanho_valor_base)
+                    deslocamento_rotulo, tamanho_valor_base, k.get("cor_borda_risco"))
         x += largura_card + gap
 
 
@@ -4127,20 +4137,36 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
        extrair_controle_fefo pro formato novo do export).
     4) "Crie uma simulação" -> ".../simulacao_fefo.pptx" aprovada com os
        dados reais de setembro/2026 (390 transferências / 21 quebras / 5,4%
-       / 359 OK / 10 inconclusivo, batendo com o print) -> "Quero nesse
-       formato" - este slide reproduz essa simulação com dado real via
-       gerador (extrator dedicado, não mais números fixos do mockup).
+       / 359 OK / 10 inconclusivo, batendo com o print).
+    5) 1ª versão real (gerador, não mockup) reorganizava os 4 gráficos em 2
+       linhas de 2 colunas - usuário rejeitou: "Erro de layout. O formato
+       aprovado e solicitado foi print acima [a simulação]. Quero destaque
+       para o acompanhamento diário e os demais indicadores abaixo." Este
+       slide reconstrói a GEOMETRIA exata da simulação aprovada: linha de
+       baixo (dia) em LARGURA TOTAL, com destaque visual (maior que os
+       outros 3 gráficos), e uma linha de 3 colunas abaixo (destino / grupo
+       / top produtos) - não mais 2x2.
 
-    Único ajuste da simulação pro gerador real: os 2 cards de risco (Quebras
-    de FEFO / Taxa de Quebra) usam COR no VALOR pra sinalizar risco (padrão
-    já usado em TODOS os outros cartões de KPI do MBR - ver _cartao_kpi),
-    não borda colorida (recurso só do mockup em pptxgenjs, sem equivalente
-    em _cartao_kpi - introduzir um 2º padrão de "card de risco" só pra este
-    slide quebraria a consistência visual com o resto do relatório)."""
+    Ajustes da simulação pro gerador real (dado de verdade, não mockup):
+    - Borda vermelha nos cards de risco (Quebras/Taxa de Quebra) - a
+      simulação tinha isso, mas _cartao_kpi não suportava borda colorida
+      até agora; adicionado `cor_borda_risco` em vez de introduzir um 2º
+      componente de card só pra este slide.
+    - Os 2 contextos da simulação "+0 vs. semana anterior" / "-8,0 p.p. vs.
+      semana anterior" eram PLACEHOLDER do mockup (nenhum extrator calcula
+      comparação com a semana anterior) - substituídos por números REAIS
+      que o extrator de fato calcula: produtos distintos afetados (card
+      Quebras) e o motivo real dos "Inconclusivo" (card OK/Inconclusivo,
+      ver `extrair_controle_fefo`/`motivos_inconclusivo`), em vez de
+      inventar uma tendência que não foi medida.
+    - Top produtos NÃO é invertido antes de desenhar (ao contrário do
+      padrão usado no resto do MBR, que inverte pra deixar o maior valor
+      no topo) - a simulação aprovada mostra o maior valor embaixo; mantido
+      assim de propósito pra bater com o print aprovado."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
     _cabecalho(slide, "FEFO", mes_label, pagina,
-               "Dados reais do dashboard Controle de FEFO — filtrado pelo mês deste relatório")
+               "Controle de FEFO — transferências auditadas, quebras e top produtos (fonte oficial do indicador)")
 
     fefo = d["fefo_externo"]
     if _slide_externo_indisponivel(slide, fefo, "Controle de FEFO"):
@@ -4156,84 +4182,104 @@ def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
         return slide
 
     label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
+
+    motivos_inconclusivo = fefo.get("motivos_inconclusivo") or []
+    if not fefo["total_inconclusivos"]:
+        contexto_inconclusivo = "nenhum inconclusivo no mês"
+    elif len(motivos_inconclusivo) == 1:
+        contexto_inconclusivo = f"{_fmt_num(fefo['total_inconclusivos'])} {motivos_inconclusivo[0]['motivo'].lower()}"
+    else:
+        contexto_inconclusivo = f"{_fmt_num(fefo['total_inconclusivos'])} com pendência de validade ou lote"
+
     y_cards, h_cards = 1.55, 0.68
     _linha_kpis(slide, y_cards, [
-        {"valor": _fmt_num(fefo["total_auditaveis"]), "rotulo": "Transferências Auditadas no Mês", "cor": AZUL_INSTITUCIONAL},
-        {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
-        {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
-        {"valor": f'{_fmt_num(fefo["total_ok"])} / {_fmt_num(fefo["total_inconclusivos"])}', "rotulo": "OK / Inconclusivo", "cor": AZUL_INSTITUCIONAL},
+        {"valor": _fmt_num(fefo["total_auditaveis"]), "rotulo": "Transferências Auditadas",
+         "cor": AZUL_INSTITUCIONAL, "contexto": f"{_fmt_num(fefo['total_auditaveis'])} transferência(s) no período"},
+        {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO",
+         "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO,
+         "contexto": f"{_fmt_num(fefo.get('produtos_distintos_quebra'))} produto(s) distinto(s) afetado(s)",
+         "cor_borda_risco": COR_ERRO if fefo["total_quebras"] else None},
+        {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra",
+         "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo, "cor_borda_risco": cor_fefo},
+        {"valor": f'{_fmt_num(fefo["total_ok"])} / {_fmt_num(fefo["total_inconclusivos"])}', "rotulo": "OK / Inconclusivo",
+         "cor": AZUL_INSTITUCIONAL, "contexto": contexto_inconclusivo},
     ], altura=h_cards)
 
-    # --- Linha 2: Transferências e quebras por dia (combo) / Top produtos com mais quebras ---
-    # h_row2=2.24 (título 0.24 + gráfico 2.0): com os nomes reais de produto
-    # (não um rótulo curto sintético), a barra horizontal "Top produtos"
-    # precisa de ~2.0in pra desenhar as 8 categorias inteiras - abaixo disso
-    # o LibreOffice (confirmado também em teste manual de altura variável,
-    # mesma técnica já usada pro bug de quebra de rótulo do Investimento
-    # Operacional) OMITE barra(s) inteira(s) pra caber, não só rótulo(s) - a
-    # 1ª renderização de teste real (06/10/2026) com h_row2=1.95 (gráfico
-    # 1.71in) mostrou só 7 das 8 barras.
-    y_row2, h_row2 = y_cards + h_cards + 0.14, 2.24
-    gap_col = 0.25
-    w_col = (LARGURA_IN - 2 * MARGEM_IN - gap_col) / 2
-    x_col1, x_col2 = MARGEM_IN, MARGEM_IN + w_col + gap_col
-
+    # --- Destaque: Transferências e quebras por dia, LARGURA TOTAL ---
+    # (pedido do usuário: "Quero destaque para o acompanhamento diário e os
+    # demais indicadores abaixo" - h_row2 maior que h_row3, único gráfico
+    # da linha, mostrar_rotulos=True porque agora tem a largura toda do
+    # slide pra 20 categorias x 2 séries, não mais metade.)
+    y_row2, h_row2 = y_cards + h_cards + 0.14, 2.35
+    largura_total = LARGURA_IN - 2 * MARGEM_IN
     por_dia = fefo.get("por_dia") or []
-    _texto(slide, x_col1, y_row2, w_col, 0.22, "TRANSFERÊNCIAS E QUEBRAS POR DIA", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _texto(slide, MARGEM_IN, y_row2, largura_total, 0.22, "TRANSFERÊNCIAS E QUEBRAS POR DIA",
+           tamanho=12, negrito=True, cor=AZUL_INSTITUCIONAL)
     if por_dia:
         dias = [p["data"] for p in por_dia]
-        # mostrar_rotulos=False: até 20 dias x 2 séries lado a lado - rótulo
-        # em cada coluna ficaria ilegível/sobreposto nessa largura (mesma
-        # razão documentada em _grafico_categoria_multi pro Farol de
-        # Shelf-Life) - o eixo numérico + a legenda já bastam pra leitura.
         _grafico_categoria_multi(
-            slide, x_col1, y_row2 + 0.24, w_col, h_row2 - 0.24, dias,
+            slide, MARGEM_IN, y_row2 + 0.26, largura_total, h_row2 - 0.26, dias,
             [("Transferências", [p["total"] for p in por_dia], VERDE_AMAZONIA),
              ("Quebras", [p["quebras"] for p in por_dia], COR_ERRO)],
-            tipo=XL_CHART_TYPE.COLUMN_CLUSTERED, formato_numero='0', mostrar_rotulos=False,
+            tipo=XL_CHART_TYPE.COLUMN_CLUSTERED, formato_numero='0', mostrar_rotulos=True,
         )
     else:
-        _caixa_leitura(slide, x_col1, y_row2 + 0.24, w_col, h_row2 - 0.24, "Por dia", "Sem transferências neste mês.")
+        _caixa_leitura(slide, MARGEM_IN, y_row2 + 0.26, largura_total, h_row2 - 0.26, "Por dia",
+                        "Sem transferências neste mês.")
 
-    top = fefo.get("top_produtos_quebra") or []
-    _texto(slide, x_col2, y_row2, w_col, 0.22, "TOP PRODUTOS COM MAIS QUEBRAS", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
-    if top:
-        categorias = [t["produto"][:26] for t in reversed(top)]
-        valores = [t["qtd"] for t in reversed(top)]
-        _grafico_categoria(slide, x_col2, y_row2 + 0.24, w_col, h_row2 - 0.24, categorias, "Quebras", valores,
-                            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='0')
-    else:
-        _caixa_leitura(slide, x_col2, y_row2 + 0.24, w_col, h_row2 - 0.24, "Produtos com mais quebras",
-                        "Nenhuma quebra registrada neste mês.")
-
-    # --- Linha 3: Transferências por destino (pizza) / por grupo de produto (rosca) ---
-    y_row3 = y_row2 + h_row2 + 0.15
-    h_row3 = ALTURA_IN - y_row3 - 0.47
+    # --- Linha de baixo: Por destino (pizza) / Por grupo (rosca) / Top produtos com mais quebras (barra) ---
+    # h_row3: o gráfico em si precisa de >= 2.0in pra desenhar até 8
+    # categorias reais sem o LibreOffice omitir barra(s) inteira(s) (mesmo
+    # achado documentado acima, na extração - ver comentário de [:8] em
+    # extrair_controle_fefo) - por isso h_row3 reserva 2.0in de gráfico
+    # (0.22 de título + 2.0), não um valor arredondado menor.
+    y_row3 = y_row2 + h_row2 + 0.14
+    h_row3 = 2.26
+    gap_col = 0.25
+    # Top produtos é mais largo que os outros 2 (nomes de produto reais são
+    # longos) - mesma proporção usada na simulação aprovada.
+    w_pizza = (largura_total - 2 * gap_col) * 0.27
+    w_donut = w_pizza
+    w_bar = largura_total - w_pizza - w_donut - 2 * gap_col
+    x_pizza = MARGEM_IN
+    x_donut = x_pizza + w_pizza + gap_col
+    x_bar = x_donut + w_donut + gap_col
 
     por_destino = fefo.get("por_destino") or []
-    _texto(slide, x_col1, y_row3, w_col, 0.22, "TRANSFERÊNCIAS POR DESTINO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _texto(slide, x_pizza, y_row3, w_pizza, 0.22, "TRANSFERÊNCIAS POR DESTINO", tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
     if por_destino:
         nomes = [pd["destino"] for pd in por_destino]
         valores = [pd["total"] for pd in por_destino]
         cores = [VERDE_AMAZONIA, AZUL_INSTITUCIONAL, AZUL_CLARO, COR_FAROL_PERIGO, COR_INFO, CINZA_CLARO]
-        _grafico_pizza(slide, x_col1, y_row3 + 0.24, w_col, h_row3 - 0.24, nomes, valores, cores, formato_numero='0')
+        _grafico_pizza(slide, x_pizza, y_row3 + 0.24, w_pizza, h_row3 - 0.24, nomes, valores, cores, formato_numero='0')
     else:
-        _caixa_leitura(slide, x_col1, y_row3 + 0.24, w_col, h_row3 - 0.24, "Por destino", "Sem dados de destino neste mês.")
+        _caixa_leitura(slide, x_pizza, y_row3 + 0.24, w_pizza, h_row3 - 0.24, "Por destino", "Sem dados de destino neste mês.")
 
     por_grupo = fefo.get("por_grupo") or []
-    _texto(slide, x_col2, y_row3, w_col, 0.22, "TRANSFERÊNCIAS POR GRUPO DE PRODUTO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _texto(slide, x_donut, y_row3, w_donut, 0.22, "TRANSFERÊNCIAS POR GRUPO", tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
     if por_grupo:
         nomes = [pg["grupo"] for pg in por_grupo]
         valores = [pg["total"] for pg in por_grupo]
-        _grafico_donut(slide, x_col2, y_row3 + 0.24, w_col, h_row3 - 0.24, nomes, valores, CORES_FUNIL_PADRAO + [CINZA_CLARO],
+        _grafico_donut(slide, x_donut, y_row3 + 0.24, w_donut, h_row3 - 0.24, nomes, valores, CORES_FUNIL_PADRAO + [CINZA_CLARO],
                         formato_numero='0')
     else:
-        _caixa_leitura(slide, x_col2, y_row3 + 0.24, w_col, h_row3 - 0.24, "Por grupo", "Sem dados de grupo neste mês.")
+        _caixa_leitura(slide, x_donut, y_row3 + 0.24, w_donut, h_row3 - 0.24, "Por grupo", "Sem dados de grupo neste mês.")
+
+    top = fefo.get("top_produtos_quebra") or []
+    _texto(slide, x_bar, y_row3, w_bar, 0.22, "TOP PRODUTOS COM MAIS QUEBRAS", tamanho=10, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if top:
+        categorias = [t["produto"][:34] for t in top]
+        valores = [t["qtd"] for t in top]
+        _grafico_categoria(slide, x_bar, y_row3 + 0.24, w_bar, h_row3 - 0.24, categorias, "Quebras", valores,
+                            tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='0')
+    else:
+        _caixa_leitura(slide, x_bar, y_row3 + 0.24, w_bar, h_row3 - 0.24, "Produtos com mais quebras",
+                        "Nenhuma quebra registrada neste mês.")
 
     _texto(
-        slide, MARGEM_IN, ALTURA_IN - 0.32, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+        slide, MARGEM_IN, ALTURA_IN - 0.3, LARGURA_IN - 2 * MARGEM_IN, 0.22,
         f"Fonte: dashboard de Controle de FEFO (Auditoria > Outros Dashboards), enviado em {fefo.get('enviado_em') or '—'}.",
-        tamanho=9, cor=CINZA_TEXTO,
+        tamanho=8.5, cor=CINZA_TEXTO,
     )
     return slide
 
