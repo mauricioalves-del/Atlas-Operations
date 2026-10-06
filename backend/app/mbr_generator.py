@@ -1653,6 +1653,153 @@ def _grafico_combo_dual_eixo(slide, x, y, w, h, categorias, nome_barra, valores_
     return chart
 
 
+# ---------------------------------------------------------------------------
+# Rosca, funil e barra "1 cor por categoria" (06/10/2026) - usados pela 1ª vez
+# no indicador "Pacote de Baixas - Investimento Operacional" (ver
+# _slide_investimento_operacional). Nenhum slide nativo tinha precisado de
+# rosca/funil até agora - os gráficos nativos do MBR são todos barra/coluna/
+# linha (_grafico_categoria_multi e as variações de combo acima).
+# ---------------------------------------------------------------------------
+def _grafico_barra_valor_por_categoria(slide, x, y, w, h, categorias, valores, cores, formato_numero='R$ #,##0'):
+    """Barra horizontal de 1 série só, com uma cor DIFERENTE por categoria
+    (ex.: "Valor por Motivo" - cada motivo já tem cor fixa na paleta do
+    indicador). Diferente de `_grafico_categoria_multi` (pinta a série
+    INTEIRA de uma cor) e de `_grafico_combo_dual_eixo` (per-point color é
+    opcional, numa barra que também tem uma linha combo) - aqui o per-point
+    color é o objetivo inteiro do gráfico, sem legenda (as próprias barras +
+    rótulo de categoria já identificam cada uma)."""
+    chart_data = CategoryChartData()
+    chart_data.categories = categorias
+    chart_data.add_series("Valor", valores)
+    gframe = slide.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(x), Inches(y), Inches(w), Inches(h), chart_data)
+    chart = gframe.chart
+    chart.has_title = False
+    chart.has_legend = False
+
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.position = XL_LABEL_POSITION.OUTSIDE_END
+    # 8pt (não 9): mesmo com a folga de eixo adicionada abaixo, o rótulo do
+    # maior valor ("R$ 5.257", categoria Uso e Consumo) continuava quebrando
+    # em 2 linhas na renderização de teste real (06/10/2026) - a caixa de
+    # rótulo horizontal do LibreOffice/PowerPoint parece ter uma largura
+    # fixa por categoria que não escala com a folga do eixo, só com a fonte.
+    dl.font.size = Pt(8)
+    dl.font.color.rgb = CINZA_TEXTO
+    dl.number_format = formato_numero
+    dl.number_format_is_linked = False
+
+    serie = plot.series[0]
+    serie.format.line.fill.background()
+    for i, cor in enumerate(cores):
+        if i >= len(valores):
+            break
+        serie.points[i].format.fill.solid()
+        serie.points[i].format.fill.fore_color.rgb = cor
+
+    try:
+        cat_ax = chart.category_axis
+        cat_ax.tick_labels.font.size = Pt(9.5)
+        cat_ax.tick_labels.font.color.rgb = CINZA_TEXTO
+        cat_ax.format.line.color.rgb = CINZA_CLARO
+        cat_ax.has_major_gridlines = False
+        val_ax = chart.value_axis
+        val_ax.visible = False
+        val_ax.has_major_gridlines = False
+        # OUTSIDE_END só tem a largura que sobra entre a ponta da barra e a
+        # borda do plot - com a maior barra quase encostando no limite do
+        # eixo (escala automática), o rótulo "R$ 5.257" não cabia nessa
+        # sobra e quebrava em 2 linhas (visto na renderização de teste real,
+        # 06/10/2026). Reservar ~22% de folga acima do maior valor dá espaço
+        # pro rótulo sem alterar o que é mostrado.
+        maior_valor = max(valores) if valores else 0
+        if maior_valor > 0:
+            val_ax.maximum_scale = maior_valor * 1.22
+    except Exception:
+        pass
+    return chart
+
+
+def _grafico_donut(slide, x, y, w, h, nomes, valores, cores, formato_numero='R$ #,##0'):
+    """Rosca com 1 fatia por item de `nomes`/`valores`, cor própria por
+    fatia (`cores`, mesma ordem) e rótulo de VALOR centrado em cada fatia -
+    mesmo padrão visual do widget "X — Área que solicitou" do dashboard
+    original (ver dashboards_externos_extrator.extrair_investimento_
+    operacional). python-pptx não tem gráfico combinado pra pizza/rosca,
+    então este é sempre um gráfico isolado (sem a técnica de injeção de XML
+    usada nos combos de barra acima)."""
+    chart_data = CategoryChartData()
+    chart_data.categories = nomes
+    chart_data.add_series("Valor", valores)
+    gframe = slide.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(x), Inches(y), Inches(w), Inches(h), chart_data)
+    chart = gframe.chart
+    chart.has_title = False
+    chart.has_legend = True
+    try:
+        chart.legend.position = XL_LEGEND_POSITION.RIGHT
+        chart.legend.include_in_layout = False
+        chart.legend.font.size = Pt(8)
+        chart.legend.font.color.rgb = CINZA_TEXTO
+    except Exception:
+        pass
+
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.font.size = Pt(8.5)
+    dl.font.bold = True
+    dl.font.color.rgb = BRANCO
+    dl.number_format = formato_numero
+    dl.number_format_is_linked = False
+    try:
+        dl.position = XL_LABEL_POSITION.CENTER
+        dl.show_value = True
+    except Exception:
+        pass
+
+    serie = plot.series[0]
+    serie.format.line.color.rgb = BRANCO
+    serie.format.line.width = Pt(1.5)
+    for i, cor in enumerate(cores):
+        if i >= len(valores):
+            break
+        serie.points[i].format.fill.solid()
+        serie.points[i].format.fill.fore_color.rgb = cor
+    return chart
+
+
+CORES_FUNIL_PADRAO = [
+    RGBColor(0x4F, 0xC3, 0xF7), RGBColor(0x81, 0xC7, 0x84), RGBColor(0xBA, 0x68, 0xC8),
+    RGBColor(0xFF, 0xB7, 0x4D), RGBColor(0xF0, 0x62, 0x92), RGBColor(0x90, 0xA4, 0xAE),
+]
+
+
+def _funil_retangulos(slide, x, y, w, h, estagios, cores=None, formato_moeda=True):
+    """Funil aproximado por faixas horizontais de largura decrescente -
+    PowerPoint/python-pptx não tem um tipo de gráfico de funil nativo, mesma
+    limitação já contornada (e aprovada pelo usuário) na simulação de
+    layout de 06/10/2026. `estagios` é uma lista de (nome, valor) JÁ
+    ordenada do maior pro menor - esta função não reordena."""
+    cores = cores or CORES_FUNIL_PADRAO
+    n = len(estagios)
+    if n == 0:
+        return
+    h_faixa = h / n
+    valor_max = max((v for _nome, v in estagios), default=0) or 1
+    w_max, w_min = w * 0.96, w * 0.28
+    for i, (_nome, valor) in enumerate(estagios):
+        frac = valor / valor_max if valor_max else 0
+        w_faixa = w_min + (w_max - w_min) * frac
+        x_faixa = x + (w - w_faixa) / 2
+        y_faixa = y + i * h_faixa
+        cor = cores[i % len(cores)]
+        _retangulo(slide, x_faixa, y_faixa + 0.02, w_faixa, h_faixa - 0.05, cor_fill=cor, arredondado=False)
+        texto_valor = _fmt_moeda(valor) if formato_moeda else _fmt_num(valor)
+        _texto(slide, x_faixa, y_faixa + 0.02, w_faixa, h_faixa - 0.05, texto_valor, tamanho=9,
+               negrito=True, cor=BRANCO, alinhamento=PP_ALIGN.CENTER, ancora_meio=True)
+
+
 def _tabela(slide, x, y, w, h, cabecalhos, linhas, larguras_relativas=None,
             cor_cabecalho=AZUL_INSTITUCIONAL, tamanho_fonte=12, margem_celula_in=None):
     n_linhas = len(linhas) + 1
@@ -2339,6 +2486,18 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "metas_individuais_externo": _extrair_dashboard_externo_por_nome(
             db, "Metas individuais", dash_ext.extrair_metas_individuais, mes
         ),
+        # Pacote de Baixas - Investimento Operacional (06/10/2026, pedido do
+        # usuário - ver docstring de _slide_investimento_operacional pro
+        # histórico completo do pedido e o achado que motivou a extração
+        # dedicada: o indicador caía em "Sem tabelas encontradas" porque a
+        # tabela de lançamentos deste export só é preenchida em JS, não no
+        # HTML estático que o extrator genérico lê). Mesmo padrão de
+        # indicador DINÂMICO com extração/slide dedicados que "Dispersão de
+        # Ficha Técnica"/"Metas individuais" (ver docstring de
+        # _extrair_dashboard_externo_por_nome).
+        "investimento_operacional_externo": _extrair_dashboard_externo_por_nome(
+            db, "Pacote de baixas - Investimento Operacional", dash_ext.extrair_investimento_operacional, mes
+        ),
         # Fechamento Mensal do Stock Savvy (09/09/2026) - substitui a antiga
         # análise "Atlas + Stock Savvy" por números reais mapeados pela
         # implementação (ver _slide_fechamento_stock_savvy).
@@ -2361,9 +2520,13 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     # senão uma cópia parada/duplicada vaza como slide genérico duplicado).
     dados["dispersao_ficha_tecnica_externo"].pop("_chave_dashboard_externo", None)
     dados["metas_individuais_externo"].pop("_chave_dashboard_externo", None)
+    dados["investimento_operacional_externo"].pop("_chave_dashboard_externo", None)
     chaves_correlatas_dispersao = dados["dispersao_ficha_tecnica_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
     chaves_correlatas_metas = dados["metas_individuais_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
-    chaves_dedicadas = {c for c in (*chaves_correlatas_dispersao, *chaves_correlatas_metas) if c}
+    chaves_correlatas_investimento = dados["investimento_operacional_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
+    chaves_dedicadas = {
+        c for c in (*chaves_correlatas_dispersao, *chaves_correlatas_metas, *chaves_correlatas_investimento) if c
+    }
     dados["dashboards_extras"] = _coletar_dashboards_extras(
         db, chaves_excluir=chaves_dedicadas or None
     )
@@ -4410,6 +4573,214 @@ def _bucket_farol(buckets: list, *rotulos: str):
     return None
 
 
+# Paleta fixa do indicador "Pacote de Baixas - Investimento Operacional"
+# (06/10/2026) - vem do próprio JSON "paleta" do arquivo exportado (ver
+# dashboards_externos_extrator.extrair_investimento_operacional); mantida
+# aqui como fallback só pra quando o arquivo não trouxer "paleta" (export
+# antigo) ou trouxer um motivo novo sem cor definida.
+_PALETA_INVESTIMENTO_OPERACIONAL = {
+    "Cortesia": RGBColor(0x4F, 0xC3, 0xF7),
+    "Degustação": RGBColor(0x81, 0xC7, 0x84),
+    "Sensorial/Inovações": RGBColor(0xBA, 0x68, 0xC8),
+    "Uso e Consumo": RGBColor(0xFF, 0xB7, 0x4D),
+}
+
+
+def _cor_investimento_operacional(nome_motivo: str, paleta_arquivo: dict, indice_fallback: int) -> RGBColor:
+    hex_arquivo = (paleta_arquivo or {}).get(nome_motivo)
+    if hex_arquivo:
+        try:
+            return RGBColor.from_string(hex_arquivo.lstrip("#").upper())
+        except ValueError:
+            pass
+    if nome_motivo in _PALETA_INVESTIMENTO_OPERACIONAL:
+        return _PALETA_INVESTIMENTO_OPERACIONAL[nome_motivo]
+    return CORES_FUNIL_PADRAO[indice_fallback % len(CORES_FUNIL_PADRAO)]
+
+
+def _slide_investimento_operacional(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Pacote de Baixas - Investimento Operacional (06/10/2026). Histórico
+    completo do pedido, em ordem:
+
+    1) "Quero adicionar mais um slide na minha apresentação do MBR. Estou
+       quebrando a análise e pacote baixas em duas. baixas operacionais...
+       e baixas por investimento..." - pedido inicial de SPLIT em 2
+       indicadores/slides por categoria de negócio.
+    2) Depois de uma simulação em .pptx de cada opção (2 slides separados),
+       o usuário reverteu: "Quero os 4 motivos juntos. não separados. No
+       topo, adicione 4 cards trazendo o resumo do periodo análisado por
+       categoria" - volta pra 1 slide só, com Cortesia/Degustação/
+       Sensorial-Inovações/Uso e Consumo juntos, cada um com seu cartão.
+    3) "Quero que o slide traga as tabelas e indicadores do gráfico. Pode
+       reduzir os top 10 para Top por categoria" - pediu que o slide
+       reproduzisse a tendência mensal + os 3 indicadores (barra/rosca/
+       funil) + tabelas Top N do dashboard original (não só os cartões),
+       com os Top 10 originais reduzidos a Top 3 por motivo.
+    4) "traga o rótulo de dados do gráfico de tendencia apenas do total
+       geral por período, bem como o rótulo do gráfico de Cortesia" -
+       rótulo de TOTAL (não por segmento) na tendência mensal, e rótulo de
+       valor em cada fatia da rosca de Cortesia.
+    5) "Aprovado" - sobre a simulação em .pptx com os 4 itens acima, usada
+       como especificação exata deste slide (mesmas posições/proporções).
+
+    Achado técnico que motivou a extração DEDICADA (ver docstring de
+    dashboards_externos_extrator.extrair_investimento_operacional): o
+    export deste dashboard é 100% renderizado em JS a partir de um único
+    JSON embutido - o extrator genérico só lê <table> já preenchida no
+    HTML estático, então este indicador sempre caiu no slide "Sem tabelas
+    encontradas" (confirmado rodando o extrator genérico real contra o
+    arquivo do usuário), mesmo com o arquivo certo cadastrado em
+    Auditoria > Outros Dashboards.
+
+    Os únicos 2 motivos com variação real de "Área/Operação" nesta
+    categorização (Cortesia e Degustação) é por isso que a rosca e o funil
+    usam esses dois, não escolha arbitrária - ver `_agrupar_com_fallback`
+    no extrator pro caso dos outros 2 motivos (sem variação de "contexto",
+    cai pra Almoxarifado)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Pacote de Baixas — Investimento Operacional", mes_label, pagina,
+               "Cortesia, Degustação, Sensorial/Inovações e Uso e Consumo — fonte oficial do indicador")
+
+    dado = d["investimento_operacional_externo"]
+    if _slide_externo_indisponivel(slide, dado, "Pacote de Baixas - Investimento Operacional"):
+        return slide
+    if not dado.get("tem_dados"):
+        _caixa_leitura(
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem lançamentos até {mes_label}",
+            "O arquivo de Pacote de Baixas - Investimento Operacional enviado não tem nenhum lançamento na "
+            "janela deste relatório — confira se o arquivo está atualizado em Auditoria > Outros Dashboards.",
+            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
+        )
+        return slide
+
+    motivos = dado["motivos"]
+    paleta_arquivo = dado.get("paleta") or {}
+    cores_motivo = [_cor_investimento_operacional(mo, paleta_arquivo, i) for i, mo in enumerate(motivos)]
+    por_motivo = dado["por_motivo"]
+
+    # --- 5 cartões: total do período + 1 por motivo, todos juntos ---
+    cartoes = [{
+        "valor": _fmt_moeda(dado["total_valor"], casas=2), "rotulo": "Total Investido no Período",
+        "cor": COR_ERRO, "contexto": f'{_fmt_num(dado["total_qtd"])} lançamentos',
+    }]
+    for mo in motivos:
+        cartoes.append({
+            "valor": _fmt_moeda(por_motivo.get(mo, {}).get("valor"), casas=2), "rotulo": mo,
+            "cor": AZUL_INSTITUCIONAL, "contexto": f'{_fmt_num(por_motivo.get(mo, {}).get("qtd"))} lançamentos',
+        })
+    # y=1.55 (não 1.16): o cabeçalho padrão (_cabecalho) reserva até y=1.45
+    # pro subtítulo (1.10 + 0.35 de altura) - mesmo y usado pelos outros
+    # slides com cabeçalho+subtítulo padrão (ex.: _slide_baixas_
+    # operacionais_externo). Um y menor aqui sobrepunha o texto do
+    # subtítulo com os cartões (achado na 1ª renderização de teste real,
+    # 06/10/2026).
+    y_cards, h_cards = 1.55, 0.68
+    _linha_kpis(slide, y_cards, cartoes, altura=h_cards, tamanho_valor_base=20)
+
+    # --- Tendência mensal por motivo (empilhado), rótulo só do TOTAL geral
+    # por mês (não por segmento) - pedido explícito do usuário, mesma
+    # técnica de _adicionar_rotulo_total_empilhado já usada no "Dashboard
+    # Baixas Operacionais" ---
+    # h_trend=1.30 (não 1.38): 0.08in cedidos pro widget "Valor por Motivo"
+    # abaixo (ver h_wid) - a tendência é um gráfico simples (1 coluna
+    # empilhada por mês, só o rótulo de total ligado), cabe confortável
+    # nessa altura menor.
+    y_trend, h_trend = y_cards + h_cards + 0.14, 1.30
+    _texto(slide, MARGEM_IN, y_trend, LARGURA_IN - 2 * MARGEM_IN, 0.22, "TENDÊNCIA MENSAL POR MOTIVO",
+           tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+    meses = dado["meses"]
+    # "2026-07" -> "jul/26" (mesmo estilo de rótulo de mês já usado no resto
+    # do MBR, ver _MESES_PT_ABREV) - o eixo cru em "YYYY-MM" (formato de
+    # chave interna do extrator) não é o que o usuário vê em nenhum outro
+    # gráfico do relatório.
+    meses_rotulo = [f"{_MESES_PT_ABREV[int(ms[5:7]) - 1]}/{ms[2:4]}" for ms in meses]
+    serie_mensal = dado["serie_mensal"]
+    series = [(mo, serie_mensal.get(mo, [0.0] * len(meses)), cores_motivo[i]) for i, mo in enumerate(motivos)]
+    chart_trend = _grafico_categoria_multi(
+        slide, MARGEM_IN, y_trend + 0.26, LARGURA_IN - 2 * MARGEM_IN, h_trend - 0.26, meses_rotulo, series,
+        tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False)
+    totais_mes = [sum(serie_mensal.get(mo, [0.0] * len(meses))[i] for mo in motivos) for i in range(len(meses))]
+    # tamanho_pt=7 (não o default 9.5): a caixa de rótulo de uma série de
+    # LINHA (c:dLblPos="t") renderiza bem mais estreita que a de um rótulo
+    # de barra - no tamanho padrão o valor ("R$ 2.746") sempre quebrava em
+    # 2 linhas (visto na 1ª renderização de teste real, 06/10/2026); 7pt é
+    # o tamanho onde o texto volta a caber numa linha só nesta largura de
+    # coluna.
+    _adicionar_rotulo_total_empilhado(chart_trend, meses_rotulo, totais_mes,
+                                       cor_texto_hex=_hex_cor(AZUL_INSTITUCIONAL), formato_numero='R$ #,##0',
+                                       tamanho_pt=7)
+
+    # --- 3 indicadores: barra "Valor por Motivo" / rosca Cortesia / funil
+    # Degustação ---
+    # h_wid=1.58 (não 1.42): o rótulo OUTSIDE_END da barra horizontal
+    # "Valor por Motivo" quebrava em 2 linhas ("R$" / "5.257") pra qualquer
+    # tamanho de fonte testado (9pt, 8pt) ou folga de eixo - isolei a causa
+    # num teste à parte (scratchpad/mini/teste_bar_heights.pptx): não é
+    # largura nem fonte, é a ALTURA do gráfico - abaixo de ~1.3in de altura
+    # o LibreOffice/python-pptx força a quebra do rótulo pra caber na linha
+    # da categoria, não importa a largura disponível à direita da barra.
+    # Com o título acima (0.22in), o gráfico em si precisa de pelo menos
+    # ~1.3in -> h_wid de 1.58 dá 1.36in de folga confortável.
+    y_wid, h_wid = y_trend + h_trend + 0.2, 1.58
+    gap = 0.2
+    w_wid = (LARGURA_IN - 2 * MARGEM_IN - 2 * gap) / 3
+    x_bar, x_donut, x_funil = MARGEM_IN, MARGEM_IN + w_wid + gap, MARGEM_IN + 2 * (w_wid + gap)
+
+    _texto(slide, x_bar, y_wid, w_wid, 0.2, "VALOR POR MOTIVO", tamanho=9.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    _grafico_barra_valor_por_categoria(
+        slide, x_bar, y_wid + 0.22, w_wid, h_wid - 0.22, motivos,
+        [por_motivo.get(mo, {}).get("valor", 0.0) for mo in motivos], cores_motivo)
+
+    donut = dado.get("donut")
+    if donut and donut.get("grupos"):
+        nomes_donut = sorted(donut["grupos"].keys(), key=lambda k: -donut["grupos"][k])
+        titulo_donut = f'{donut["motivo"]} — ' + ("Área que Solicitou" if donut["campo"] == "contexto" else "Por Almoxarifado")
+        _texto(slide, x_donut, y_wid, w_wid, 0.2, titulo_donut.upper(), tamanho=9.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _grafico_donut(slide, x_donut, y_wid + 0.22, w_wid, h_wid - 0.22,
+                        nomes_donut, [donut["grupos"][n] for n in nomes_donut], CORES_FUNIL_PADRAO)
+
+    funil = dado.get("funil")
+    if funil and funil.get("grupos"):
+        estagios = sorted(funil["grupos"].items(), key=lambda kv: -kv[1])
+        titulo_funil = f'{funil["motivo"]} — ' + ("Operação" if funil["campo"] == "contexto" else "Por Almoxarifado")
+        _texto(slide, x_funil, y_wid, w_wid, 0.2, titulo_funil.upper(), tamanho=9.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        _funil_retangulos(slide, x_funil, y_wid + 0.22, w_wid, h_wid - 0.22, estagios)
+
+    # --- Top 3 por motivo, um por categoria, lado a lado ---
+    y_tab = y_wid + h_wid + 0.14
+    h_tab = ALTURA_IN - y_tab - 0.4
+    gap_tab = 0.15
+    w_tab = (LARGURA_IN - 2 * MARGEM_IN - (len(motivos) - 1) * gap_tab) / len(motivos)
+    tops = dado.get("tops") or {}
+    for i, mo in enumerate(motivos):
+        x_tab = MARGEM_IN + i * (w_tab + gap_tab)
+        _texto(slide, x_tab, y_tab, w_tab, 0.2, f"TOP 3 — {mo}".upper(), tamanho=9.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+        # Truncado em 20 (não 38, nem os 26 da 1ª correção): com 4 tabelas
+        # lado a lado (1/4 da largura cada), a coluna Produto é estreita
+        # demais mesmo pra 26 caracteres - ainda cortava no meio da palavra
+        # na 2ª renderização de teste real (06/10/2026). A coluna SKU também
+        # quebrava em 2 linhas pra códigos numéricos de 10 dígitos - corrigido
+        # alargando SKU (0.9→1.2) e Valor (0.9→1.0) às custas de Produto
+        # (1.7→1.3), e reduzindo a margem interna da célula (padrão do
+        # python-pptx é ~0.1in de cada lado, sobra pouca largura útil numa
+        # coluna já estreita).
+        linhas_top = [
+            [r["sku"], (r["descricao"] or "—")[:20], _fmt_moeda(r["valor"], casas=2)]
+            for r in tops.get(mo, [])
+        ]
+        if linhas_top:
+            _tabela(slide, x_tab, y_tab + 0.22, w_tab, h_tab - 0.22, ["SKU", "Produto", "Valor"], linhas_top,
+                    larguras_relativas=[1.2, 1.3, 1.0], tamanho_fonte=8.5, margem_celula_in=0.04)
+
+    exportado = dado.get("exportado_em") or dado.get("enviado_em") or "—"
+    _texto(slide, MARGEM_IN, ALTURA_IN - 0.32, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+           f"Fonte: Pacote de Baixas - Investimento Operacional, exportado em {exportado}. "
+           "Lançamentos considerados até o mês deste relatório.",
+           tamanho=8.5, cor=CINZA_TEXTO, italico=True)
+    return slide
+
+
 # Ordem/cor fixa dos status do Farol de Shelf-Life (usada nos dois gráficos
 # de detalhamento por almoxarifado/grupo, Fase 2 22/08/2026) - a MESMA ordem
 # de severidade dos cartões deste mesmo slide, pra quem olhar os cartões e os
@@ -6238,6 +6609,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     limite_itens_capa = 4
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
+        "Pacote de Baixas — Investimento Operacional",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
         "Testes Industriais", "FEFO",
@@ -6253,6 +6625,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
+    _slide_investimento_operacional(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)

@@ -1229,3 +1229,138 @@ def extrair_metas_individuais(html_content: str, mes: str) -> dict:
         "pesos_configurados": soma_pesos_pct is not None and abs(soma_pesos_pct - 100) < 0.5,
         "metas": metas,
     }
+
+
+# ---------------------------------------------------------------------------
+# 8. Pacote de Baixas - Investimento Operacional (06/10/2026, pedido do
+#    usuário: "Estou quebrando a análise e pacote baixas em duas. baixas
+#    operacionais... e baixas por investimento..." - depois confirmado "quero
+#    os 4 motivos juntos. não separados. No topo, adicione 4 cards trazendo o
+#    resumo do periodo análisado por categoria", e por fim "traga o rótulo de
+#    dados do gráfico de tendencia apenas do total geral por período, bem
+#    como o rótulo do gráfico de Cortesia" - layout final aprovado numa
+#    simulação em .pptx antes desta implementação).
+#
+#    Mesma arquitetura de Dispersão de Ficha Técnica e Metas Individuais: o
+#    export é 100% client-side - um único <script id="d" type="application/
+#    json"> com todo o dataset (`linhas`), e um motor em JS que desenha
+#    cartões/gráficos no NAVEGADOR a partir dele. A tabela de lançamentos
+#    visível na tela (<table>...<tbody id="tb"></tbody>) fica vazia no HTML
+#    estático - só é preenchida em runtime - então o extrator genérico
+#    (extrair_generico, que só lê <table> já com linha de dado) nunca
+#    encontrava nada aproveitável aqui, e o indicador sempre caiu no slide
+#    "Sem tabelas encontradas" (achado confirmado rodando o extrator real
+#    contra o arquivo enviado pelo usuário, 06/10/2026) mesmo com o arquivo
+#    certo cadastrado em Auditoria > Outros Dashboards. Esta função lê o
+#    JSON embutido direto e reproduz em Python as mesmas agregações que o
+#    próprio arquivo faz em JS (kpis/tendência/barra/rosca/funil/Top N).
+# ---------------------------------------------------------------------------
+def extrair_investimento_operacional(html_content: str, mes: str) -> dict:
+    """mes: 'YYYY-MM'. Corta `linhas` em tudo que tenha data <= fim do mês do
+    relatório (mesmo motivo de _truncar_serie_mensal no mbr_generator: é um
+    export vivo, pode ter lançamento de mês posterior ao fechamento deste
+    MBR). Devolve "tem_dados": False (não None) quando o arquivo é válido
+    mas não sobra nenhum lançamento na janela - "erro_extracao" é só pra
+    arquivo com formato inesperado (JSON ausente/corrompido), não pra "mês
+    sem lançamento"."""
+    m = re.search(r'<script id="d" type="application/json">(.*?)</script>', html_content, re.S)
+    if not m:
+        return None
+    try:
+        dados = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+
+    motivos = dados.get("motivos") or []
+    paleta = dados.get("paleta") or {}
+    linhas = [l for l in (dados.get("linhas") or []) if l.get("data") and l["data"][:7] <= mes]
+    if not motivos or not linhas:
+        return {"tem_dados": False}
+
+    # Cartões do topo: total + 1 por motivo (valor e contagem de lançamentos).
+    por_motivo = {mo: {"valor": 0.0, "qtd": 0} for mo in motivos}
+    for l in linhas:
+        mo = l.get("motivo")
+        if mo not in por_motivo:
+            por_motivo[mo] = {"valor": 0.0, "qtd": 0}
+        por_motivo[mo]["valor"] += l.get("valor") or 0.0
+        por_motivo[mo]["qtd"] += 1
+    total_valor = sum(v["valor"] for v in por_motivo.values())
+    total_qtd = sum(v["qtd"] for v in por_motivo.values())
+
+    # Tendência mensal por motivo - últimos 6 meses até o mês do relatório
+    # (mesma janela padrão de evolucao_inventario/evolucao_ponderada no
+    # mbr_generator, ver _truncar_serie_mensal).
+    por_mes = {}
+    for l in linhas:
+        mes_l = l["data"][:7]
+        bucket = por_mes.setdefault(mes_l, {mo: 0.0 for mo in motivos})
+        if l.get("motivo") in bucket:
+            bucket[l["motivo"]] += l.get("valor") or 0.0
+    meses_ordenados = sorted(por_mes.keys())[-6:]
+    serie_mensal = {mo: [por_mes[ms].get(mo, 0.0) for ms in meses_ordenados] for mo in motivos}
+
+    def _agrupar_por_campo(motivo_alvo, campo):
+        grupos = {}
+        for l in linhas:
+            if l.get("motivo") != motivo_alvo:
+                continue
+            chave = l.get(campo) or "Não informado"
+            grupos[chave] = grupos.get(chave, 0.0) + (l.get("valor") or 0.0)
+        return grupos
+
+    def _agrupar_com_fallback(motivo_alvo, campo_preferido="contexto", campo_fallback="almox"):
+        """Rosca/funil do arquivo original agrupam por "contexto" (ex.:
+        "Cortesia — Área que solicitou"). Mas nem todo motivo tem variação
+        real nesse campo nesta janela - ex.: "Sensorial/Inovações" e "Uso e
+        Consumo" vieram 100% "Não informado" na simulação aprovada pelo
+        usuário (06/10/2026) - uma rosca/funil com isso seria uma fatia só,
+        sem informação nenhuma. Cai pra Almoxarifado (`campo_fallback`)
+        quando o campo preferido não tiver mais de 1 grupo - mesmo ajuste já
+        validado com o usuário na simulação."""
+        if motivo_alvo not in por_motivo:
+            return None, {}
+        grupos = _agrupar_por_campo(motivo_alvo, campo_preferido)
+        if len(grupos) > 1:
+            return campo_preferido, grupos
+        grupos_fb = _agrupar_por_campo(motivo_alvo, campo_fallback)
+        if len(grupos_fb) > 1:
+            return campo_fallback, grupos_fb
+        return campo_preferido, grupos
+
+    donut_campo, donut_grupos = _agrupar_com_fallback("Cortesia")
+    funil_campo, funil_grupos = _agrupar_com_fallback("Degustação")
+
+    # Top 3 por SKU, por motivo (reduzido de Top 10 pra Top 3, pedido do
+    # usuário 06/10/2026: "Pode reduzir os top 10 para Top por categoria",
+    # com os 4 motivos juntos num slide só).
+    tops = {}
+    for mo in motivos:
+        por_sku = {}
+        for l in linhas:
+            if l.get("motivo") != mo:
+                continue
+            sku = l.get("sku") or "—"
+            reg = por_sku.setdefault(sku, {"descricao": l.get("descricao") or "", "qtd": 0.0, "valor": 0.0})
+            reg["qtd"] += l.get("qtd") or 0
+            reg["valor"] += l.get("valor") or 0.0
+        tops[mo] = sorted(
+            ({"sku": sku, **reg} for sku, reg in por_sku.items()), key=lambda r: -r["valor"]
+        )[:3]
+
+    exportado_em = dados.get("geradoEm")
+
+    return {
+        "tem_dados": True,
+        "motivos": motivos,
+        "paleta": paleta,
+        "total_valor": total_valor,
+        "total_qtd": total_qtd,
+        "por_motivo": por_motivo,
+        "meses": meses_ordenados,
+        "serie_mensal": serie_mensal,
+        "donut": {"motivo": "Cortesia", "campo": donut_campo, "grupos": donut_grupos} if donut_grupos else None,
+        "funil": {"motivo": "Degustação", "campo": funil_campo, "grupos": funil_grupos} if funil_grupos else None,
+        "tops": tops,
+        "exportado_em": exportado_em,
+    }
