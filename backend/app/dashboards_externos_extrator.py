@@ -5,10 +5,12 @@ números reais desses arquivos (pedido do usuário, 20/08/2026).
 
 Duas famílias de arquivo, por como cada um foi construído:
 
-1. Controle de FEFO e Controle de Testes Industriais - HTML simples com
-   Chart.js e um array JS puro embutido (`const RAW=[...]` / `const DATA=[...]`),
-   com data/mês por registro -> dá pra filtrar exato pelo mês de referência do
-   MBR (`extrair_fefo`, `extrair_testes_industriais`).
+1. Controle de Testes Industriais - HTML simples com Chart.js e um array JS
+   puro embutido (`const DATA=[...]`), com data/mês por registro -> dá pra
+   filtrar exato pelo mês de referência do MBR (`extrair_testes_industriais`).
+   Controle de FEFO usava o mesmo padrão (`const RAW=[...]`, `extrair_fefo`)
+   até 06/10/2026 - ver item 6 abaixo, o export mudou de formato e a função
+   usada pelo MBR hoje é `extrair_controle_fefo`.
 
 2. Farol de Shelf-Life, Dashboard Shelf Life (Recuperação de Shelf) e Dashboard
    Baixas Operacionais - "fotos" estáticas exportadas de um app React/Recharts
@@ -69,6 +71,21 @@ Duas famílias de arquivo, por como cada um foi construído:
       com um KPI de referência disponível, a função de extração descarta o
       resultado (retorna None pro gráfico) em vez de mostrar um número não
       confiável.
+
+6. Controle de FEFO (06/10/2026, pedido do usuário: "Corrija o Slide de FEFO
+   com base no HTML escolhido... quero essa visão conforme print mais
+   principais KPI destacados em Cards conforme print" - reversão da decisão
+   de 20/08/2026 que tinha trocado a fonte do slide de FEFO pra "Auditoria
+   FEFO importada", ver mbr_generator._extrair_resumo_auditoria_fefo e
+   claude/auditoria-fefo-importada.md). O export deste dashboard também
+   mudou de formato nesse meio tempo: não é mais `const RAW=[...]` (formato
+   de `extrair_fefo`, item 1 acima) - agora embute tudo em
+   `<script id="d" type="application/json">`, mesmo padrão de Dispersão de
+   Ficha Técnica/Testes Industriais, com `{"linhas": [...], "filtros": [...],
+   "geradoEm": "..."}`. Cada linha é 1 transferência com campo "data"
+   ("YYYY-MM-DD", dá pra filtrar exato pelo mês do MBR), "situacao" ("OK" /
+   "Quebra de FEFO" / "Inconclusivo") e o booleano redundante "quebra" (ver
+   `extrair_controle_fefo`).
 """
 import re
 import json
@@ -392,7 +409,13 @@ def _parecem_meses_abreviados(rotulos):
 # 1. Controle de FEFO - const RAW=[...], filtrável por mês (campo "data")
 # ---------------------------------------------------------------------------
 def extrair_fefo(html_content: str, mes: str) -> dict:
-    """mes: 'YYYY-MM'. Cada registro é uma transferência com origem na Fábrica,
+    """SUPERSEDIDA (06/10/2026) - o export do dashboard "Controle de FEFO"
+    mudou de formato (não usa mais `const RAW=[...]`, ver `extrair_controle_
+    fefo` e item 6 do docstring do módulo) e o MBR não chama mais esta
+    função. Mantida sem uso só como referência histórica do formato antigo
+    (caso um arquivo exportado antes da mudança precise ser lido de novo).
+
+    mes: 'YYYY-MM'. Cada registro é uma transferência com origem na Fábrica,
     já classificada (categoria: 'ok'/'warn'/'quebra') pela própria equipe a
     partir dos arquivos de auditoria reais - substitui o cálculo do Atlas
     (que comparava contra o estoque de lote ATUAL, não uma leitura no
@@ -448,6 +471,125 @@ def extrair_fefo(html_content: str, mes: str) -> dict:
         "taxa_quebra_pct": (len(quebras) / total * 100) if total else None,
         "top_produtos_quebra": [{"produto": p, "qtd": q} for p, q in top_produtos],
         "por_destino": por_destino[:6],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. Controle de FEFO - formato novo, JSON embutido (06/10/2026, ver item 6 do
+#    docstring do módulo). Chaves do dict devolvido mantêm os nomes que o MBR
+#    já lia da fonte anterior ("total_auditaveis", "total_quebras",
+#    "taxa_quebra_pct", "tem_dados", "mes") pra não quebrar os outros 2
+#    lugares que leem "fefo_externo" (ver mbr_generator._coletar_dados_mbr,
+#    o bloco de avanços/atenções e _slide_impacto_atlas) - só o texto exibido
+#    pro usuário nesses lugares mudou (fonte agora é o dashboard, não a
+#    Auditoria FEFO importada).
+# ---------------------------------------------------------------------------
+def extrair_controle_fefo(html_content: str, mes: str) -> dict:
+    """mes: 'YYYY-MM'. Lê `<script id="d" type="application/json">` com
+    `{"linhas": [...], "filtros": [...], "geradoEm": "..."}` - cada linha é 1
+    transferência (campos: data "YYYY-MM-DD", id_produto, descricao, grupo,
+    destino, desc_movimento, lote_movimentado, lote_mais_antigo, status,
+    situacao, qtd, quebra). "situacao" tem 3 valores possíveis ("OK",
+    "Quebra de FEFO", "Inconclusivo") e bate 1:1 com o booleano "quebra"
+    (True só quando situacao == "Quebra de FEFO") - usa o booleano por ser
+    mais direto, mas os dois nunca divergem nos arquivos reais conferidos.
+
+    Linhas duplicadas (o mesmo id_produto+lote+data aparecendo 2x, visto no
+    arquivo real de setembro/2026) NÃO são deduplicadas aqui - cada linha do
+    JSON é 1 movimento físico de transferência auditado, repetição é dado
+    real (2 transferências do mesmo produto no mesmo dia), não erro de
+    exportação."""
+    m = re.search(r'<script id="d" type="application/json">(.*?)</script>', html_content, re.S)
+    if not m:
+        return None
+    try:
+        dados = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    linhas = dados.get("linhas") or []
+
+    do_mes = [r for r in linhas if (r.get("data") or "")[:7] == mes]
+    if not do_mes:
+        return {"tem_dados": False, "mes": mes}
+
+    total = len(do_mes)
+    quebras = [r for r in do_mes if r.get("quebra")]
+    inconclusivos = [r for r in do_mes if r.get("situacao") == "Inconclusivo"]
+    total_quebras = len(quebras)
+    total_inconclusivos = len(inconclusivos)
+
+    por_dia = {}
+    for r in do_mes:
+        dia = r.get("data")
+        por_dia.setdefault(dia, {"total": 0, "quebras": 0})
+        por_dia[dia]["total"] += 1
+        if r.get("quebra"):
+            por_dia[dia]["quebras"] += 1
+    dias_ordenados = sorted(por_dia.keys())
+    serie_diaria = [
+        {"data": f"{d[8:10]}/{d[5:7]}", "total": por_dia[d]["total"], "quebras": por_dia[d]["quebras"]}
+        for d in dias_ordenados
+    ]
+
+    contagem_produto = {}
+    for r in quebras:
+        k = r.get("descricao") or "—"
+        contagem_produto[k] = contagem_produto.get(k, 0) + 1
+    # [:8] (não [:10], visto na 1ª renderização de teste real, 06/10/2026):
+    # com 10 categorias a altura do gráfico horizontal no slide (~1.7in)
+    # força o LibreOffice a OMITIR barras inteiras (não só rótulos) pra
+    # caber - confirmado que as 10 categorias estão todas no XML do gráfico
+    # (chart2.xml), só não renderizam todas. 8 é o mesmo teto já usado por
+    # extrair_fefo (item 1 acima) e extrair_testes_industriais pro mesmo
+    # tipo de gráfico (barra horizontal Top N).
+    top_produtos = sorted(contagem_produto.items(), key=lambda x: -x[1])[:8]
+
+    dest = {}
+    for r in do_mes:
+        k = r.get("destino") or "—"
+        dest.setdefault(k, {"total": 0, "quebras": 0})
+        dest[k]["total"] += 1
+        if r.get("quebra"):
+            dest[k]["quebras"] += 1
+    por_destino = sorted(
+        [{"destino": k, "total": v["total"], "quebras": v["quebras"]} for k, v in dest.items()],
+        key=lambda x: -x["total"],
+    )
+
+    grupo = {}
+    for r in do_mes:
+        k = r.get("grupo") or "—"
+        grupo[k] = grupo.get(k, 0) + 1
+    por_grupo_todos = sorted(
+        [{"grupo": k, "total": v} for k, v in grupo.items()],
+        key=lambda x: -x["total"],
+    )
+    # Top 5 + "Outros" (não todos os grupos, visto na 1ª renderização de
+    # teste real, 06/10/2026): com 7 grupos reais em setembro/2026, as 2
+    # fatias menores da rosca (SubConjunto=5, Material de Consumo=1) ficaram
+    # finas demais - os rótulos de VALOR de cada uma (centralizados na
+    # própria fatia, ver _grafico_donut) colidiram e viraram um "51" só,
+    # ambíguo (parece 1 valor, são 2). Agrupar o resto em "Outros" evita
+    # fatia fina demais pra rótulo nenhum caber, mantendo o total exato.
+    if len(por_grupo_todos) > 5:
+        top5, resto = por_grupo_todos[:5], por_grupo_todos[5:]
+        por_grupo = top5 + [{"grupo": "Outros", "total": sum(r["total"] for r in resto)}]
+    else:
+        por_grupo = por_grupo_todos
+
+    return {
+        "tem_dados": True,
+        "mes": mes,
+        "total_auditaveis": total,
+        "total_quebras": total_quebras,
+        "total_inconclusivos": total_inconclusivos,
+        "total_ok": total - total_quebras - total_inconclusivos,
+        "taxa_quebra_pct": (total_quebras / total * 100) if total else None,
+        "por_dia": serie_diaria,
+        "top_produtos_quebra": [{"produto": p, "qtd": q} for p, q in top_produtos],
+        "por_destino": por_destino,
+        "por_grupo": por_grupo,
+        "gerado_em": dados.get("geradoEm"),
     }
 
 

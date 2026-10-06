@@ -1769,6 +1769,50 @@ def _grafico_donut(slide, x, y, w, h, nomes, valores, cores, formato_numero='R$ 
     return chart
 
 
+def _grafico_pizza(slide, x, y, w, h, nomes, valores, cores, formato_numero='#,##0'):
+    """Pizza (fatia cheia, sem furo) - mesmo padrão visual de _grafico_donut
+    acima, só trocando XL_CHART_TYPE.DOUGHNUT por PIE (06/10/2026, 1º uso no
+    slide de FEFO: "Transferências por Destino" - ver _slide_fefo)."""
+    chart_data = CategoryChartData()
+    chart_data.categories = nomes
+    chart_data.add_series("Valor", valores)
+    gframe = slide.shapes.add_chart(XL_CHART_TYPE.PIE, Inches(x), Inches(y), Inches(w), Inches(h), chart_data)
+    chart = gframe.chart
+    chart.has_title = False
+    chart.has_legend = True
+    try:
+        chart.legend.position = XL_LEGEND_POSITION.RIGHT
+        chart.legend.include_in_layout = False
+        chart.legend.font.size = Pt(8)
+        chart.legend.font.color.rgb = CINZA_TEXTO
+    except Exception:
+        pass
+
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.font.size = Pt(8.5)
+    dl.font.bold = True
+    dl.font.color.rgb = BRANCO
+    dl.number_format = formato_numero
+    dl.number_format_is_linked = False
+    try:
+        dl.position = XL_LABEL_POSITION.CENTER
+        dl.show_value = True
+    except Exception:
+        pass
+
+    serie = plot.series[0]
+    serie.format.line.color.rgb = BRANCO
+    serie.format.line.width = Pt(1.5)
+    for i, cor in enumerate(cores):
+        if i >= len(valores):
+            break
+        serie.points[i].format.fill.solid()
+        serie.points[i].format.fill.fore_color.rgb = cor
+    return chart
+
+
 CORES_FUNIL_PADRAO = [
     RGBColor(0x4F, 0xC3, 0xF7), RGBColor(0x81, 0xC7, 0x84), RGBColor(0xBA, 0x68, 0xC8),
     RGBColor(0xFF, 0xB7, 0x4D), RGBColor(0xF0, 0x62, 0x92), RGBColor(0x90, 0xA4, 0xAE),
@@ -1892,7 +1936,22 @@ def _extrair_dashboard_externo_sem_mes(db: Session, chave: str, extrator) -> dic
 
 
 def _normalizar_nome_indicador(nome: str) -> str:
-    sem_acento = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode("ascii")
+    # 07/10/2026 (BUG real: slide "Pacote de Baixas — Investimento
+    # Operacional" aparecendo como "ainda não enviado" mesmo com o arquivo
+    # cadastrado em Auditoria > Outros Dashboards com ESSE NOME EXATO).
+    # Causa: o nome cadastrado usa travessão "—" (o mesmo caractere do
+    # título do slide/capa), mas a busca em _coletar_dados_mbr usa hífen
+    # simples "-". O passo seguinte (NFKD + encode ascii "ignore") trata os
+    # dois de forma BEM diferente: "-" é ASCII e sobrevive; "—"/"–" não são
+    # ASCII e são DESCARTADOS (não convertidos pra "-"), então
+    # "Baixas — Investimento" virava "baixas investimento" (sem traço
+    # nenhum), enquanto "Baixas - Investimento" virava "baixas -
+    # investimento" (com traço) - nunca batiam. Convertendo todo traço
+    # "tipográfico" pra hífen simples ANTES do strip de acento, os dois
+    # nomes passam a normalizar pro mesmo texto, não importa qual estilo de
+    # traço foi usado no cadastro.
+    com_hifen_padrao = re.sub(r"[‐-―−]", "-", nome or "")
+    sem_acento = unicodedata.normalize("NFKD", com_hifen_padrao).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"\s+", " ", sem_acento).strip().lower()
 
 
@@ -1984,15 +2043,27 @@ def _extrair_fechamento_stock_savvy(db: Session, mes: str) -> dict:
 
 
 def _extrair_resumo_auditoria_fefo(db: Session, mes: str) -> dict:
-    """FEFO do MBR (20/08/2026): pedido do usuário pra trocar a fonte do slide de
-    FEFO do dashboard "Controle de FEFO" (Auditoria > Outros Dashboards,
-    dashboards_externos_extrator.extrair_fefo) pela "Auditoria FEFO importada"
-    (models.AuditoriaFefo / fefo.calcular_resumo_auditoria_fefo) - a mesma base
-    que já alimenta o painel "Auditoria FEFO — histórico importado" na tela FEFO.
-    Motivo (mensagem do usuário): "o mesmo tem mais informações e bases de
-    registro" - de fato o AuditoriaFefo guarda lote movimentado, validade e o
-    lote mais antigo disponível por registro, enquanto o dashboard externo só
-    tinha os totais já agregados pelo estagiário.
+    """SUPERSEDIDA (06/10/2026) - o slide de FEFO voltou a usar o dashboard
+    "Controle de FEFO" como fonte (pedido do usuário: "Corrija o Slide de FEFO
+    com base no HTML escolhido... quero essa visão conforme print" - reversão
+    da decisão de 20/08/2026 descrita abaixo). _coletar_dados_mbr não chama
+    mais esta função; "fefo_externo" agora vem de
+    _extrair_dashboard_externo(db, "controle_fefo", dash_ext.extrair_controle_
+    fefo, mes). Mantida sem uso só como referência histórica - se a Auditoria
+    FEFO importada precisar voltar a alimentar algum indicador no futuro, a
+    lógica já está aqui pronta. Ver claude/auditoria-fefo-importada.md pro
+    histórico completo da ida e volta.
+
+    Docstring original (20/08/2026): pedido do usuário pra trocar a fonte do
+    slide de FEFO do dashboard "Controle de FEFO" (Auditoria > Outros
+    Dashboards, dashboards_externos_extrator.extrair_fefo) pela "Auditoria
+    FEFO importada" (models.AuditoriaFefo / fefo.calcular_resumo_auditoria_fefo)
+    - a mesma base que já alimenta o painel "Auditoria FEFO — histórico
+    importado" na tela FEFO. Motivo (mensagem do usuário): "o mesmo tem mais
+    informações e bases de registro" - de fato o AuditoriaFefo guarda lote
+    movimentado, validade e o lote mais antigo disponível por registro,
+    enquanto o dashboard externo só tinha os totais já agregados pelo
+    estagiário.
 
     Diferente de _extrair_dashboard_externo (que lê um DashboardExterno.html_content),
     aqui os dados vêm de linhas já importadas na tabela AuditoriaFefo (Excel diário
@@ -2447,13 +2518,17 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # Dashboards externos (Auditoria > Outros Dashboards) - substituem/complementam
         # números calculados pelo Atlas por dados reais dos arquivos .html que a equipe
         # já mantém em paralelo, pedido do usuário (20/08/2026, ver dashboards_externos_extrator.py).
-        # FEFO (atualizado 20/08/2026, pedido do usuário: "use o arquivo HTML pra alimentar
-        # a construção do MBR no módulo FEFO, o mesmo tem mais informações e bases de
-        # registro" -> confirmado "Auditoria FEFO importada"): a fonte NÃO é mais o dashboard
-        # "Controle de FEFO" de Outros Dashboards, e sim a tabela AuditoriaFefo (já usada pelo
-        # painel "Auditoria FEFO — histórico importado" da tela FEFO) - ver
-        # _extrair_resumo_auditoria_fefo acima.
-        "fefo_externo": _extrair_resumo_auditoria_fefo(db, mes),
+        # FEFO (06/10/2026, pedido do usuário: "Corrija o Slide de FEFO com base no
+        # HTML escolhido... quero essa visão conforme print mais principais KPI
+        # destacados em Cards conforme print"): volta a usar o dashboard "Controle
+        # de FEFO" (Auditoria > Outros Dashboards) como fonte - reverte a troca de
+        # 20/08/2026 pra "Auditoria FEFO importada" (ver docstring de
+        # _extrair_resumo_auditoria_fefo, agora sem uso, e claude/auditoria-fefo-
+        # importada.md). "controle_fefo" é um dos 5 slots nativos de dashboard
+        # externo (chave fixa, não busca por nome) - ver dashboards_externos_
+        # extrator.extrair_controle_fefo pro formato do export (mudou em
+        # 06/10/2026, não é mais o `const RAW=[...]` original).
+        "fefo_externo": _extrair_dashboard_externo(db, "controle_fefo", dash_ext.extrair_controle_fefo, mes),
         "testes_industriais_externo": _extrair_dashboard_externo(db, "testes_industriais", dash_ext.extrair_testes_industriais, mes),
         # Os três abaixo não têm uma dimensão de mês limpa no arquivo de origem (ver
         # docstring de dashboards_externos_extrator.py) - entram no MBR como retrato
@@ -2714,19 +2789,17 @@ def _analise_geral(d: dict):
     elif movimentados.get("itens_analisados"):
         avancos.append(f"Controle de Movimentados ativo: {_fmt_num(movimentados['itens_analisados'])} item(ns) reconciliado(s) neste mês.")
 
-    # FEFO (atualizado 20/08/2026, pedido do usuário: trocar a fonte pra "Auditoria FEFO
-    # importada", ver _extrair_resumo_auditoria_fefo) - histórico importado na própria tela
-    # FEFO (Excel diário ou dashboard HTML consolidado do André), com mais detalhe por
-    # registro (lote movimentado, validade, lote mais antigo disponível) do que o dashboard
-    # "Controle de FEFO" usado antes - por isso entra como fato normal em avanços/atenções,
-    # com o mesmo limiar (_LIMIARES["fefo_quebra_pct"]) já usado no restante do relatório.
+    # FEFO (06/10/2026, fonte voltou a ser o dashboard "Controle de FEFO" - ver
+    # docstring de _coletar_dados_mbr/_extrair_resumo_auditoria_fefo) - entra
+    # como fato normal em avanços/atenções, com o mesmo limiar
+    # (_LIMIARES["fefo_quebra_pct"]) já usado no restante do relatório.
     fefo = d["fefo_externo"]
     if fefo.get("tem_dados"):
         label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
         texto_fefo = (
             f"FEFO: taxa de quebra em {_fmt_pct(fefo['taxa_quebra_pct'])} neste mês "
-            f"({_fmt_num(fefo['total_quebras'])} de {_fmt_num(fefo['total_auditaveis'])} movimentos auditáveis, "
-            f"dados da Auditoria FEFO importada)."
+            f"({_fmt_num(fefo['total_quebras'])} de {_fmt_num(fefo['total_auditaveis'])} transferências auditadas, "
+            f"dados do dashboard Controle de FEFO)."
         )
         if label_fefo == "Em avanço":
             avancos.append(texto_fefo)
@@ -2736,11 +2809,11 @@ def _analise_geral(d: dict):
             atencoes.append(texto_fefo + " — acima do limiar aceitável.")
     elif not fefo.get("enviado"):
         decisoes.append(
-            "Auditoria FEFO importada ainda não tem nenhum histórico importado na tela FEFO — sem esse arquivo, o "
-            "FEFO não entra neste relatório com dado real."
+            "Dashboard Controle de FEFO ainda não foi enviado em Auditoria > Outros Dashboards — sem esse "
+            "arquivo, o FEFO não entra neste relatório com dado real."
         )
     else:
-        decisoes.append(f"Auditoria FEFO importada: nenhum movimento auditável importado para {_nome_mes(fefo.get('mes', ''))}.")
+        decisoes.append(f"Dashboard Controle de FEFO: nenhuma transferência auditada registrada para {_nome_mes(fefo.get('mes', ''))}.")
 
     if not decisoes:
         decisoes.append("Manter a cadência atual de fechamento e monitoramento — sem decisão crítica pendente neste recorte.")
@@ -4033,81 +4106,134 @@ def _slide_externo_indisponivel(slide, dado: dict, nome_dashboard: str) -> bool:
 
 
 def _slide_fefo(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """FEFO (atualizado 20/08/2026, pedido do usuário: "use o arquivo HTML pra
-    alimentar a construção do MBR no módulo FEFO, o mesmo tem mais informações e
-    bases de registro" -> confirmado "Auditoria FEFO importada"). Fonte trocada do
-    dashboard "Controle de FEFO" (Auditoria > Outros Dashboards) pra AuditoriaFefo
-    - o histórico importado direto na tela FEFO (painel "Auditoria FEFO — histórico
-    importado"), com lote movimentado/validade/lote mais antigo disponível por
-    registro (ver fefo.calcular_resumo_auditoria_fefo e
-    _extrair_resumo_auditoria_fefo acima). NÃO reaproveita _slide_externo_indisponivel
-    porque essa fonte não vem de um DashboardExterno - o caminho de importação é a
-    tela FEFO, não Auditoria > Outros Dashboards."""
+    """FEFO (06/10/2026). Histórico do pedido, em ordem:
+
+    1) 20/08/2026: fonte tinha sido trocada do dashboard "Controle de FEFO"
+       pra "Auditoria FEFO importada" (tela FEFO) - ver docstring (agora
+       marcada SUPERSEDIDA) de _extrair_resumo_auditoria_fefo.
+    2) 06/10/2026, usuário reportou "Dois relatórios não estão extraindo as
+       informações... slide 22 'FEFO'... os htmls foram anexados ao atlas.
+       Porém, não está carregando os dados para o gráfico" - investigação
+       confirmou que isso NÃO era bug: o arquivo que ele reenviava
+       ("Controle de FEFO") nunca alimentou esse slide desde a troca de
+       20/08, só a Auditoria FEFO importada (vazia pro mês) alimentava.
+    3) Na sequência, com prints do dashboard real "Controle de FEFO" (4
+       cards de KPI + 4 gráficos), pedido explícito: "Corrija o Slide de
+       FEFO com base no HTML escolhido. quero essa visão conforme print
+       mais principais KPI destacados em Cards conforme print" - reverte a
+       decisão de 20/08 de vez, com o slide reconstruído pra replicar o
+       layout do dashboard (ver _extrair_dashboard_externo(db, "controle_
+       fefo", ...) em _coletar_dados_mbr e dashboards_externos_extrator.
+       extrair_controle_fefo pro formato novo do export).
+    4) "Crie uma simulação" -> ".../simulacao_fefo.pptx" aprovada com os
+       dados reais de setembro/2026 (390 transferências / 21 quebras / 5,4%
+       / 359 OK / 10 inconclusivo, batendo com o print) -> "Quero nesse
+       formato" - este slide reproduz essa simulação com dado real via
+       gerador (extrator dedicado, não mais números fixos do mockup).
+
+    Único ajuste da simulação pro gerador real: os 2 cards de risco (Quebras
+    de FEFO / Taxa de Quebra) usam COR no VALOR pra sinalizar risco (padrão
+    já usado em TODOS os outros cartões de KPI do MBR - ver _cartao_kpi),
+    não borda colorida (recurso só do mockup em pptxgenjs, sem equivalente
+    em _cartao_kpi - introduzir um 2º padrão de "card de risco" só pra este
+    slide quebraria a consistência visual com o resto do relatório)."""
     slide = _slide_em_branco(prs)
     _fundo(slide, BRANCO)
-    _cabecalho(slide, "FEFO", mes_label, pagina, "Dados reais da Auditoria FEFO importada — filtrado pelo mês deste relatório")
+    _cabecalho(slide, "FEFO", mes_label, pagina,
+               "Dados reais do dashboard Controle de FEFO — filtrado pelo mês deste relatório")
 
     fefo = d["fefo_externo"]
-
-    if not fefo.get("enviado"):
-        _caixa_leitura(
-            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, "Auditoria FEFO ainda não importada",
-            "Nenhum histórico foi importado ainda no painel \"Auditoria FEFO — histórico importado\" da tela FEFO "
-            "(Excel diário ou dashboard HTML consolidado) — sem esse histórico, o FEFO não entra neste relatório "
-            "com dado real.",
-            cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
-        )
+    if _slide_externo_indisponivel(slide, fefo, "Controle de FEFO"):
         return slide
 
     if not fefo.get("tem_dados"):
         _caixa_leitura(
-            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem movimentos auditáveis em {mes_label}",
-            "A Auditoria FEFO importada não tem movimentos auditáveis registrados para este mês — confira se o "
-            "histórico do período está importado no painel \"Auditoria FEFO — histórico importado\" da tela FEFO.",
+            slide, MARGEM_IN, 1.6, LARGURA_IN - 2 * MARGEM_IN, 1.4, f"Sem transferências auditadas em {mes_label}",
+            "O dashboard de Controle de FEFO enviado não tem transferências registradas para este mês — confira "
+            "se o arquivo está atualizado em Auditoria > Outros Dashboards.",
             cor_fundo=OFF_WHITE, cor_rotulo=COR_ATENCAO, tamanho_texto=13,
         )
         return slide
 
     label_fefo, cor_fefo = _status_menor_melhor(fefo["taxa_quebra_pct"], *_LIMIARES["fefo_quebra_pct"])
-    _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_num(fefo["total_auditaveis"]), "rotulo": "Movimentos Auditáveis no Mês", "cor": COR_INFO},
+    y_cards, h_cards = 1.55, 0.68
+    _linha_kpis(slide, y_cards, [
+        {"valor": _fmt_num(fefo["total_auditaveis"]), "rotulo": "Transferências Auditadas no Mês", "cor": AZUL_INSTITUCIONAL},
         {"valor": _fmt_num(fefo["total_quebras"]), "rotulo": "Quebras de FEFO", "cor": COR_ERRO if fefo["total_quebras"] else COR_SUCESSO},
         {"valor": _fmt_pct(fefo["taxa_quebra_pct"]), "rotulo": "Taxa de Quebra", "cor": cor_fefo, "contexto": label_fefo, "cor_contexto": cor_fefo},
-        {"valor": _fmt_num(fefo.get("total_sem_correspondencia")), "rotulo": "Sem Correspondência no Mês"},
-    ], altura=0.68)
+        {"valor": f'{_fmt_num(fefo["total_ok"])} / {_fmt_num(fefo["total_inconclusivos"])}', "rotulo": "OK / Inconclusivo", "cor": AZUL_INSTITUCIONAL},
+    ], altura=h_cards)
 
-    top = fefo.get("top_produtos_com_quebra") or []
+    # --- Linha 2: Transferências e quebras por dia (combo) / Top produtos com mais quebras ---
+    # h_row2=2.24 (título 0.24 + gráfico 2.0): com os nomes reais de produto
+    # (não um rótulo curto sintético), a barra horizontal "Top produtos"
+    # precisa de ~2.0in pra desenhar as 8 categorias inteiras - abaixo disso
+    # o LibreOffice (confirmado também em teste manual de altura variável,
+    # mesma técnica já usada pro bug de quebra de rótulo do Investimento
+    # Operacional) OMITE barra(s) inteira(s) pra caber, não só rótulo(s) - a
+    # 1ª renderização de teste real (06/10/2026) com h_row2=1.95 (gráfico
+    # 1.71in) mostrou só 7 das 8 barras.
+    y_row2, h_row2 = y_cards + h_cards + 0.14, 2.24
+    gap_col = 0.25
+    w_col = (LARGURA_IN - 2 * MARGEM_IN - gap_col) / 2
+    x_col1, x_col2 = MARGEM_IN, MARGEM_IN + w_col + gap_col
+
+    por_dia = fefo.get("por_dia") or []
+    _texto(slide, x_col1, y_row2, w_col, 0.22, "TRANSFERÊNCIAS E QUEBRAS POR DIA", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if por_dia:
+        dias = [p["data"] for p in por_dia]
+        # mostrar_rotulos=False: até 20 dias x 2 séries lado a lado - rótulo
+        # em cada coluna ficaria ilegível/sobreposto nessa largura (mesma
+        # razão documentada em _grafico_categoria_multi pro Farol de
+        # Shelf-Life) - o eixo numérico + a legenda já bastam pra leitura.
+        _grafico_categoria_multi(
+            slide, x_col1, y_row2 + 0.24, w_col, h_row2 - 0.24, dias,
+            [("Transferências", [p["total"] for p in por_dia], VERDE_AMAZONIA),
+             ("Quebras", [p["quebras"] for p in por_dia], COR_ERRO)],
+            tipo=XL_CHART_TYPE.COLUMN_CLUSTERED, formato_numero='0', mostrar_rotulos=False,
+        )
+    else:
+        _caixa_leitura(slide, x_col1, y_row2 + 0.24, w_col, h_row2 - 0.24, "Por dia", "Sem transferências neste mês.")
+
+    top = fefo.get("top_produtos_quebra") or []
+    _texto(slide, x_col2, y_row2, w_col, 0.22, "TOP PRODUTOS COM MAIS QUEBRAS", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
     if top:
         categorias = [t["produto"][:26] for t in reversed(top)]
-        valores = [t["quebras"] for t in reversed(top)]
-        _texto(slide, MARGEM_IN, 3.05, 6.3, 0.26, "PRODUTOS COM MAIS QUEBRAS NO MÊS", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-        _grafico_categoria(slide, MARGEM_IN, 3.35, 6.3, 2.55, categorias, "Quebras", valores,
+        valores = [t["qtd"] for t in reversed(top)]
+        _grafico_categoria(slide, x_col2, y_row2 + 0.24, w_col, h_row2 - 0.24, categorias, "Quebras", valores,
                             tipo=XL_CHART_TYPE.BAR_CLUSTERED, cor_serie=COR_ERRO, formato_numero='0')
     else:
-        _caixa_leitura(slide, MARGEM_IN, 3.05, 6.3, 2.55, "Produtos com mais quebras",
+        _caixa_leitura(slide, x_col2, y_row2 + 0.24, w_col, h_row2 - 0.24, "Produtos com mais quebras",
                         "Nenhuma quebra registrada neste mês.")
 
-    x_direita = MARGEM_IN + 6.3 + 0.35
-    largura_direita = LARGURA_IN - MARGEM_IN - x_direita
-    _texto(slide, x_direita, 3.05, largura_direita, 0.26, "QUEBRAS POR DESTINO", tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
-    por_destino = fefo.get("top_destinos_com_quebra") or []
-    if por_destino:
-        linhas = [[pd["destino"][:30], _fmt_num(pd["quebras"])] for pd in por_destino]
-        _tabela(slide, x_direita, 3.35, largura_direita, 2.55, ["Destino", "Quebras"], linhas,
-                larguras_relativas=[2.6, 1.0], tamanho_fonte=10.5)
-    else:
-        _caixa_leitura(slide, x_direita, 3.35, largura_direita, 2.25, "Por destino", "Sem dados de destino neste mês.")
+    # --- Linha 3: Transferências por destino (pizza) / por grupo de produto (rosca) ---
+    y_row3 = y_row2 + h_row2 + 0.15
+    h_row3 = ALTURA_IN - y_row3 - 0.47
 
-    fontes = fefo.get("fontes_no_periodo") or []
-    fontes_label = " + ".join(
-        "auditoria diária" if f == "auditoria_diaria" else "dashboard consolidado" if f == "dashboard_consolidado" else f
-        for f in fontes
-    ) or "—"
+    por_destino = fefo.get("por_destino") or []
+    _texto(slide, x_col1, y_row3, w_col, 0.22, "TRANSFERÊNCIAS POR DESTINO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if por_destino:
+        nomes = [pd["destino"] for pd in por_destino]
+        valores = [pd["total"] for pd in por_destino]
+        cores = [VERDE_AMAZONIA, AZUL_INSTITUCIONAL, AZUL_CLARO, COR_FAROL_PERIGO, COR_INFO, CINZA_CLARO]
+        _grafico_pizza(slide, x_col1, y_row3 + 0.24, w_col, h_row3 - 0.24, nomes, valores, cores, formato_numero='0')
+    else:
+        _caixa_leitura(slide, x_col1, y_row3 + 0.24, w_col, h_row3 - 0.24, "Por destino", "Sem dados de destino neste mês.")
+
+    por_grupo = fefo.get("por_grupo") or []
+    _texto(slide, x_col2, y_row3, w_col, 0.22, "TRANSFERÊNCIAS POR GRUPO DE PRODUTO", tamanho=10.5, negrito=True, cor=AZUL_INSTITUCIONAL)
+    if por_grupo:
+        nomes = [pg["grupo"] for pg in por_grupo]
+        valores = [pg["total"] for pg in por_grupo]
+        _grafico_donut(slide, x_col2, y_row3 + 0.24, w_col, h_row3 - 0.24, nomes, valores, CORES_FUNIL_PADRAO + [CINZA_CLARO],
+                        formato_numero='0')
+    else:
+        _caixa_leitura(slide, x_col2, y_row3 + 0.24, w_col, h_row3 - 0.24, "Por grupo", "Sem dados de grupo neste mês.")
+
     _texto(
-        slide, MARGEM_IN, 6.15, LARGURA_IN - 2 * MARGEM_IN, 0.5,
-        f"Fonte: Auditoria FEFO importada (tela FEFO), origem no mês: {fontes_label} — "
-        f"{_fmt_num(fefo.get('total_sem_correspondencia'))} movimento(s) sem correspondência neste mês não entram na taxa de quebra.",
-        tamanho=10, cor=CINZA_TEXTO,
+        slide, MARGEM_IN, ALTURA_IN - 0.32, LARGURA_IN - 2 * MARGEM_IN, 0.24,
+        f"Fonte: dashboard de Controle de FEFO (Auditoria > Outros Dashboards), enviado em {fefo.get('enviado_em') or '—'}.",
+        tamanho=9, cor=CINZA_TEXTO,
     )
     return slide
 
