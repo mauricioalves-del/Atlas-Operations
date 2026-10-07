@@ -6796,18 +6796,32 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # diferentes gerados em momentos distintos) - verificação exaustiva
     # (schema XSD, zip, XML, IDs/rels, cache de gráfico, workbooks
     # embutidos, python-pptx, LibreOffice) não achou NENHUM defeito
-    # estrutural nos dois arquivos reais enviados, então o próximo passo é
-    # isolar qual dos dois slides é a causa real, um de cada vez, em vez de
-    # continuar testando os dois juntos. FEFO (geometria reescrita hoje,
-    # helper `_grafico_pizza` novo, `cor_borda_risco` novo) é o mais
-    # recentemente alterado, então foi desativado primeiro - Investimento
-    # Operacional (estável há dias) continua ativo nesta rodada de teste.
+    # estrutural em nenhum dos arquivos reais enviados até agora, então o
+    # plano é isolar qual dos dois slides é a causa real, um de cada vez.
+    #
+    # Rodada 1 (FEFO desativado, Investimento ativo): usuário reportou "mesmo
+    # erro" de novo, e desta vez o slide de Investimento Operacional veio em
+    # branco no PowerPoint (indício de que o PowerPoint tentou reparar o
+    # arquivo e descartou justamente o conteúdo desse slide pra salvar o
+    # resto). Investiguei a fundo os 3 gráficos desse slide (combo
+    # coluna-empilhada+linha "Tendência Mensal", barra "Valor por Motivo",
+    # rosca "Cortesia") procurando qualquer coisa que o LibreOffice tolere e
+    # o PowerPoint não - nenhuma das hipóteses testadas (reuso de axId entre
+    # gráficos, <c:scaling/> vazio, rótulo outEnd em barra empilhada,
+    # referência a uma coluna "Z" que não existe na planilha embutida do
+    # gráfico de tendência) resistiu: todas essas MESMAS características
+    # também aparecem em gráficos de OUTROS slides já estáveis/em produção
+    # há meses (ex.: chart1.xml, que não é nem FEFO nem Investimento) - ou
+    # seja, não são a causa, porque se fossem o bug já estaria acontecendo
+    # há muito tempo em slides que nunca deram problema.
+    #
+    # Rodada 2 (este commit): invertido - Investimento Operacional
+    # desativado, FEFO reativado - pra testar o outro lado do isolamento.
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
-        "Pacote de Baixas — Investimento Operacional",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
-        "Testes Industriais",
+        "Testes Industriais", "FEFO",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -6816,17 +6830,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
            "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
-           "recuperação de shelf, dispersão de ficha técnica e Testes Industriais.",
+           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
-    _slide_investimento_operacional(prs, mes_label, _pag(), dados)
+    # _slide_investimento_operacional(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado pra isolar o bug (rodada 2) - ver comentário acima de itens_riscos_passivos
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_metas_individuais(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
-    # _slide_fefo(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado pra isolar o bug - ver comentário acima de itens_riscos_passivos
+    _slide_fefo(prs, mes_label, _pag(), dados)
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
