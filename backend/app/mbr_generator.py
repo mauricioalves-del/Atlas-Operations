@@ -6778,25 +6778,25 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # Operacionais): "Dashboard Baixas Operacionais — Evolução Mensal"
     # também foi removido (mesma fusão) - saiu desta lista também.
     # 06/10/2026: "Pacote de Baixas — Investimento Operacional" e "FEFO"
-    # temporariamente REMOVIDOS da geração real do MBR (e da lista da capa
-    # abaixo) - o usuário reportou o PowerPoint recusando abrir o .pptx
-    # completo ("O PowerPoint encontrou um problema com o conteúdo...") logo
-    # após essas duas entrarem na geração; pediu pra tirar as duas enquanto
-    # o bug é isolado. Os testes de slide isolado (_slide_fefo e
-    # _slide_investimento_operacional sozinhos numa Presentation vazia)
-    # passaram no validate.py e abriram normalmente - a causa provável é
-    # algo que só aparece quando combinado com os outros ~25 slides/gráficos
-    # do relatório completo (ex.: colisão de nome/rId de parte de gráfico),
-    # não um defeito das funções isoladas. Funções continuam definidas e
-    # chamadas abaixo comentadas, não apagadas, pra reativar assim que o bug
-    # for encontrado e corrigido.
+    # foram temporariamente removidos daqui (ver histórico no comentário git/
+    # project doc `mbr-investimento-operacional-slide-unico.md`) depois do
+    # usuário reportar o PowerPoint recusando abrir o .pptx completo. A causa
+    # real, investigada em 07/10/2026, era OUTRA: um erro de "Sync" do
+    # Blueprint do Render (render.yaml com o plano do banco desatualizado)
+    # que travava o pipeline de deploy, não um defeito nestes dois slides -
+    # com o render.yaml corrigido e o deploy funcionando de novo, as duas
+    # chamadas abaixo foram REATIVADAS. Se o PowerPoint voltar a recusar o
+    # arquivo especificamente com essas duas de volta, desativar de novo só
+    # uma por vez (não as duas juntas) pra isolar qual É de fato a causa,
+    # antes de suspeitar de bug nelas.
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
+        "Pacote de Baixas — Investimento Operacional",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
-        "Testes Industriais",
+        "Testes Industriais", "FEFO",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -6805,17 +6805,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
            "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
-           "recuperação de shelf, dispersão de ficha técnica e Testes Industriais.",
+           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
-    # _slide_investimento_operacional(prs, mes_label, _pag(), dados)  # 06/10/2026: desativado temporariamente, ver comentário acima de itens_riscos_passivos
+    _slide_investimento_operacional(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_metas_individuais(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
-    # _slide_fefo(prs, mes_label, _pag(), dados)  # 06/10/2026: desativado temporariamente, ver comentário acima de itens_riscos_passivos
+    _slide_fefo(prs, mes_label, _pag(), dados)
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
