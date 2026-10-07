@@ -2611,15 +2611,6 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         "investimento_operacional_externo": _extrair_dashboard_externo_por_nome(
             db, "Pacote de baixas - Investimento Operacional", dash_ext.extrair_investimento_operacional, mes
         ),
-        # Risco de Obsolescência de Materiais (07/10/2026, pedido do usuário:
-        # "Adicionei um novo indicador via html dentro do atlas... Por favor,
-        # traga a visão igual a do shelf life") - mesmo padrão de indicador
-        # DINÂMICO com extração/slide dedicados que os 3 acima (ver docstring
-        # de _extrair_dashboard_externo_por_nome e dashboards_externos_
-        # extrator.extrair_risco_obsolescencia_materiais).
-        "risco_obsolescencia_materiais_externo": _extrair_dashboard_externo_por_nome(
-            db, "Risco de Obsolescência de Materiais", dash_ext.extrair_risco_obsolescencia_materiais, mes
-        ),
         # Fechamento Mensal do Stock Savvy (09/09/2026) - substitui a antiga
         # análise "Atlas + Stock Savvy" por números reais mapeados pela
         # implementação (ver _slide_fechamento_stock_savvy).
@@ -2643,14 +2634,11 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
     dados["dispersao_ficha_tecnica_externo"].pop("_chave_dashboard_externo", None)
     dados["metas_individuais_externo"].pop("_chave_dashboard_externo", None)
     dados["investimento_operacional_externo"].pop("_chave_dashboard_externo", None)
-    dados["risco_obsolescencia_materiais_externo"].pop("_chave_dashboard_externo", None)
     chaves_correlatas_dispersao = dados["dispersao_ficha_tecnica_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
     chaves_correlatas_metas = dados["metas_individuais_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
     chaves_correlatas_investimento = dados["investimento_operacional_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
-    chaves_correlatas_obsolescencia = dados["risco_obsolescencia_materiais_externo"].pop("_chaves_dashboard_externo_correlatas", None) or []
     chaves_dedicadas = {
-        c for c in (*chaves_correlatas_dispersao, *chaves_correlatas_metas, *chaves_correlatas_investimento,
-                    *chaves_correlatas_obsolescencia) if c
+        c for c in (*chaves_correlatas_dispersao, *chaves_correlatas_metas, *chaves_correlatas_investimento) if c
     }
     dados["dashboards_extras"] = _coletar_dashboards_extras(
         db, chaves_excluir=chaves_dedicadas or None
@@ -5143,134 +5131,6 @@ def _slide_farol_shelf_externo(prs: Presentation, mes_label: str, pagina: int, d
     return slide
 
 
-# Ordem/cor das 3 faixas do Risco de Obsolescência de Materiais (07/10/2026).
-# Mesma paleta de severidade do Farol de Shelf-Life (COR_FAROL_*), mas com a
-# ORDEM INVERTIDA: lá "menos dias restantes" é pior (0-30 = urgente); aqui
-# "mais dias parado sem movimento" é pior, então a faixa "+90" é que leva a
-# cor mais crítica (URGENTE), não a "30-60" - ver docstring de
-# dashboards_externos_extrator.extrair_risco_obsolescencia_materiais.
-_ORDEM_FAIXA_OBSOLESCENCIA = ["30-60", "61-90", "+90"]
-_CORES_FAIXA_OBSOLESCENCIA = {
-    "30-60": COR_FAROL_ATENCAO,
-    "61-90": COR_FAROL_PERIGO,
-    "+90": COR_FAROL_URGENTE,
-}
-
-
-def _slide_risco_obsolescencia_materiais(prs: Presentation, mes_label: str, pagina: int, d: dict):
-    """Risco de Obsolescência de Materiais (07/10/2026, pedido do usuário:
-    "Adicionei um novo indicador via html dentro do atlas... Por favor,
-    traga a visão igual a do shelf life") - indicador DINÂMICO (Outros
-    Dashboards > Adicionar Indicador), mesmo padrão de extração/slide
-    dedicados que Dispersão de Ficha Técnica/Metas Individuais/Investimento
-    Operacional (ver docstring de _extrair_dashboard_externo_por_nome e
-    dashboards_externos_extrator.extrair_risco_obsolescencia_materiais).
-
-    Layout deliberadamente espelha _slide_farol_shelf_externo acima (pedido
-    explícito do usuário, "igual a do shelf life"): cartões de KPI por
-    faixa de severidade, 2 gráficos empilhados lado a lado (por almoxarifado
-    e por grupo) e 3 colunas de Top 5 por faixa - mesmas posições/alturas
-    (y_cards=1.55, y_grafico=2.50/altura 2.40, y_titulo=4.902/y_tabela=5.142)
-    pra manter o mesmo "ritmo" visual entre os dois slides de risco de
-    estoque. Só 3 cartões/colunas em vez de 4 - este indicador não tem
-    conceito de "já vencido" (é sobre material PARADO, não sobre VALIDADE),
-    só as 3 faixas de dias sem movimento (30-60/61-90/+90) que o export
-    já traz prontas."""
-    slide = _slide_em_branco(prs)
-    _fundo(slide, BRANCO)
-    _cabecalho(slide, "Risco de Obsolescência de Materiais", mes_label, pagina,
-               "Retrato do estoque parado sem movimento — dados reais do dashboard de Risco de Obsolescência")
-
-    dado = d["risco_obsolescencia_materiais_externo"]
-    if _slide_externo_indisponivel(slide, dado, "Risco de Obsolescência de Materiais"):
-        return slide
-
-    por_faixa = dado.get("por_faixa") or {}
-
-    def _bucket(faixa):
-        return por_faixa.get(faixa) or {"qtd": 0, "valor": 0.0, "itens": []}
-
-    _linha_kpis(slide, 1.55, [
-        {"valor": _fmt_num(_bucket("30-60")["qtd"]), "rotulo": "30-60 Dias Parado",
-         "cor": _CORES_FAIXA_OBSOLESCENCIA["30-60"], "contexto": _fmt_moeda(_bucket("30-60")["valor"]),
-         "cor_contexto": _CORES_FAIXA_OBSOLESCENCIA["30-60"]},
-        {"valor": _fmt_num(_bucket("61-90")["qtd"]), "rotulo": "61-90 Dias Parado",
-         "cor": _CORES_FAIXA_OBSOLESCENCIA["61-90"], "contexto": _fmt_moeda(_bucket("61-90")["valor"]),
-         "cor_contexto": _CORES_FAIXA_OBSOLESCENCIA["61-90"]},
-        {"valor": _fmt_num(_bucket("+90")["qtd"]), "rotulo": "+90 Dias Parado",
-         "cor": _CORES_FAIXA_OBSOLESCENCIA["+90"], "contexto": _fmt_moeda(_bucket("+90")["valor"]),
-         "cor_contexto": _CORES_FAIXA_OBSOLESCENCIA["+90"], "cor_borda_risco": _CORES_FAIXA_OBSOLESCENCIA["+90"]},
-    ], altura=0.68)
-
-    # Valor por Almoxarifado (barra empilhada em R$) e Valor por Grupo (barra
-    # empilhada em 100%), lado a lado - mesma geometria de
-    # _slide_farol_shelf_externo (ver comentário lá pro histórico de onde
-    # essas medidas vieram).
-    largura_grafico = (LARGURA_IN - 2 * MARGEM_IN - 0.4) / 2
-    x2_grafico = MARGEM_IN + largura_grafico + 0.4
-    y_grafico, altura_grafico = 2.50, 2.40
-
-    por_almox = dado.get("por_almoxarifado") or {}
-    if por_almox:
-        totais_almox = {almox: sum(c.values()) for almox, c in por_almox.items()}
-        categorias = sorted(totais_almox, key=lambda c: -totais_almox[c])[:8]
-        series = []
-        for faixa in _ORDEM_FAIXA_OBSOLESCENCIA:
-            valores_faixa = [por_almox.get(c, {}).get(faixa, 0.0) for c in categorias]
-            if not any(valores_faixa):
-                continue
-            series.append((faixa, valores_faixa, _CORES_FAIXA_OBSOLESCENCIA[faixa]))
-        _grafico_categoria_multi(slide, MARGEM_IN, y_grafico, largura_grafico, altura_grafico, categorias, series,
-                                  tipo=XL_CHART_TYPE.COLUMN_STACKED, formato_numero='R$ #,##0', mostrar_rotulos=False)
-    else:
-        _caixa_leitura(slide, MARGEM_IN, y_grafico, largura_grafico, altura_grafico, "Sem dados",
-                       "Valor por Almoxarifado não disponível neste retrato.", tamanho_texto=11)
-
-    por_grupo = dado.get("por_grupo") or {}
-    if por_grupo:
-        totais_grupo = {grupo: sum(c.values()) for grupo, c in por_grupo.items()}
-        categorias_grupo = sorted(totais_grupo, key=lambda g: -totais_grupo[g])
-        series_grupo = []
-        for faixa in _ORDEM_FAIXA_OBSOLESCENCIA:
-            valores_faixa = [por_grupo.get(g, {}).get(faixa, 0.0) for g in categorias_grupo]
-            if not any(valores_faixa):
-                continue
-            series_grupo.append((faixa, valores_faixa, _CORES_FAIXA_OBSOLESCENCIA[faixa]))
-        _grafico_categoria_multi(slide, x2_grafico, y_grafico, largura_grafico, altura_grafico, categorias_grupo,
-                                  series_grupo, tipo=XL_CHART_TYPE.BAR_STACKED_100, mostrar_rotulos=False)
-    else:
-        _caixa_leitura(slide, x2_grafico, y_grafico, largura_grafico, altura_grafico, "Sem dados",
-                       "Valor por Grupo não disponível neste retrato.", tamanho_texto=11)
-
-    # 3 colunas de Top 5 por faixa - mesma geometria de _slide_farol_shelf_externo.
-    colunas = [
-        ("30-60 DIAS", _bucket("30-60"), _CORES_FAIXA_OBSOLESCENCIA["30-60"]),
-        ("61-90 DIAS", _bucket("61-90"), _CORES_FAIXA_OBSOLESCENCIA["61-90"]),
-        ("+90 DIAS", _bucket("+90"), _CORES_FAIXA_OBSOLESCENCIA["+90"]),
-    ]
-    gap = 0.3
-    largura_col = (LARGURA_IN - 2 * MARGEM_IN - 2 * gap) / 3
-    y_titulo, y_tabela, altura_tabela = 4.902, 5.142, 1.891
-    algum_bucket_com_itens = False
-    for i, (titulo, bucket, cor) in enumerate(colunas):
-        x = MARGEM_IN + i * (largura_col + gap)
-        _texto(slide, x, y_titulo, largura_col, 0.24, titulo, tamanho=10, negrito=True, cor=cor)
-        if bucket.get("itens"):
-            algum_bucket_com_itens = True
-            linhas_tabela = [[it["descricao"][:26], _fmt_moeda(it["valor"])] for it in bucket["itens"]]
-            _tabela(slide, x, y_tabela, largura_col, altura_tabela, ["Descrição", "Valor"], linhas_tabela,
-                    larguras_relativas=[2.2, 1.0], tamanho_fonte=9)
-            _texto(slide, x, y_tabela + altura_tabela + 0.06, largura_col, 0.22,
-                   f"Total: {_fmt_moeda(bucket['valor'])}", tamanho=9, negrito=True, cor=CINZA_TEXTO)
-        else:
-            _caixa_leitura(slide, x, y_tabela, largura_col, altura_tabela, "Sem itens",
-                            "Nenhum lote nesta faixa.", tamanho_texto=10)
-    if not algum_bucket_com_itens:
-        _caixa_leitura(slide, MARGEM_IN, y_tabela, LARGURA_IN - 2 * MARGEM_IN, altura_tabela, "Materiais parados",
-                        "Nenhum material em risco de obsolescência neste retrato.")
-    return slide
-
-
 # Ordem/cor fixa das 3 séries do gráfico de evolução mensal da Recuperação
 # de Shelf (Fase 2, 22/08/2026) - mesma paleta de sucesso/erro já usada nos
 # cartões de KPI deste mesmo slide (Perda Real em vermelho, Receita
@@ -6976,7 +6836,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
         "Pacote de Baixas — Investimento Operacional",
-        "Farol de Shelf-Life", "Risco de Obsolescência de Materiais", "Recuperação de Shelf",
+        "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
         "Testes Industriais", "FEFO",
     ]
@@ -6986,14 +6846,13 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     else:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
-           "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, risco de "
-           "obsolescência, recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
+           "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
+           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
     _slide_investimento_operacional(prs, mes_label, _pag(), dados)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
-    _slide_risco_obsolescencia_materiais(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_metas_individuais(prs, mes_label, _pag(), dados)

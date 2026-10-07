@@ -1531,3 +1531,84 @@ def extrair_investimento_operacional(html_content: str, mes: str) -> dict:
         "tops": tops,
         "exportado_em": exportado_em,
     }
+
+
+# ---------------------------------------------------------------------------
+# 7. Risco de Obsolescência de Materiais (07/10/2026, pedido do usuário:
+#    "Adicionei um novo indicador via html dentro do atlas... Por favor,
+#    traga a visão igual a do shelf life") - indicador DINÂMICO (Outros
+#    Dashboards > Adicionar Indicador), mesmo padrão de extração/slide
+#    dedicados que Dispersão de Ficha Técnica/Metas Individuais/Investimento
+#    Operacional (ver docstring de mbr_generator._extrair_dashboard_externo_
+#    por_nome) - mas, diferente desses três, é uma FOTO do estoque no
+#    momento da exportação (só "geradoEm" global, sem "mes"/"data" por
+#    linha), igual Farol de Shelf-Life. Por isso o parâmetro `mes` é
+#    ignorado aqui - mantido só pra bater com a assinatura padrão que
+#    _extrair_dashboard_externo_por_nome sempre chama com (html, mes).
+#
+#    Cada linha é um LOTE parado sem movimento, com a faixa de dias parado
+#    ("faixa": "30-60"/"61-90"/"+90" - "dias" vem null pra "+90", o export
+#    não cobre acima disso). Estrutura parecida com o Farol de Shelf-Life
+#    (3-4 faixas de dias por lote), mas com a severidade INVERTIDA: no
+#    Shelf-Life "menos dias restantes" é pior (risco de vencer); aqui "mais
+#    dias parado" é pior (risco de obsolescência) - por isso a ordem de cor
+#    (ver _ORDEM_FAIXA_OBSOLESCENCIA em mbr_generator) sobe de severidade
+#    com a faixa, não desce.
+def extrair_risco_obsolescencia_materiais(html_content: str, mes: str) -> dict:
+    m = re.search(r'<script id="d" type="application/json">(.*?)</script>', html_content, re.S)
+    if not m:
+        return None
+    try:
+        dados = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+
+    linhas = dados.get("linhas") or []
+    if not linhas:
+        return {"tem_dados": False}
+
+    faixas = ["30-60", "61-90", "+90"]
+    por_faixa = {f: {"qtd": 0, "valor": 0.0, "itens": []} for f in faixas}
+    por_almoxarifado: dict = {}
+    por_grupo: dict = {}
+
+    for l in linhas:
+        faixa = l.get("faixa")
+        if faixa not in por_faixa:
+            continue
+        valor = l.get("valor") or 0.0
+        por_faixa[faixa]["qtd"] += 1
+        por_faixa[faixa]["valor"] += valor
+        por_faixa[faixa]["itens"].append({
+            "descricao": l.get("descricao") or "—",
+            "valor": valor,
+            "almoxarifado": l.get("almoxarifado"),
+            "grupo": l.get("grupo"),
+            "lote": l.get("lote"),
+            "dias": l.get("dias"),
+        })
+
+        almox = l.get("almoxarifado") or "Não informado"
+        c_almox = por_almoxarifado.setdefault(almox, {f: 0.0 for f in faixas})
+        c_almox[faixa] += valor
+
+        grupo = l.get("grupo") or "Não informado"
+        c_grupo = por_grupo.setdefault(grupo, {f: 0.0 for f in faixas})
+        c_grupo[faixa] += valor
+
+    for f in faixas:
+        por_faixa[f]["itens"].sort(key=lambda it: -it["valor"])
+        por_faixa[f]["itens"] = por_faixa[f]["itens"][:5]
+
+    total_valor = sum(c["valor"] for c in por_faixa.values())
+    total_qtd = sum(c["qtd"] for c in por_faixa.values())
+
+    return {
+        "tem_dados": True,
+        "total_valor": total_valor,
+        "total_qtd": total_qtd,
+        "por_faixa": por_faixa,
+        "por_almoxarifado": por_almoxarifado,
+        "por_grupo": por_grupo,
+        "exportado_em": dados.get("geradoEm"),
+    }
