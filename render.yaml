@@ -11,7 +11,18 @@
 
 databases:
   - name: atlas-db
-    plan: free
+    # 07/10/2026: o banco já tinha sido promovido pro plano pago "0.1c-256mb"
+    # ($6/mês) pelo painel do Render, sem este arquivo ser atualizado junto -
+    # isso fazia o Render recusar TODO "Sync" automático do Blueprint
+    # (gatilho de cada push) com o erro "cannot downgrade database from
+    # 0.1c-256mb to Free", porque o Blueprint tentava reverter pro plano
+    # Free gratuito sempre que sincronizava. Esse erro de Sync é separado do
+    # deploy do serviço web em si (o deploy do código continua acontecendo
+    # por fora do Blueprint, via auto-deploy do GitHub) - mas deixava a aba
+    # "Syncs" do Render sempre vermelha. Corrigido apontando aqui pro plano
+    # real já em uso, em vez de reintroduzir o drift toda vez que esse
+    # arquivo for lido de novo.
+    plan: 0.1c-256mb
     databaseName: atlas
     user: atlas
 
