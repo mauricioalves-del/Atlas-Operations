@@ -906,7 +906,7 @@ async function carregarDashboard() {
   tentarRenderizar(() => renderAcuraciaAlmoxarifado(acuraciaAlmox));
   tentarRenderizar(() => renderRanking(rank));
   tentarRenderizar(() => renderTop(top));
-  tentarRenderizar(() => preencherFiltroAlmoxarifado(heatmap));
+  tentarRenderizar(() => preencherFiltroAlmoxarifado());
   tentarRenderizar(() => renderizarResumoExecutivoNarrado("dashboard-resumo-executivo", construirResumoExecutivoDashboard(kpis, causas)));
 }
 
@@ -1302,16 +1302,31 @@ function renderTop(top) {
     .join("");
 }
 
-function preencherFiltroAlmoxarifado(heatmapDados) {
+async function preencherFiltroAlmoxarifado() {
+  // 07/10/2026 - correção: antes esta lista vinha do heatmap (Almoxarifado ×
+  // Hipótese), que já é filtrado pelo período selecionado (padrão "Mês
+  // atual") - então, no início de cada mês, só apareciam aqui os
+  // almoxarifados que já tinham alguma divergência detectada NESTE mês,
+  // escondendo os demais, cadastrados e com histórico, mas sem divergência
+  // ainda no período corrente. Agora usa a lista oficial de almoxarifados
+  // cadastrados (mesmo endpoint que Fechamento, Importar e Usuários já
+  // usam como fonte única de verdade), então todos aparecem sempre,
+  // independente do período filtrado.
   const sel = document.getElementById("filtro-almoxarifado");
   if (sel.options.length > 1) return;
-  const almoxs = [...new Set(heatmapDados.map((d) => d.almoxarifado))];
-  almoxs.forEach((a) => {
-    const opt = document.createElement("option");
-    opt.value = a;
-    opt.textContent = a;
-    sel.appendChild(opt);
-  });
+  try {
+    const almoxarifados = await apiFetch(`${API}/almoxarifados-cadastro`).then((r) => r.json());
+    almoxarifados
+      .filter((a) => a.ativo)
+      .forEach((a) => {
+        const opt = document.createElement("option");
+        opt.value = a.codigo;
+        opt.textContent = a.nome_exibicao && a.nome_exibicao !== a.codigo ? `${a.codigo} — ${a.nome_exibicao}` : a.codigo;
+        sel.appendChild(opt);
+      });
+  } catch (erro) {
+    console.error("Falha ao carregar lista de almoxarifados para o filtro do Painel de Divergências:", erro);
+  }
 }
 document.getElementById("filtro-almoxarifado").addEventListener("change", carregarDashboard);
 document.getElementById("filtro-periodo").addEventListener("change", carregarDashboard);
