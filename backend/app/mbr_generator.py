@@ -6815,13 +6815,41 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # seja, não são a causa, porque se fossem o bug já estaria acontecendo
     # há muito tempo em slides que nunca deram problema.
     #
-    # Rodada 2 (este commit): invertido - Investimento Operacional
-    # desativado, FEFO reativado - pra testar o outro lado do isolamento.
+    # Rodada 2 (Investimento Operacional desativado, FEFO reativado): usuário
+    # reportou "mesmo erro, novamente gerou o relatório em branco" - desta
+    # vez no slide de FEFO. Ou seja: CADA UM dos dois slides, sozinho, já é
+    # suficiente pra disparar o reparo do PowerPoint (não é interação entre
+    # os dois). Investigação a fundo no slide de FEFO (card com borda
+    # vermelha `cor_borda_risco`, novo em 06/10 - helper `_retangulo`
+    # continua 100% API pública do python-pptx, nada de XML cru; gráficos
+    # `_grafico_pizza`/`_grafico_categoria_multi`/`_grafico_donut`/
+    # `_grafico_categoria` - `_grafico_pizza` é cópia quase idêntica do
+    # `_grafico_donut` já estável, só troca DOUGHNUT por PIE) + varredura
+    # byte a byte do pacote inteiro (IDs de forma duplicados dentro do
+    # slide, r:id usado sem relationship declarada, relationship Id
+    # duplicado em QUALQUER .rels do pacote, PartName duplicado ou sem
+    # cobertura em [Content_Types].xml, embeddings .xlsx reutilizados entre
+    # gráficos, .xlsx embutido corrompido/ilegível, <p:sldId> ou r:id
+    # duplicado/órfão em presentation.xml, caractere de controle ou unicode
+    # inválido em qualquer texto de slide/gráfico) não achou NENHUM defeito
+    # em nenhuma dessas frentes - mesmo resultado "limpo" dos 2 slides, nas 2
+    # rodadas. Ou seja: o defeito, se existe no arquivo, não é nenhuma das
+    # ~15 hipóteses estruturais já testadas (ver histórico completo no
+    # project doc `mbr-investimento-operacional-slide-unico.md`).
+    #
+    # Próximo passo (ainda não feito): em vez de continuar adivinhando mais
+    # hipóteses estruturais, pedir pro usuário o LOG DE REPARO real do
+    # PowerPoint (ou o arquivo já reparado/salvo por ele) pra comparar
+    # byte a byte com o original e achar exatamente o que o PowerPoint
+    # removeu - isso aponta o defeito real em vez de mais tentativa-e-erro.
+    # Até lá, os dois voltam DESATIVADOS (estado já comprovado 100% estável
+    # no arquivo "8") pra não gerar mais nenhum arquivo quebrado enquanto
+    # isso não é resolvido com certeza.
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
-        "Testes Industriais", "FEFO",
+        "Testes Industriais",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -6830,17 +6858,17 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
            "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
-           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
+           "recuperação de shelf, dispersão de ficha técnica e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
-    # _slide_investimento_operacional(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado pra isolar o bug (rodada 2) - ver comentário acima de itens_riscos_passivos
+    # _slide_investimento_operacional(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado de novo - ver comentário acima de itens_riscos_passivos (rodadas 1 e 2 confirmaram que CADA slide sozinho já corrompe)
     _slide_farol_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_recuperacao_shelf_externo(prs, mes_label, _pag(), dados)
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_metas_individuais(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
-    _slide_fefo(prs, mes_label, _pag(), dados)
+    # _slide_fefo(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado de novo - ver comentário acima de itens_riscos_passivos (rodadas 1 e 2 confirmaram que CADA slide sozinho já corrompe)
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
