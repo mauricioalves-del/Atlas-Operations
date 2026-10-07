@@ -6791,12 +6791,23 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     # antes de suspeitar de bug nelas.
     nomes_extras = [item["nome_exibicao"] for item in dados["dashboards_extras"]]
     limite_itens_capa = 4
+    # 07/10/2026: com os dois slides reativados, o PowerPoint voltou a
+    # recusar o .pptx completo (reproduzido 2x seguidas, 2 arquivos
+    # diferentes gerados em momentos distintos) - verificação exaustiva
+    # (schema XSD, zip, XML, IDs/rels, cache de gráfico, workbooks
+    # embutidos, python-pptx, LibreOffice) não achou NENHUM defeito
+    # estrutural nos dois arquivos reais enviados, então o próximo passo é
+    # isolar qual dos dois slides é a causa real, um de cada vez, em vez de
+    # continuar testando os dois juntos. FEFO (geometria reescrita hoje,
+    # helper `_grafico_pizza` novo, `cor_borda_risco` novo) é o mais
+    # recentemente alterado, então foi desativado primeiro - Investimento
+    # Operacional (estável há dias) continua ativo nesta rodada de teste.
     itens_riscos_passivos = [
         "Dashboard Baixas Operacionais", "Controle de Pacotes de Baixa",
         "Pacote de Baixas — Investimento Operacional",
         "Farol de Shelf-Life", "Recuperação de Shelf",
         "Dispersão de Ficha Técnica", "Metas Individuais",
-        "Testes Industriais", "FEFO",
+        "Testes Industriais",
     ]
     if len(nomes_extras) > limite_itens_capa:
         itens_riscos_passivos += nomes_extras[:limite_itens_capa]
@@ -6805,7 +6816,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
         itens_riscos_passivos += nomes_extras
     _secao(3, "Mapeamento de Riscos e Passivos",
            "Passivos e baixas (fonte oficial: dashboards externos aprovados), validade de lotes, "
-           "recuperação de shelf, dispersão de ficha técnica, FEFO e Testes Industriais.",
+           "recuperação de shelf, dispersão de ficha técnica e Testes Industriais.",
            itens_riscos_passivos)
     _slide_baixas_operacionais_externo(prs, mes_label, _pag(), dados)
     _slide_controle_pacotes_baixa(prs, mes_label, _pag(), dados)
@@ -6815,7 +6826,7 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
     _slide_dispersao_ficha_tecnica(prs, mes_label, _pag(), dados)
     _slide_metas_individuais(prs, mes_label, _pag(), dados)
     _slide_testes_industriais(prs, mes_label, _pag(), dados)
-    _slide_fefo(prs, mes_label, _pag(), dados)
+    # _slide_fefo(prs, mes_label, _pag(), dados)  # 07/10/2026: desativado pra isolar o bug - ver comentário acima de itens_riscos_passivos
     for item in dados["dashboards_extras"]:
         _slide_dashboard_externo_generico(prs, mes_label, _pag(), item)
 
