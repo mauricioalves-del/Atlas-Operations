@@ -1683,8 +1683,18 @@ async function abrirDetalhe(id) {
             ${d.status !== "Resolvida" && podeEditar ? `<button class="btn-secundario" id="btn-reinvestigar">↻ Reinvestigar</button>` : ""}
           </div>
         </div>
+        ${
+          d.status === "Aberta" && podeEditar
+            ? `<textarea id="obs-investigacao" rows="2" placeholder="Observação opcional ao deixar em investigação (ex: o que ainda falta apurar)..." style="width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--radius-input); color:var(--text); padding:8px 10px; font-family:var(--sans); font-size:13px; margin-bottom:10px"></textarea>`
+            : ""
+        }
         ${d.tem_investigacao_pendente ? `<p style="color:var(--alto)">⚠️ Este SKU já tem outro caso ainda em investigação - pode ser reincidência antes da causa anterior ser resolvida.</p>` : ""}
         ${d.aviso_baixa_pendente ? `<p style="color:var(--medio)">🕒 ${d.aviso_baixa_pendente}</p>` : ""}
+        ${
+          d.observacao_investigacao
+            ? `<p>📝 <strong>Observação (em investigação):</strong> ${d.observacao_investigacao} <span class="hint" style="display:inline">— ${d.observacao_investigacao_por || "—"}, ${new Date(d.observacao_investigacao_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span></p>`
+            : ""
+        }
         <p><strong>Hipótese (motor de regras):</strong> ${rotulo(d.hipotese_regras)} ${d.confianca_regras != null ? "(" + d.confianca_regras + "%)" : ""}</p>
         <p><strong>Hipótese (modelo estatístico):</strong> ${rotulo(d.hipotese_ml)} ${d.confianca_ml != null ? "(" + d.confianca_ml + "%)" : ""}</p>
         <p><strong>Hipótese final reconciliada:</strong> ${rotulo(d.hipotese_ia)} ${d.confianca_ia != null ? "(" + d.confianca_ia + "%)" : ""}</p>
@@ -1781,7 +1791,15 @@ async function abrirDetalhe(id) {
     const btnEmInvestigacao = document.getElementById("btn-em-investigacao");
     if (btnEmInvestigacao) {
       btnEmInvestigacao.addEventListener("click", async () => {
-        await apiFetch(`${API}/divergencias/${d.id}/marcar-investigacao`, { method: "POST" });
+        const campoObs = document.getElementById("obs-investigacao");
+        const observacao = campoObs ? campoObs.value.trim() : "";
+        btnEmInvestigacao.disabled = true;
+        btnEmInvestigacao.textContent = "Marcando...";
+        await apiFetch(`${API}/divergencias/${d.id}/marcar-investigacao`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ observacao: observacao || null }),
+        });
         abrirDetalhe(d.id);
       });
     }

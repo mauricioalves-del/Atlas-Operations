@@ -41,6 +41,12 @@ class DivergenciaOut(BaseModel):
     responsavel: Optional[str]
     tempo_resolucao_minutos: Optional[float]
     status: str
+    # Observação opcional deixada ao marcar "Em investigação" (08/10/2026,
+    # pedido do usuário - ver divergencias_router.marcar_investigacao). Não
+    # confundir com observacao_origem acima (vem da planilha importada).
+    observacao_investigacao: Optional[str] = None
+    observacao_investigacao_por: Optional[str] = None
+    observacao_investigacao_em: Optional[datetime] = None
     tem_investigacao_pendente: bool = False
     # Atributo transiente (calculado a cada listagem, nunca gravado - ver
     # baixas_operacionais.buscar_avisos_baixa_pendente): preenchido quando
@@ -58,6 +64,15 @@ class DivergenciaOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MarcarInvestigacao(BaseModel):
+    """Payload opcional de POST /divergencias/{id}/marcar-investigacao
+    (08/10/2026, pedido do usuário: poder deixar uma observação ao deixar o
+    item "Em investigação", pra registrar por que ainda não foi resolvido
+    ou o que falta apurar). `observacao` é opcional - marcar em
+    investigação sem preenchê-la continua funcionando como antes."""
+    observacao: Optional[str] = None
 
 
 class ConfirmarDivergencia(BaseModel):

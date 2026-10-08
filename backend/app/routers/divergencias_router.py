@@ -477,18 +477,32 @@ def resumir_divergencia_com_ia(
 
 
 @router.post("/{div_id}/marcar-investigacao", response_model=schemas.DivergenciaOut)
-def marcar_investigacao(div_id: int, usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
+def marcar_investigacao(div_id: int, payload: Optional[schemas.MarcarInvestigacao] = None,
+                         usuario: models.Usuario = Depends(requer_papel("admin", "analista")), db: Session = Depends(get_db)):
     """Marca a divergência como 'Em investigação' sem confirmar uma causa
     ainda - usado quando alguém já está apurando o caso, mas não tem uma
     conclusão. Enquanto estiver nesse status, qualquer nova divergência do
-    mesmo SKU aparece com um ícone de atenção na lista."""
+    mesmo SKU aparece com um ícone de atenção na lista.
+
+    `payload.observacao` é opcional (08/10/2026, pedido do usuário) - uma
+    nota livre sobre por que o caso está ficando em investigação ou o que
+    ainda falta apurar. `payload` em si também é opcional (continua
+    aceitando POST sem corpo, como antes) - só grava/atualiza a observação
+    quando ela vem preenchida, nunca apaga uma observação anterior com uma
+    chamada sem texto."""
     div = db.query(models.Divergencia).get(div_id)
     if not div:
         raise HTTPException(404, "Divergência não encontrada")
     if div.status == "Resolvida":
         raise HTTPException(400, "Essa divergência já foi resolvida.")
     div.status = "Em_Investigacao"
-    registrar_log(db, usuario.username, "marcar_em_investigacao", entidade="divergencia", entidade_id=div.id)
+    observacao = (payload.observacao or "").strip() if payload else ""
+    if observacao:
+        div.observacao_investigacao = observacao
+        div.observacao_investigacao_por = usuario.nome_exibicao or usuario.username
+        div.observacao_investigacao_em = datetime.utcnow()
+    registrar_log(db, usuario.username, "marcar_em_investigacao", entidade="divergencia", entidade_id=div.id,
+                  detalhes={"observacao": observacao} if observacao else None)
     db.commit()
     db.refresh(div)
     _preencher_descricao_produto(db, [div])

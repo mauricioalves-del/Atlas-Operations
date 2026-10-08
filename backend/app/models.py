@@ -218,6 +218,17 @@ class Divergencia(Base):
     responsavel = Column(String, nullable=True)
     tempo_resolucao_minutos = Column(Float, nullable=True)
     status = Column(String, default="Aberta")  # Aberta, Em_Investigacao, Resolvida
+
+    # Observação opcional deixada por quem clica em "Deixar em investigação"
+    # (08/10/2026, pedido do usuário - ver divergencias_router.marcar_investigacao).
+    # Não confundir com observacao_origem acima (texto que já vinha de fábrica
+    # na planilha importada, nunca escrito por alguém no Atlas). Só é
+    # sobrescrita quando uma observação nova vem preenchida - marcar em
+    # investigação de novo sem escrever nada não apaga a observação anterior.
+    observacao_investigacao = Column(Text, nullable=True)
+    observacao_investigacao_por = Column(String, nullable=True)
+    observacao_investigacao_em = Column(DateTime, nullable=True)
+
     origem = Column(String, default="movimentacao", index=True)  # movimentacao | fechamento_inventario
     lote_importacao_id = Column(Integer, ForeignKey("lotes_importacao.id"), nullable=True)
     criado_em = Column(DateTime, default=datetime.utcnow)

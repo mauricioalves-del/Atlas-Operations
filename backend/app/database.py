@@ -86,6 +86,16 @@ def garantir_colunas_novas():
             conn.execute(text("ALTER TABLE divergencias ADD COLUMN observacao_origem VARCHAR"))
             conn.commit()
 
+    # observacao_investigacao* (08/10/2026) - observação opcional de quem
+    # clica em "Deixar em investigação" (ver models.Divergencia e
+    # divergencias_router.marcar_investigacao).
+    if "observacao_investigacao" not in colunas_existentes:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN observacao_investigacao TEXT"))
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN observacao_investigacao_por VARCHAR"))
+            conn.execute(text("ALTER TABLE divergencias ADD COLUMN observacao_investigacao_em TIMESTAMP"))
+            conn.commit()
+
     colunas_produtos = {c["name"] for c in inspecao.get_columns("produtos")}
     if "custo_unitario" not in colunas_produtos:
         with engine.connect() as conn:
