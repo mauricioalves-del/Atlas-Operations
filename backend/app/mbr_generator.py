@@ -110,6 +110,22 @@ _LIMIARES = {
     "fefo_quebra_pct": (5.0, 20.0),  # menor é melhor
 }
 
+# Acompanhamento Individual — Acurácia Ponderada (07/10/2026, pedido do
+# usuário, a partir da exportação "Acurácia Ponderada" de 07/10/2026: "crie
+# dois indicadores individuais para os dois piores resultados [...] a loja
+# que demonstrou uma evolução no último inventário mas ainda está bem
+# distante dos demais almoxarifados [...] e o almoxarifado Pátio Paulista
+# que teve seu primeiro inventário e um resultado bem abaixo do ideal").
+# Nomes fixos de propósito, não "os 2 piores deste mês" recalculado
+# automaticamente — o pedido nomeou estes dois almoxarifados especificamente,
+# com o contexto de cada um já descrito (Loja em recuperação lenta desde
+# Jan/2026; Pátio Paulista no 1º inventário, em Set/2026). Se a intenção for
+# acompanhar dinamicamente quem for pior a cada mês (podendo trocar), ajustar
+# estas duas constantes vira outra decisão de produto — ver docstrings de
+# _slide_acuracia_ponderada_destaque_loja/_patio_paulista.
+ALMOX_LOJA = "Almox_SP_Loja"
+ALMOX_PATIO_PAULISTA = "Almox_SP_PatioPaulista"
+
 
 def _status_maior_melhor(valor, bom, atencao):
     if valor is None:
@@ -2458,6 +2474,29 @@ def _coletar_dados_mbr(db: Session, usuario: models.Usuario, mes: str) -> dict:
         # derivado de concentracao_valor acima (ver _prejuizo_por_almoxarifado),
         # não vem deste endpoint (que só devolve os 3 percentuais).
         "comparativo_por_almoxarifado": fechamento_router.dashboard_comparativo_por_almoxarifado(mes=mes, usuario=usuario, db=db),
+        # Acompanhamento Individual — Loja/Pátio Paulista (07/10/2026, ver
+        # ALMOX_LOJA/ALMOX_PATIO_PAULISTA acima) - série mensal dos 3 modelos
+        # JÁ FILTRADA por almoxarifado (mesmo endpoint de evolucao_ponderada
+        # acima, só que com o parâmetro almoxarifado preenchido em vez de
+        # None) - devolve só os meses em que aquele almoxarifado específico
+        # teve fechamento (sem buraco/None pros meses sem inventário, mesma
+        # convenção do endpoint pro consolidado). Truncado pra mes_limite=mes
+        # pelo mesmo motivo de evolucao_ponderada/evolucao_inventario acima.
+        "evolucao_ponderada_loja": _truncar_serie_mensal(
+            fechamento_router.dashboard_evolucao_ponderada_mensal(almoxarifado=ALMOX_LOJA, usuario=usuario, db=db), mes
+        ),
+        "evolucao_ponderada_patio_paulista": _truncar_serie_mensal(
+            fechamento_router.dashboard_evolucao_ponderada_mensal(almoxarifado=ALMOX_PATIO_PAULISTA, usuario=usuario, db=db), mes
+        ),
+        # Top 5 itens em FALTA/SOBRA + valor de prejuízo de cada lado, só do
+        # mês do relatório (07/10/2026, pedido do usuário nos slides de
+        # Acompanhamento Individual - ver dashboard_top_itens_falta_sobra).
+        "top_falta_sobra_loja": fechamento_router.dashboard_top_itens_falta_sobra(
+            almoxarifado=ALMOX_LOJA, mes=mes, top_n=5, usuario=usuario, db=db
+        ),
+        "top_falta_sobra_patio_paulista": fechamento_router.dashboard_top_itens_falta_sobra(
+            almoxarifado=ALMOX_PATIO_PAULISTA, mes=mes, top_n=5, usuario=usuario, db=db
+        ),
         # Top 10 por faixa de magnitude (22/08/2026, mockup aprovado v8, slide
         # novo "Detalhamento por Faixa de Magnitude") - uma chamada por faixa
         # (só 4), mesma função já usada pelo duplo-clique na tela de Acurácia
@@ -3912,6 +3951,278 @@ def _slide_acuracia_ponderada_faixas(prs: Presentation, mes_label: str, pagina: 
         _texto(slide, MARGEM_IN, y_rodape, largura_cheia, 0.20,
                "Top 10 por valor calculado dentro de cada faixa (dashboard_itens_por_magnitude).",
                tamanho=8, italico=True, cor=CINZA_TEXTO)
+    return slide
+
+
+def _secao_top_falta_sobra(slide, y: float, dados_falta_sobra: dict) -> float:
+    """2 tabelas lado a lado - Top 5 ITENS EM FALTA (divergencia_qtd < 0,
+    contagem física abaixo do sistema) e Top 5 ITENS EM SOBRA
+    (divergencia_qtd > 0, física acima do sistema), cada uma com o "valor
+    de prejuízo" daquele lado logo abaixo da tabela (07/10/2026, pedido do
+    usuário nos slides de Acompanhamento Individual: "TOP 5 itens que
+    faltaram e Top 5 [que] sobraram... também traga o valor de prejuízo").
+    Mesmo padrão visual de colunas + total por coluna já usado no slide de
+    Risco de Obsolescência de Materiais (_slide_risco_obsolescencia_materiais) -
+    reaproveitado aqui com 2 colunas (Falta/Sobra) em vez de 3 (faixas de
+    dias). `dados_falta_sobra` é o dict devolvido por
+    fechamento_router.dashboard_top_itens_falta_sobra. Devolve o y onde a
+    seção termina, pro chamador posicionar o que vem a seguir (substituiu o
+    gráfico de ranking entre-almoxarifados nestes 2 slides - não cabiam os
+    dois no mesmo slide; a comparação com os demais almoxarifados já fica
+    no card "Distância da média dos demais" da linha de KPIs).
+
+    07/10/2026, achado em QA visual: a 1ª versão tinha um título geral da
+    seção ("TOP 5 ITENS — FALTA E SOBRA") ACIMA dos 2 títulos de coluna, com
+    só 0.02in de distância entre eles — sobrepunha o texto. Removido o
+    título geral: os 2 títulos de coluna já são autoexplicativos (mesma
+    lógica das 3 colunas de _tabelas_almoxarifado_e_top10, que também não
+    tem título geral). `altura_tabela` também subiu de 1.00 pra 1.35in -
+    1.00in só cabe ~3 linhas de dados a tamanho_fonte=9 antes de cortar a
+    última linha; 1.35in é o mesmo valor default (calibrado pra 5 linhas +
+    cabeçalho) já usado por _tabelas_almoxarifado_e_top10.
+
+    07/10/2026, 2ª correção no mesmo QA: com a folga de 0.26in deixada após
+    a tabela, a caixa de Leitura dos 2 slides chamadores ficava 0.08in mais
+    baixa do que `_altura_necessaria_caixa_leitura` pedia pro texto real —
+    `_caber_no_espaco` cortava a última frase com "…" mesmo com a altura
+    "calculada". Reduzido pra 0.10in (mesmo valor usado em
+    `_slide_acuracia_ponderada_iap`/`_iaq` entre a última tabela e a caixa
+    de Resumo) pra devolver essa folga pro chamador."""
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    gap = 0.3
+    largura_col = (largura_cheia - gap) / 2
+    altura_titulo = 0.22
+    altura_tabela = 1.35
+
+    colunas = [
+        ("TOP 5 ITENS EM FALTA — sistema > físico", "falta_itens", "valor_total_falta", COR_ERRO, MARGEM_IN),
+        ("TOP 5 ITENS EM SOBRA — físico > sistema", "sobra_itens", "valor_total_sobra", COR_ATENCAO, MARGEM_IN + largura_col + gap),
+    ]
+    for titulo, chave_itens, chave_total, cor, x in colunas:
+        _texto(slide, x, y, largura_col, altura_titulo, titulo, tamanho=9.5, negrito=True, cor=cor)
+        itens = (dados_falta_sobra or {}).get(chave_itens) or []
+        if itens:
+            linhas = [[(it.get("descricao") or it.get("sku") or "—")[:34], _fmt_moeda(it.get("valor"))] for it in itens]
+            _tabela(slide, x, y + altura_titulo, largura_col, altura_tabela, ["Descrição", "Valor"], linhas,
+                    larguras_relativas=[2.4, 1.0], tamanho_fonte=9)
+            _texto(slide, x, y + altura_titulo + altura_tabela + 0.04, largura_col, 0.20,
+                   f"Valor de prejuízo (total do mês): {_fmt_moeda((dados_falta_sobra or {}).get(chave_total))}",
+                   tamanho=8.5, negrito=True, cor=CINZA_TEXTO)
+        else:
+            _caixa_leitura(slide, x, y + altura_titulo, largura_col, altura_tabela, "Sem itens",
+                           "Nenhum item divergente nesta direção no mês.", tamanho_texto=10)
+    # A linha "Valor de prejuízo" fica em y + altura_titulo + altura_tabela +
+    # 0.04 com 0.20in de altura (ver acima) - terminando em + 0.24. Por isso
+    # este retorno não pode ser menor que ~0.26 (já é o mínimo com folga
+    # segura de só 0.02in) - 07/10/2026, 2ª volta do mesmo QA: tentei reduzir
+    # pra 0.10 pra "devolver espaço" pra caixa de Leitura dos slides
+    # chamadores, mas isso fez a caixa de Leitura desenhar POR CIMA da linha
+    # de valor de prejuízo (que ainda não tinha terminado). O espaço pra
+    # caixa de Leitura foi recuperado do outro lado em vez disso - ver
+    # comentário em _slide_acuracia_ponderada_destaque_loja/_patio_paulista
+    # (título+gráfico subiram 0.20in, que sobravam de folga ali).
+    return y + altura_titulo + altura_tabela + 0.26
+
+
+def _slide_acuracia_ponderada_destaque_loja(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Acompanhamento Individual — Almox_SP_Loja (07/10/2026, pedido do
+    usuário a partir da exportação "Acurácia Ponderada" de 07/10/2026: "a
+    loja que demonstrou uma evolução no último inventário mas ainda está
+    bem distante dos demais almoxarifados"). Ver ALMOX_LOJA e o comentário
+    de decisão ao lado dela sobre por que este é um indicador NOMEADO, não
+    recalculado automaticamente.
+
+    Confirmado nos dados reais (evolucao_ponderada_loja, 07/10/2026): item a
+    item sobe de 44.68% (Ago/2026) para 63.64% (Set/2026) - a "evolução no
+    último inventário" citada no pedido - mas segue sendo o pior (ou 2º
+    pior) resultado entre os almoxarifados todo mês desde Jan/2026, quando
+    a série começa em 29.63%. O slide existe pra dar visibilidade contínua
+    a essa frente especificamente, separado do ranking geral das tabelas de
+    IAP/IAQ (que mostram só o mês corrente, sem a trajetória)."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    _cabecalho(slide, "Acompanhamento Individual — Loja (Almox_SP_Loja)", mes_label, pagina,
+               "Evolução recente melhora, mas o resultado segue bem distante dos demais almoxarifados")
+
+    serie = d.get("evolucao_ponderada_loja") or []
+    atual = serie[-1] if serie else {}
+    anterior = serie[-2] if len(serie) >= 2 else {}
+    comp_mes = next((item for item in d.get("comparativo_por_almoxarifado", []) if item["almoxarifado"] == ALMOX_LOJA), None)
+    item_atual = (comp_mes or atual).get("item_a_item_pct") if comp_mes else atual.get("item_a_item_pct")
+
+    delta_item = None
+    if atual.get("item_a_item_pct") is not None and anterior.get("item_a_item_pct") is not None:
+        delta_item = round(atual["item_a_item_pct"] - anterior["item_a_item_pct"], 2)
+
+    outros = [item["item_a_item_pct"] for item in d.get("comparativo_por_almoxarifado", [])
+              if item["almoxarifado"] != ALMOX_LOJA and item.get("item_a_item_pct") is not None]
+    media_outros = round(sum(outros) / len(outros), 2) if outros else None
+    distancia_media = round(media_outros - item_atual, 2) if (media_outros is not None and item_atual is not None) else None
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_pct(item_atual), "rotulo": "Item a item (mês)",
+         "cor": _status_maior_melhor(item_atual, *_LIMIARES["acuracia"])[1]},
+        {"valor": _fmt_pct(comp_mes.get("iaq_pct")) if comp_mes else "—", "rotulo": "IAQ (quantidade)"},
+        {"valor": _fmt_pct(comp_mes.get("iap_pct")) if comp_mes else "—", "rotulo": "IAP (valor)"},
+        {"valor": (f"+{_fmt_pct(delta_item)}" if delta_item is not None and delta_item >= 0 else _fmt_pct(delta_item)),
+         "rotulo": "Variação vs. inventário anterior", "cor": COR_SUCESSO if (delta_item or 0) >= 0 else COR_ERRO,
+         "contexto": f"{_fmt_pct(abs(distancia_media))} abaixo da média dos demais" if distancia_media is not None else None,
+         "cor_contexto": COR_ATENCAO},
+    ], altura=0.68)
+
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    # Alturas de gráfico compactas de propósito (mesma altura 1.00in já usada
+    # nos slides de IAP/IAQ pra evolução mensal) - este slide empilha o
+    # gráfico de evolução + as 2 tabelas de Top Falta/Sobra (ver
+    # _secao_top_falta_sobra) mais a caixa de leitura, então precisa sobrar
+    # espaço pros ~4 linhas de texto da leitura final sem truncar (ver
+    # _altura_necessaria_caixa_leitura; achado em QA visual, 07/10/2026: com
+    # 1.75in/1.55in a leitura ficava espremida em 0.26in e cortava a frase no
+    # meio). 07/10/2026, 2ª volta do mesmo QA, após adicionar as tabelas de
+    # Top Falta/Sobra: título+gráfico subiram 0.20in (eram 2.70/2.94, tinham
+    # 0.47in de folga sobrando entre o fim da linha de KPIs e o título, bem
+    # mais que os ~0.12in usados em outros gaps do slide) pra devolver esse
+    # espaço pra caixa de Leitura no fim, que senão truncava a última frase.
+    if len(serie) >= 2:
+        categorias = [_nome_mes(item["mes"])[:3] + "/" + item["mes"][2:4] for item in serie]
+        _texto(slide, MARGEM_IN, 2.50, largura_cheia, 0.22, "EVOLUÇÃO DO ALMOX_SP_LOJA — OS 3 MODELOS, MÊS A MÊS",
+               tamanho=11, negrito=True, cor=AZUL_INSTITUCIONAL)
+        # Colunas agrupadas, não linha (_grafico_categoria_multi só pinta
+        # format.fill + apaga format.line - correto pra barra/coluna, mas
+        # deixa uma c:lineChart sem cor/linha visível nenhuma, achado em QA
+        # visual, 07/10/2026). COLUMN_CLUSTERED é o tipo já coberto por essa
+        # função em todo o resto do MBR (Passivos x Resultado, Entradas x
+        # Saídas) - sem introduzir uma combinação não testada.
+        _grafico_categoria_multi(
+            slide, MARGEM_IN, 2.74, largura_cheia, 1.00, categorias,
+            [
+                ("Item a item", [item.get("item_a_item_pct") for item in serie], AZUL_INSTITUCIONAL),
+                ("IAQ (quantidade)", [item.get("iaq_pct") for item in serie], VERDE_AMAZONIA),
+                ("IAP (valor)", [item.get("iap_pct") for item in serie], COR_ATENCAO),
+            ],
+            formato_numero='0"%"', mostrar_rotulos=False,
+        )
+        y_secao_itens = 2.74 + 1.00 + 0.12
+    else:
+        _caixa_leitura(slide, MARGEM_IN, 2.50, largura_cheia, 1.00, "Evolução do Almox_SP_Loja",
+                       "Sem histórico suficiente de fechamentos ainda.")
+        y_secao_itens = 2.50 + 1.00 + 0.12
+
+    y_resumo = _secao_top_falta_sobra(slide, y_secao_itens, d.get("top_falta_sobra_loja"))
+    y_zona_segura_fim = ALTURA_IN - 0.42
+    partes_resumo = []
+    if delta_item is not None and delta_item > 0:
+        partes_resumo.append(
+            f"Almox_SP_Loja melhora {_fmt_pct(delta_item)} no item a item frente ao inventário anterior, fechando o mês em "
+            f"{_fmt_pct(item_atual)}"
+        )
+    else:
+        partes_resumo.append(f"Almox_SP_Loja fecha o mês em {_fmt_pct(item_atual)} de acurácia item a item")
+    if distancia_media is not None:
+        partes_resumo.append(f", ainda {_fmt_pct(abs(distancia_media))} abaixo da média dos demais almoxarifados")
+    if comp_mes and comp_mes.get("iap_pct") is not None:
+        partes_resumo.append(
+            f". Ponderado por valor (IAP), o resultado sobe para {_fmt_pct(comp_mes['iap_pct'])} — a maior parte do "
+            "impacto financeiro já está concentrada em poucos itens, não espalhada por todo o estoque"
+        )
+    partes_resumo.append(
+        ". Série em acompanhamento desde Jan/2026 — a melhora é real, mas ainda não fecha a distância pro restante da rede."
+    )
+    texto_resumo = "".join(partes_resumo)
+    altura_resumo = min(max(0.6, _altura_necessaria_caixa_leitura(texto_resumo, largura_cheia, 10)),
+                         max(0.5, y_zona_segura_fim - y_resumo))
+    _caixa_leitura(slide, MARGEM_IN, y_resumo, largura_cheia, altura_resumo, "Leitura — Almox_SP_Loja",
+                   texto_resumo, cor_fundo=OFF_WHITE, tamanho_texto=10)
+    return slide
+
+
+def _slide_acuracia_ponderada_destaque_patio_paulista(prs: Presentation, mes_label: str, pagina: int, d: dict):
+    """Acompanhamento Individual — Almox_SP_PatioPaulista (07/10/2026, pedido
+    do usuário a partir da exportação "Acurácia Ponderada" de 07/10/2026: "o
+    almoxarifado Pátio Paulista que teve seu primeiro inventário e um
+    resultado bem abaixo do ideal"). Ver ALMOX_PATIO_PAULISTA.
+
+    Confirmado nos dados reais (evolucao_ponderada_patio_paulista,
+    07/10/2026): um único mês na série (Set/2026) - é de fato o primeiro
+    fechamento deste almoxarifado - com item a item de 50% (o pior do mês
+    entre todos os almoxarifados) e IAQ/IAP bem mais altos (88.14%/92.70%),
+    o mesmo padrão de distorção item-a-item x ponderado que já motivou a
+    troca do indicador oficial pra IAP no resto do MBR. Sem série histórica
+    ainda, então este slide não tem gráfico de evolução (ver IAP/IAQ:
+    "Sem histórico suficiente" quando len(serie) < 2) - o espaço vai pra
+    comparação com os demais almoxarifados e o detalhe dos itens
+    divergentes deste primeiro ciclo."""
+    slide = _slide_em_branco(prs)
+    _fundo(slide, BRANCO)
+    # Título mais curto que "... — Pátio Paulista (Almox_SP_PatioPaulista)"
+    # de propósito (07/10/2026, achado em QA visual: a versão longa quebrava
+    # em 2 linhas e invadia o subtítulo) - o código do almoxarifado já deixa
+    # claro de qual unidade se trata, sem repetir "Pátio Paulista" también.
+    _cabecalho(slide, "Acompanhamento Individual — Almox_SP_PatioPaulista", mes_label, pagina,
+               "Primeiro inventário já realizado neste almoxarifado — resultado abaixo do ideal")
+
+    serie = d.get("evolucao_ponderada_patio_paulista") or []
+    atual = serie[-1] if serie else {}
+    comp_mes = next((item for item in d.get("comparativo_por_almoxarifado", []) if item["almoxarifado"] == ALMOX_PATIO_PAULISTA), None)
+    item_atual = (comp_mes or atual).get("item_a_item_pct") if comp_mes else atual.get("item_a_item_pct")
+    gap_iap = None
+    if comp_mes and comp_mes.get("iap_pct") is not None and item_atual is not None:
+        gap_iap = round(comp_mes["iap_pct"] - item_atual, 2)
+
+    outros = [item["item_a_item_pct"] for item in d.get("comparativo_por_almoxarifado", [])
+              if item["almoxarifado"] != ALMOX_PATIO_PAULISTA and item.get("item_a_item_pct") is not None]
+    media_outros = round(sum(outros) / len(outros), 2) if outros else None
+    distancia_media = round(media_outros - item_atual, 2) if (media_outros is not None and item_atual is not None) else None
+
+    _linha_kpis(slide, 1.55, [
+        {"valor": _fmt_pct(item_atual), "rotulo": "Item a item (1º inventário)",
+         "cor": _status_maior_melhor(item_atual, *_LIMIARES["acuracia"])[1]},
+        {"valor": _fmt_pct(comp_mes.get("iaq_pct")) if comp_mes else "—", "rotulo": "IAQ (quantidade)"},
+        {"valor": _fmt_pct(comp_mes.get("iap_pct")) if comp_mes else "—", "rotulo": "IAP (valor)"},
+        {"valor": _fmt_pct(abs(distancia_media)) if distancia_media is not None else "—",
+         "rotulo": "Distância da média dos demais", "cor": COR_ERRO,
+         "contexto": "Pior resultado do mês" if (distancia_media or 0) > 0 else None, "cor_contexto": COR_ERRO},
+    ], altura=0.68)
+
+    largura_cheia = LARGURA_IN - 2 * MARGEM_IN
+    # Altura calculada de verdade (não um chute fixo) - achado em QA visual,
+    # 07/10/2026: com altura fixa de 1.00in esse texto cortava no meio
+    # ("...passa a mostrar a mesma…") - mesma técnica de
+    # _altura_necessaria_caixa_leitura já usada nas caixas de Resumo do
+    # resto do MBR. Posição subiu de 2.70 pra 2.50 na mesma data (2ª volta do
+    # mesmo QA, após adicionar as tabelas de Top Falta/Sobra - ver
+    # _secao_top_falta_sobra): o gap de 0.47in até a linha de KPIs tinha
+    # folga de sobra, e sem recuperar esses 0.20in a caixa de Leitura no fim
+    # do slide não tinha altura suficiente e cortava a última frase.
+    texto_sem_historico = (
+        "Set/2026 é o primeiro fechamento de inventário registrado para o Almox_SP_PatioPaulista — "
+        "ainda não há mês anterior para comparar evolução. A partir do próximo inventário, este slide passa "
+        "a mostrar a mesma evolução mês a mês dos demais almoxarifados."
+    )
+    altura_sem_historico = _altura_necessaria_caixa_leitura(texto_sem_historico, largura_cheia, 13)
+    _caixa_leitura(slide, MARGEM_IN, 2.50, largura_cheia, altura_sem_historico, "Sem série histórica ainda",
+                   texto_sem_historico)
+    y_secao_itens = 2.50 + altura_sem_historico + 0.12
+
+    y_resumo = _secao_top_falta_sobra(slide, y_secao_itens, d.get("top_falta_sobra_patio_paulista"))
+    y_zona_segura_fim = ALTURA_IN - 0.42
+    partes_resumo = [f"No primeiro inventário do Almox_SP_PatioPaulista, a acurácia item a item fecha em {_fmt_pct(item_atual)}"]
+    if distancia_media is not None:
+        partes_resumo.append(f", {_fmt_pct(abs(distancia_media))} abaixo da média dos demais almoxarifados neste mês")
+    if gap_iap is not None:
+        partes_resumo.append(
+            f". Ponderado por valor (IAP), o resultado sobe para {_fmt_pct(comp_mes['iap_pct'])} — distorção de "
+            f"{_fmt_pct(abs(gap_iap))} entre os dois modelos, maior concentração de impacto financeiro em poucos itens"
+        )
+    partes_resumo.append(
+        ". Por ser o 1º ciclo neste almoxarifado, o indicado é acompanhar se o próximo inventário confirma melhora "
+        "(curva de aprendizado operacional, mesmo padrão já visto em outros almoxarifados) ou se o resultado se repete."
+    )
+    texto_resumo = "".join(partes_resumo)
+    altura_resumo = min(max(0.6, _altura_necessaria_caixa_leitura(texto_resumo, largura_cheia, 10)),
+                         max(0.5, y_zona_segura_fim - y_resumo))
+    _caixa_leitura(slide, MARGEM_IN, y_resumo, largura_cheia, altura_resumo, "Leitura — Almox_SP_PatioPaulista",
+                   texto_resumo, cor_fundo=OFF_WHITE, tamanho_texto=10)
     return slide
 
 
@@ -6894,12 +7205,19 @@ def montar_pptx_mbr(db: Session, usuario: models.Usuario, mes: str) -> bytes:
            "Acurácia de fechamento, ponderação por valor e reconciliação diária sistema x físico.",
            ["Acurácia Ponderada (IAP)", "Acurácia Ponderada (IAQ)",
             "Acurácia Ponderada — Concentração de Risco", "Acurácia Ponderada — Detalhamento por Faixa",
+            "Acompanhamento Individual — Loja", "Acompanhamento Individual — Pátio Paulista",
             "Inventário Item a Item",
             "Controle de Movimentados", "Scorecard de Inventário por Almoxarifado"])
     _slide_acuracia_ponderada_iap(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_iaq(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_detalhe(prs, mes_label, _pag(), dados)
     _slide_acuracia_ponderada_faixas(prs, mes_label, _pag(), dados)
+    # 07/10/2026, pedido do usuário - ver ALMOX_LOJA/ALMOX_PATIO_PAULISTA e as
+    # docstrings das duas funções: indicadores dedicados pros dois piores
+    # resultados de Acurácia Ponderada identificados na exportação de
+    # 07/10/2026, logo depois dos 4 slides gerais de Acurácia Ponderada.
+    _slide_acuracia_ponderada_destaque_loja(prs, mes_label, _pag(), dados)
+    _slide_acuracia_ponderada_destaque_patio_paulista(prs, mes_label, _pag(), dados)
     _slide_painel_inventario(prs, mes_label, _pag(), dados)
     _slide_controle_movimentados(prs, mes_label, _pag(), dados)
     _slide_scorecard_inventario_almoxarifado(prs, mes_label, _pag(), dados)

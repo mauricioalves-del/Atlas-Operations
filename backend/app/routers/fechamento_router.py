@@ -895,6 +895,56 @@ def dashboard_itens_por_magnitude(faixa_idx: int, almoxarifado: str | None = Non
     }
 
 
+@router.get("/dashboard/top-itens-falta-sobra")
+def dashboard_top_itens_falta_sobra(almoxarifado: str | None = None, mes: str | None = None, top_n: int = 5,
+                                     usuario: models.Usuario = Depends(obter_usuario_atual), db: Session = Depends(get_db)):
+    """Separa os itens divergentes em FALTA (divergencia_qtd < 0 - contagem
+    física ficou abaixo do sistema) e SOBRA (divergencia_qtd > 0 - contagem
+    física ficou acima do sistema), cada lado com seu próprio Top N por
+    valor e seu próprio total (07/10/2026, pedido do usuário pros slides de
+    Acompanhamento Individual: "TOP 5 itens que faltaram e Top 5 [que]
+    sobraram... também traga o valor de prejuízo").
+
+    Diferente de dashboard_concentracao_valor (que devolve um só ranking
+    misturando falta e sobra, capado em 50 itens pro gráfico de Pareto),
+    aqui o total de cada lado (`valor_total_falta`/`valor_total_sobra`) é
+    somado sobre TODOS os itens divergentes daquele lado, não só os top_n
+    exibidos - é esse total que os slides usam como "valor de prejuízo",
+    então precisa ser exato, não uma soma parcial da amostra do gráfico."""
+    itens = _query_itens_filtrados(db, almoxarifado, mes, usuario).all()
+    divergentes = [i for i in itens if i.divergente]
+
+    skus = {i.sku for i in divergentes}
+    custos = {p.sku: p.custo_unitario for p in db.query(models.Produto).filter(models.Produto.sku.in_(skus), models.Produto.custo_unitario.isnot(None)).all()}
+
+    def valor_atual(item):
+        custo = custos.get(item.sku)
+        if custo is not None:
+            return abs(item.divergencia_qtd or 0) * custo
+        return abs(item.valor_estimado or 0)
+
+    falta = sorted((i for i in divergentes if (i.divergencia_qtd or 0) < 0), key=valor_atual, reverse=True)
+    sobra = sorted((i for i in divergentes if (i.divergencia_qtd or 0) > 0), key=valor_atual, reverse=True)
+
+    def _serializar(lista):
+        return [
+            {
+                "sku": i.sku, "descricao": i.descricao_produto, "almoxarifado": i.almoxarifado,
+                "divergencia_qtd": i.divergencia_qtd, "valor": round(valor_atual(i), 2),
+            }
+            for i in lista
+        ]
+
+    return {
+        "falta_itens": _serializar(falta[:top_n]),
+        "sobra_itens": _serializar(sobra[:top_n]),
+        "valor_total_falta": round(sum(valor_atual(i) for i in falta), 2),
+        "valor_total_sobra": round(sum(valor_atual(i) for i in sobra), 2),
+        "total_itens_falta": len(falta),
+        "total_itens_sobra": len(sobra),
+    }
+
+
 def _tres_modelos(itens: list) -> dict:
     """Calcula os 3 indicadores (item a item, IAQ, IAP) sobre uma lista
     de ItemFechamento já filtrada - reaproveitado por grupo, almoxarifado
